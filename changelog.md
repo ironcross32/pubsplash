@@ -1,0 +1,58 @@
+# Changelog
+
+## Unreleased
+
+### Additions
+
+- Packaging via cargo-packager (`[package.metadata.packager]`): builds a Windows NSIS installer that lets the user choose a per-user (`AppData\Local`) or per-machine (`Program Files`) install, using `assets/icon/pubsplash.ico` for installer and shortcut icons. A `build.rs` embeds the same icon (and version metadata) into the executable via `winresource`, so Explorer, the taskbar, and Alt+Tab show it.
+- Initial project scaffolding: wxDragon window with Home, Chat, and Scenes and Sources tabs plus a status bar.
+- JSON configuration in `%LOCALAPPDATA%\pubsplash\` with automatic generation, and corrupt-file recovery via `.bak` backup.
+- Logger with selectable levels, file rotation, and `PUBSPLASH_LOG_<LEVEL>` environment variable override.
+- Release CI workflow: `v` tags build a release with cargo-packager, producing an NSIS installer (which places the converted README and changelog next to the executable) alongside a portable ZIP.
+- Audio engine: WASAPI capture for microphone, desktop audio (loopback), and per-application sources; 48 kHz stereo mix bus with per-source and master volume; mute/unmute with short fades that restore the previous volume.
+- MP3 encoding via LAME with configurable bitrate, streamed to Audio Pub over the Icecast source protocol.
+- Audio Pub client: login, stream key retrieval, stream creation and teardown, chat sending, and the live events feed (listener counts, incoming chat).
+- Home tab: live stream overview box, mixer with keyboard-friendly sliders (Home = max, End = min), scene list with ALT+W/Enter switching, and a context-aware Start/Stop streaming button (ALT+S / ALT+T).
+- Chat tab: accessible message list in `user: message: relative time` format with live-updating relative times, a View window (ALT+V) with copyable text, and an input box that Escape clears.
+- Scenes and Sources tab: full scene/source management with the specced buttons and shortcuts, CTRL+Up/Down reordering, Delete removal (default scene protected), and per-type source edit dialogs (microphone device picker, TTS engine/voice/volume/rate).
+- Configure Audio Pub dialog: site list with the permanent main site, add/remove custom instances, masked password entry, connect/disconnect with validation feedback, and automatic reconnect to the last used site on launch.
+- Exit confirmation when streaming, with clean stream teardown on confirm.
+- SAPI voice enumeration for the TTS source dialog.
+- Incoming chat messages are now read aloud through SAPI by unmuted Text-to-Speech sources in the active scene, honoring the configured voice, rate, and volume.
+- TTS sources with "Send speech to the stream" enabled now synthesize speech directly into the outgoing stream mix (at the mixer's native format), while still playing locally so the broadcaster hears it.
+- Desktop Audio capture now excludes Pubsplash's own process, so locally played TTS and sound cues can never feed back into the stream.
+- Set stream info dialog (File menu): stream title, description, and an "Archive the stream" checkbox, sent to the server when the stream is created. If the info was never set, clicking Start streaming opens the dialog first; OK starts the stream with whatever is filled in (defaults: "Stream" / "This is just a stream" / archiving off). Tabbing into a text field selects its contents for easy overwriting. The values reset on every launch.
+- `{title}` and `{url}` stream tokens (title and public stream page link) are available internally for upcoming social-media announcement support.
+- Preferences dialog (File menu, `CTRL+,`) with a VST plugins tab: manage the folders scanned for plugins (Add folder via a directory picker, Remove folder or Delete key), pre-populated with the standard Windows VST locations and the `HKLM\SOFTWARE\VST\VSTPluginsPath` registry value.
+- VST plugin discovery and scanning: finds VST2 DLLs (only those that actually export a VST entry point), single-file VST3 plugins, and VST3 bundle folders. "Scan for new plugins" scans only files not seen before; "Rescan all plugins" starts over. A progress dialog (screen-reader announced) shows scan progress with a Cancel button; cancelling stores nothing.
+- Each plugin is loaded in a separate `pubsplash-scan.exe` helper process, so a plugin that crashes or hangs while loading cannot take Pubsplash down; plugin activation dialogs appear normally. VST3 bundles with a `moduleinfo.json` are identified without loading at all. Plugins built for a different processor architecture (e.g. 32-bit) are skipped.
+- Discovered plugins are cached in `%LOCALAPPDATA%\pubsplash\vst_plugins.json` and loaded at startup, so scans don't need to be repeated.
+- Mixing buses: create any number of global buses on the new Buses tab (add, rename, remove, reorder with CTRL+Up/Down, Delete to remove). Every bus outputs to master and gets its own volume/mute strip in the Home mixer.
+- Per-source sends: each source has a "Sends..." dialog (Scenes and Sources tab) choosing which buses it feeds and at what level, plus a "Send directly to master" checkbox — on (the previous behavior) for aux-style dry+FX mixes, off to route a source only through its buses.
+- VST2 effect chains on buses and on the master output: add plugins to a bus's chain on the Buses tab (the "Master output" row hosts the master chain), reorder them (their order is the processing order), bypass them, and remove them. Chains are applied live to the audio while streaming. Each plugin's state (its saved chunk or parameter values) is remembered in the config. (VST3 effect processing is planned for a later release; VST3 plugins are catalogued but not yet insertable.)
+- FX chain library: save the selected chain under a name, load a saved chain, and delete saved chains — all stored together in `%LOCALAPPDATA%\pubsplash\fx_chains.json`. Chains can be exported to a standalone `.pubfx` file and imported on another machine to share setups.
+- Robust chain loading: when a saved or imported chain references plugins that aren't installed on this machine, a dialog lists the missing plugins; if at least one plugin is available you can apply the chain with just those, or cancel. At startup, plugins missing from your configured buses are reported once and skipped (never dropped from the config).
+- Accessible plugin control, two ways: "Edit parameters" opens an OSARA-style dialog that works for every plugin — filter and pick a parameter, adjust its value with the arrow keys (Page Up/Down for larger steps, Home/End for maximum/minimum), and move between parameters with CTRL+Tab; the parameter name and its formatted value are announced as you go. "Open interface" shows the plugin's own window for plugins that have one, and F6 always moves focus out of the plugin's interface back to the window's toolbar so the keyboard is never trapped.
+- The audio engine now flushes denormals to zero, keeping CPU use stable once FX plugins with long reverb/filter tails are in the chain.
+- The Set stream info dialog now has a Quality dropdown to choose the MP3 encoder bitrate (48–320 kbps). Unlike the title and description, this setting is saved in the configuration file and persists across sessions.
+- The plugin scan progress dialog now has a Skip button: if a plugin hangs or stalls the scan (for example while waiting on a hidden dialog), Skip abandons just that plugin and the scan moves on. Skipped plugins are counted in the scan summary and can be retried with "Rescan all plugins".
+
+### Fixes
+
+- The plugin parameter dialog now announces a parameter's new value to screen readers as you adjust it, reading the plugin's own formatted value (e.g. "-3.0 dB") rather than a raw slider position. The value slider is a native Windows control whose built-in accessibility only exposes a numeric position, so Pubsplash installs its own UI Automation provider on it: the provider reports the formatted value and raises a value-change event on each keyboard step, which the screen reader speaks immediately (and reads correctly when you tab back to the slider).
+- Escape now closes the plugin parameter dialog.
+- Many working plugins are no longer wrongly rejected as "crashed while loading": the scan helper now reports its result before Windows notifies the plugin DLL of process exit (a teardown path where many otherwise fine plugins crash), and a probe whose result was already delivered is accepted even if the helper process then dies.
+- The plugin scanner is friendlier to picky plugins, so fewer crash for real while being probed: the VST2 host callback now answers common startup queries (sample rate, block size, time info, host identification) instead of returning zero for everything, plugins are told the sample rate and block size after opening, COM is initialized in the scan helper, and plugins' own dependency DLLs now resolve from the plugin's folder.
+
+- The TTS source edit dialog no longer freezes the app for several seconds while opening: SAPI voices are enumerated once on a background thread at startup and cached for the session (voices installed mid-session appear on next launch).
+- List boxes (Scenes, Sources, Chat, Sites) announce their items again under NVDA: the accessible-name override now applies only to the control itself instead of also renaming every list item after it.
+- Login and stream creation now understand SvelteKit's JSON action-result envelope (the server answers 200 with the real outcome in the body when the client is not a browser), so connecting to Audio Pub works and failed logins report the server's actual error message.
+- Stream key retrieval no longer fails when the site's layout data includes the session user; the parser now skips nodes without a stream key instead of giving up.
+- Connection results (success and failure) are now announced in a dialog parented to the Configure Audio Pub window, and keyboard focus returns to the Connect button afterwards instead of landing in an unrelated spot. Successful connections are reported explicitly, and the Connect/Disconnect button label updates immediately.
+- Incoming chat messages no longer vanish: the server sends users with both `name` and `displayName`, which the message parser previously rejected as a duplicate field, silently dropping every chat event. Messages now appear in the Chat tab (showing the display name) and trigger TTS.
+- The sources list now shows each source's actual configuration - the selected microphone's device name (for example "Microphone (Zoom H1)"), the captured application, or the TTS engine and voice - instead of just repeating the source type.
+- Screen readers now announce proper names for controls that previously read as bare widgets: the "Send speech to the stream" checkbox, mixer volume sliders and mute buttons (which include the source name and update on toggle), the scene/source/site lists, the chat list and input box, the stream overview, and the email/password fields.
+
+### Changes
+
+- The stream title is no longer remembered between sessions; it is part of the per-session stream info instead.

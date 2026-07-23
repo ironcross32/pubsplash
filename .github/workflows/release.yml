@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Ninja
+        run: choco install ninja -y
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+
+      # Must run before packaging: readme.html is bundled into the installer as
+      # a packager resource (see Cargo.toml), so it has to exist on disk first.
+      - name: Convert README to HTML
+        run: |
+          npm install -g marked
+          marked README.md -o readme.html
+        shell: bash
+
+      # Builds the exe via the configured before-packaging-command
+      # (cargo build --release) and produces the NSIS installer in target/release.
+      - name: Package installer
+        run: cargo packager --release
+
+      - name: Assemble portable ZIP
+        shell: bash
+        run: |
+          mkdir bundle
+          cp target/release/pubsplash.exe bundle/
+          cp readme.html bundle/
+          cp changelog.md bundle/
+          if [ -d sounds ]; then cp -r sounds bundle/; fi
+
+      - name: Zip bundle
+        shell: pwsh
+        run: Compress-Archive -Path bundle/* -DestinationPath "pubsplash-${{ github.ref_name }}.zip"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/release/*-setup.exe
+            pubsplash-*.zip
+          generate_release_notes: true
