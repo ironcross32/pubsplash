@@ -1,3 +1,4 @@
+# Cuts a GitHub Release (NSIS installer + portable ZIP) on any v* tag push.
 name: Release
 
 on:
