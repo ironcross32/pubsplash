@@ -49,4 +49,4 @@ resources = ["readme.html", "changelog.md"]
 # Let the user choose per-user (AppData\Local) or per-machine (Program Files,
 # elevation prompted) at install time, instead of forcing the per-user default.
 [package.metadata.packager.nsis]
-install-mode = "both"
+installer-mode = "both"

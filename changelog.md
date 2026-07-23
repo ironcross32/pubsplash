@@ -39,6 +39,7 @@
 
 ### Fixes
 
+- Release CI now builds: corrected the NSIS installer-mode key in `Cargo.toml` (`installer-mode`, not `install-mode`), which cargo-packager rejected as an unknown field, and bumped `actions/checkout` to v5 (v4 pins the deprecated Node.js 20 runtime).
 - The plugin parameter dialog now announces a parameter's new value to screen readers as you adjust it, reading the plugin's own formatted value (e.g. "-3.0 dB") rather than a raw slider position. The value slider is a native Windows control whose built-in accessibility only exposes a numeric position, so Pubsplash installs its own UI Automation provider on it: the provider reports the formatted value and raises a value-change event on each keyboard step, which the screen reader speaks immediately (and reads correctly when you tab back to the slider).
 - Escape now closes the plugin parameter dialog.
 - Many working plugins are no longer wrongly rejected as "crashed while loading": the scan helper now reports its result before Windows notifies the plugin DLL of process exit (a teardown path where many otherwise fine plugins crash), and a probe whose result was already delivered is accepted even if the helper process then dies.
