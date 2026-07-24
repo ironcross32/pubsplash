@@ -40,6 +40,7 @@
 
 ### Fixes
 
+- Exiting with ALT+F4 no longer crashes on shutdown (access violation, `0xc0000005`). The 100 ms pump timer was leaked and never stopped, so during the frame's teardown it kept firing `WM_TIMER` into the already-destroyed frame and crashed inside wxWidgets' event dispatch. The timer is now owned by the app and stopped when the window closes; the close handler also destroys the frame through wxWidgets' deferred teardown (the same path File > Exit uses) so both exit routes behave identically.
 - Release CI now builds: corrected the NSIS installer-mode key in `Cargo.toml` (`installer-mode`, not `install-mode`), which cargo-packager rejected as an unknown field, and bumped `actions/checkout` to v5 (v4 pins the deprecated Node.js 20 runtime).
 - The plugin parameter dialog now announces a parameter's new value to screen readers as you adjust it, reading the plugin's own formatted value (e.g. "-3.0 dB") rather than a raw slider position. The value slider is a native Windows control whose built-in accessibility only exposes a numeric position, so Pubsplash installs its own UI Automation provider on it: the provider reports the formatted value and raises a value-change event on each keyboard step, which the screen reader speaks immediately (and reads correctly when you tab back to the slider).
 - Escape now closes the plugin parameter dialog.

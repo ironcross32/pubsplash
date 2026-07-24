@@ -208,6 +208,15 @@ pub struct App {
     pub chain_library: RefCell<crate::fx::FxChainLibrary>,
     /// Open native plugin editor windows.
     pub open_editors: RefCell<Vec<fx_editor::EditorWindow>>,
+    /// Set once the frame is closing. The pump timer keeps firing during the
+    /// deferred frame teardown; without this guard its callback would run
+    /// `pump_events` against already-destroyed widgets and crash (0xc0000005).
+    pub shutting_down: std::cell::Cell<bool>,
+    /// The 100 ms pump timer. Owned here (not leaked) so `on_close` can stop it
+    /// before the frame is destroyed: a running timer whose owner frame has been
+    /// torn down keeps firing `WM_TIMER` into the freed frame handler and
+    /// crashes inside wx's event dispatch (0xc0000005).
+    pub pump_timer: RefCell<Option<Timer<Frame>>>,
 }
 
 /// The live plugin instances backing the FX chains, kept in lockstep with
@@ -582,20 +591,40 @@ pub fn build(app: Rc<App>) {
                 // Cleanly terminate the stream before shutdown.
                 app.stop_streaming();
             }
+            // Stop the pump from touching widgets while the frame is torn down.
+            // Stopping the timer removes pending WM_TIMER so it can't fire into
+            // the frame after it is destroyed; the flag is a further guard for
+            // any tick already in flight.
+            app.shutting_down.set(true);
+            if let Some(timer) = app.pump_timer.borrow().as_ref() {
+                timer.stop();
+            }
             // Close plugin editors (and remove the keyboard hook) on exit.
             fx_editor::close_all(&app);
             app.save_config();
-            event.skip(true);
+            // Destroy explicitly (deferred, wx-managed) rather than skipping to
+            // the platform default. On the native ALT+F4 path, skipping hands the
+            // WM_CLOSE to DefWindowProc, which destroys the window *synchronously*
+            // and joins the engine/net threads from inside the window procedure —
+            // a shutdown access violation. This routes ALT+F4 through the same
+            // deferred teardown that File > Exit already uses.
+            frame_for_close.destroy();
         });
     }
 
     // The pump: carries events from the engine/net threads onto the UI
     // thread and refreshes time-based displays.
     {
+        let app_for_timer = app.clone();
         let app = app.clone();
         let timer = Timer::new(&frame);
         let mut ticks: u32 = 0;
         timer.on_tick(move |_| {
+            // Once closing, the frame and its widgets are being destroyed;
+            // running the pump against them would touch freed memory.
+            if app.shutting_down.get() {
+                return;
+            }
             pump_events(&app);
             ticks = ticks.wrapping_add(1);
             if ticks % 10 == 0 {
@@ -607,8 +636,9 @@ pub fn build(app: Rc<App>) {
             }
         });
         timer.start(100, false);
-        // The timer must outlive this scope.
-        std::mem::forget(timer);
+        // Own the timer via App so `on_close` can stop it before teardown.
+        // (Leaking it here would keep it firing into the destroyed frame.)
+        *app_for_timer.pump_timer.borrow_mut() = Some(timer);
     }
 
     // Auto-connect to the last used site.

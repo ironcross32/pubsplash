@@ -49,6 +49,8 @@ fn main() {
             fx: RefCell::new(ui::FxRuntime::default()),
             chain_library: RefCell::new(chain_library.clone()),
             open_editors: RefCell::new(Vec::new()),
+            shutting_down: std::cell::Cell::new(false),
+            pump_timer: RefCell::new(None),
         });
         ui::build(app);
     });
