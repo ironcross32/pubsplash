@@ -27,7 +27,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 
 1. Launch Pubsplash.
 2. Open **File → Configure Audio Pub**, select the site, enter your email and password, and press **Connect**.
-3. Optionally open **File → Set stream info** to set the stream's title, description, streaming quality (MP3 bitrate), and whether the stream should be archived on the server. The title, description, and archive choice reset every time Pubsplash starts; the quality setting is saved and persists across sessions.
+3. Optionally open **File → Set stream info** to set the stream's title, description, streaming quality (MP3 bitrate), and whether the stream should be archived on the server. The title, description, and archive choice reset every time Pubsplash starts; the quality setting is saved and persists across sessions. To have archiving pre-selected each launch, enable **Archive streams by default** on the Archiving tab of **File → Preferences** (`CTRL+,`).
 4. On the **Home** tab, press **Start streaming** (`ALT+S`). If you haven't set the stream info yet, the dialog opens first — press **OK** to start with what's filled in (tabbing into a text field selects its contents so you can just type over the defaults), or **Cancel** to not start streaming.
 5. Press **Stop streaming** (`ALT+T`) when you're done.
 

@@ -18,6 +18,7 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub plugins: PluginsConfig,
     pub buses: BusesConfig,
+    pub archiving: ArchivingConfig,
 }
 
 impl Default for Config {
@@ -29,6 +30,7 @@ impl Default for Config {
             logging: LoggingConfig::default(),
             plugins: PluginsConfig::default(),
             buses: BusesConfig::default(),
+            archiving: ArchivingConfig::default(),
         }
     }
 }
@@ -222,6 +224,16 @@ impl StreamFormat {
             StreamFormat::Aac => "AAC",
         }
     }
+}
+
+/// Archiving preferences. Currently just the stream-archiving default; the
+/// Preferences "Archiving" tab also reserves a "Recording" group for later.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ArchivingConfig {
+    /// When set, the "Archive the stream" checkbox in the stream-info dialog
+    /// starts checked on each fresh launch. Defaults to off.
+    pub archive_streams_by_default: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

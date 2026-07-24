@@ -14,8 +14,11 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         .build();
 
     let notebook = Notebook::builder(&dialog).build();
+    let archiving_panel = Panel::builder(&notebook).build();
+    notebook.add_page(&archiving_panel, "Archiving", true, None);
+    build_archiving_tab(app, &archiving_panel);
     let vst_panel = Panel::builder(&notebook).build();
-    notebook.add_page(&vst_panel, "VST plugins", true, None);
+    notebook.add_page(&vst_panel, "VST plugins", false, None);
     build_vst_tab(app, &dialog, &vst_panel);
 
     let close_button = Button::builder(&dialog).with_label("C&lose").build();
@@ -31,6 +34,38 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
 
     dialog.show_modal();
     dialog.destroy();
+}
+
+fn build_archiving_tab(app: &Rc<App>, panel: &Panel) {
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+
+    // Stream Archiving group.
+    let stream_group =
+        StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, panel, "Stream Archiving")
+            .build();
+    let archive_default = CheckBox::builder(panel)
+        .with_label("Archive streams by default")
+        .build();
+    super::set_accessible_name(&archive_default, "Archive streams by default");
+    archive_default.set_value(app.config.borrow().archiving.archive_streams_by_default);
+    stream_group.add(&archive_default, 0, SizerFlag::All, 4);
+    {
+        let app = app.clone();
+        let archive_default = archive_default.clone();
+        archive_default.clone().on_toggled(move |_| {
+            app.config.borrow_mut().archiving.archive_streams_by_default =
+                archive_default.get_value();
+            app.save_config();
+        });
+    }
+
+    // Recording group (placeholder for future recording controls).
+    let recording_group =
+        StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, panel, "Recording").build();
+
+    sizer.add_sizer(&stream_group, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add_sizer(&recording_group, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    panel.set_sizer(sizer, true);
 }
 
 fn build_vst_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {

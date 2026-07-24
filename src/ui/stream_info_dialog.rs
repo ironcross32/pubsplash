@@ -53,7 +53,13 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
         .with_label("Archive the stream")
         .build();
     super::set_accessible_name(&archive_check, "Archive the stream");
-    archive_check.set_value(current.archive);
+    // Before the user confirms the dialog this session, the "Archive streams by
+    // default" preference supplies the initial state; afterwards their explicit
+    // choice (in `current.archive`) wins.
+    let default_archive = current.archive
+        || (!app.run.borrow().stream_info_set
+            && app.config.borrow().archiving.archive_streams_by_default);
+    archive_check.set_value(default_archive);
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let ok_button = Button::builder(&panel).with_label("OK").build();
