@@ -5,9 +5,9 @@ use crate::audio::EngineCommand;
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
-/// Builds the tab; returns (overview box, stream button, scene list,
-/// mixer panel placeholder).
-pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, ListBox, Panel) {
+/// Builds the tab; returns (overview box, stream button, record button, scene
+/// list, mixer panel placeholder).
+pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, Button, ListBox, Panel) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     // Overview.
@@ -38,11 +38,16 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, ListBox, Panel)
     sizer.add(&scene_list, 1, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&switch_button, 0, SizerFlag::All, 4);
 
-    // Stream toggle.
+    // Stream toggle, then the standalone record toggle (Tab order: stream
+    // first, record second).
     let stream_button = Button::builder(panel)
         .with_label("&Start streaming")
         .build();
     sizer.add(&stream_button, 0, SizerFlag::All, 8);
+    let record_button = Button::builder(panel)
+        .with_label("Start &recording")
+        .build();
+    sizer.add(&record_button, 0, SizerFlag::All, 8);
 
     panel.set_sizer(sizer, true);
 
@@ -71,7 +76,18 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, ListBox, Panel)
         });
     }
 
-    (overview, stream_button, scene_list, mixer_panel)
+    {
+        let app = app.clone();
+        record_button.on_click(move |_| {
+            if app.run.borrow().recording {
+                app.stop_recording();
+            } else {
+                app.start_recording();
+            }
+        });
+    }
+
+    (overview, stream_button, record_button, scene_list, mixer_panel)
 }
 
 fn switch_to_selected_scene(app: &Rc<App>, list: &ListBox) {

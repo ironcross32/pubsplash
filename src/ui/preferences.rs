@@ -16,7 +16,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     let notebook = Notebook::builder(&dialog).build();
     let archiving_panel = Panel::builder(&notebook).build();
     notebook.add_page(&archiving_panel, "Archiving", true, None);
-    build_archiving_tab(app, &archiving_panel);
+    build_archiving_tab(app, &dialog, &archiving_panel);
     let vst_panel = Panel::builder(&notebook).build();
     notebook.add_page(&vst_panel, "VST plugins", false, None);
     build_vst_tab(app, &dialog, &vst_panel);
@@ -36,7 +36,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     dialog.destroy();
 }
 
-fn build_archiving_tab(app: &Rc<App>, panel: &Panel) {
+fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     // Stream Archiving group.
@@ -59,9 +59,75 @@ fn build_archiving_tab(app: &Rc<App>, panel: &Panel) {
         });
     }
 
-    // Recording group (placeholder for future recording controls).
+    // Recording group.
     let recording_group =
         StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, panel, "Recording").build();
+
+    let record_default = CheckBox::builder(panel)
+        .with_label("Record streams by default")
+        .build();
+    super::set_accessible_name(&record_default, "Record streams by default");
+    record_default.set_value(app.config.borrow().archiving.record_streams_by_default);
+    recording_group.add(&record_default, 0, SizerFlag::All, 4);
+    {
+        let app = app.clone();
+        let record_default = record_default.clone();
+        record_default.clone().on_toggled(move |_| {
+            app.config.borrow_mut().archiving.record_streams_by_default =
+                record_default.get_value();
+            app.save_config();
+        });
+    }
+
+    let folder_label = StaticText::builder(panel)
+        .with_label("Recording folder")
+        .build();
+    let folder_input = TextCtrl::builder(panel)
+        .with_value(&app.config.borrow().archiving.recording_folder)
+        .build();
+    super::set_accessible_name(&folder_input, "Recording folder");
+    recording_group.add(&folder_label, 0, SizerFlag::All, 4);
+    recording_group.add(&folder_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    {
+        let app = app.clone();
+        let folder_input = folder_input.clone();
+        folder_input.clone().on_text_updated(move |_| {
+            app.config.borrow_mut().archiving.recording_folder =
+                folder_input.get_value().trim().to_string();
+            app.save_config();
+        });
+    }
+
+    let browse = Button::builder(panel).with_label("&Browse...").build();
+    recording_group.add(&browse, 0, SizerFlag::All, 4);
+    {
+        let app = app.clone();
+        let dialog = dialog.clone();
+        let folder_input = folder_input.clone();
+        browse.on_click(move |_| {
+            let start = app.config.borrow().archiving.recording_dir();
+            let picker = DirDialog::builder(
+                &dialog,
+                "Choose a folder for stream recordings",
+                &start.to_string_lossy(),
+            )
+            .with_style(DirDialogStyle::MustExist.bits())
+            .build();
+            if picker.show_modal() != ID_OK {
+                return;
+            }
+            let Some(path) = picker.get_path() else {
+                return;
+            };
+            let path = path.trim().to_string();
+            if path.is_empty() {
+                return;
+            }
+            folder_input.set_value(&path);
+            app.config.borrow_mut().archiving.recording_folder = path;
+            app.save_config();
+        });
+    }
 
     sizer.add_sizer(&stream_group, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add_sizer(&recording_group, 0, SizerFlag::Expand | SizerFlag::All, 4);

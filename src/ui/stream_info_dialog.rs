@@ -61,6 +61,17 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
             && app.config.borrow().archiving.archive_streams_by_default);
     archive_check.set_value(default_archive);
 
+    let record_check = CheckBox::builder(&panel)
+        .with_label("Record this stream")
+        .build();
+    super::set_accessible_name(&record_check, "Record this stream");
+    // Same rule as archiving: the "Record streams by default" preference seeds
+    // the box until the user confirms the dialog this session.
+    let default_record = current.record
+        || (!app.run.borrow().stream_info_set
+            && app.config.borrow().archiving.record_streams_by_default);
+    record_check.set_value(default_record);
+
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let ok_button = Button::builder(&panel).with_label("OK").build();
     let cancel_button = Button::builder(&panel).with_label("Cancel").build();
@@ -74,6 +85,7 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
     sizer.add(&quality_label, 0, SizerFlag::All, 4);
     sizer.add(&quality_choice, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&archive_check, 0, SizerFlag::All, 8);
+    sizer.add(&record_check, 0, SizerFlag::All, 8);
     sizer.add_sizer(&buttons, 0, SizerFlag::All, 4);
     panel.set_sizer(sizer, true);
     let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
@@ -96,6 +108,7 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
         let title_input = title_input.clone();
         let description_input = description_input.clone();
         let archive_check = archive_check.clone();
+        let record_check = record_check.clone();
         let quality_choice = quality_choice.clone();
         ok_button.on_click(move |_| {
             let mut title = title_input.get_value().trim().to_string();
@@ -107,6 +120,7 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
             run.stream_info.title = title;
             run.stream_info.description = description_input.get_value().trim().to_string();
             run.stream_info.archive = archive_check.get_value();
+            run.stream_info.record = record_check.get_value();
             run.stream_info_set = true;
             drop(run);
 

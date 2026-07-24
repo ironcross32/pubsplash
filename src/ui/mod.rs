@@ -66,6 +66,7 @@ pub struct StreamInfo {
     pub title: String,
     pub description: String,
     pub archive: bool,
+    pub record: bool,
 }
 
 impl Default for StreamInfo {
@@ -74,6 +75,7 @@ impl Default for StreamInfo {
             title: "Stream".to_string(),
             description: "This is just a stream".to_string(),
             archive: false,
+            record: false,
         }
     }
 }
@@ -90,6 +92,8 @@ pub struct Runtime {
     pub stream_info: StreamInfo,
     /// Whether the user has confirmed the stream info dialog this session.
     pub stream_info_set: bool,
+    /// Whether a standalone (non-streaming) local recording is in progress.
+    pub recording: bool,
 }
 
 impl Default for Runtime {
@@ -104,6 +108,7 @@ impl Default for Runtime {
             chat: Vec::new(),
             stream_info: StreamInfo::default(),
             stream_info_set: false,
+            recording: false,
         }
     }
 }
@@ -153,6 +158,7 @@ pub struct Widgets {
     pub status_bar: StatusBar,
     pub overview: TextCtrl,
     pub stream_button: Button,
+    pub record_button: Button,
     pub home_scene_list: ListBox,
     pub mixer_panel: Panel,
     /// The replaceable panel holding the current mixer strips.
@@ -351,7 +357,49 @@ impl App {
             run.stream = StreamState::Stopping;
         }
         self.engine.send(EngineCommand::StopEncoding);
+        self.engine.send(EngineCommand::StopRecording);
         self.net.send(NetCommand::StopStream);
+        self.refresh_stream_ui();
+    }
+
+    /// Starts a standalone local recording (no streaming). Uses the current
+    /// stream title (default "Stream") for the file name; does not prompt.
+    pub fn start_recording(&self) {
+        {
+            let run = self.run.borrow();
+            if run.recording || !matches!(run.stream, StreamState::Idle) {
+                return;
+            }
+        }
+        let (bitrate, path) = {
+            let config = self.config.borrow();
+            let title = self.run.borrow().stream_info.title.clone();
+            let desired = config
+                .archiving
+                .recording_dir()
+                .join(recording_filename(&title));
+            (
+                config.audio.bitrate_kbps,
+                crate::audio::recorder::unique_path(&desired),
+            )
+        };
+        self.engine.send(EngineCommand::StartRecording {
+            bitrate_kbps: bitrate,
+            path,
+        });
+        self.run.borrow_mut().recording = true;
+        self.refresh_stream_ui();
+    }
+
+    pub fn stop_recording(&self) {
+        {
+            let mut run = self.run.borrow_mut();
+            if !run.recording {
+                return;
+            }
+            run.recording = false;
+        }
+        self.engine.send(EngineCommand::StopRecording);
         self.refresh_stream_ui();
     }
 
@@ -383,6 +431,13 @@ impl App {
         };
 
         let streaming = matches!(run.stream, StreamState::Live { .. });
+        let streaming_or_starting = !matches!(run.stream, StreamState::Idle);
+        let recording = run.recording;
+        let record_label = if recording {
+            "Stop re&cording"
+        } else {
+            "Start &recording"
+        };
         let overview = format!(
             "Status: {}\nListeners: {}\nListener peak: {}\nDuration: {}",
             match &run.stream {
@@ -410,8 +465,39 @@ impl App {
                 w.overview.set_value(&overview);
             }
             w.stream_button.set_label(&button_label);
+            // Streaming and standalone recording are mutually exclusive.
+            w.stream_button.enable(!recording);
+            w.record_button.set_label(record_label);
+            w.record_button.enable(!streaming_or_starting);
         });
     }
+}
+
+/// Builds a recording file name from the stream title and the current local
+/// date/time: `<sanitized title>_<yyyy-mm-dd>_<HH-MM-SS>.mp3`. Spaces become
+/// underscores and characters illegal in Windows file names are stripped.
+fn recording_filename(title: &str) -> String {
+    let mut name = String::with_capacity(title.len());
+    for ch in title.chars() {
+        match ch {
+            c if c.is_whitespace() => name.push('_'),
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => name.push('_'),
+            c if c.is_control() => name.push('_'),
+            c => name.push(c),
+        }
+    }
+    let name = name.trim_matches(|c| c == '.' || c == '_' || c == ' ');
+    let mut name: String = name.chars().take(120).collect();
+    if name.is_empty() {
+        name = "Stream".to_string();
+    }
+
+    use windows::Win32::System::SystemInformation::GetLocalTime;
+    let t = unsafe { GetLocalTime() };
+    format!(
+        "{name}_{:04}-{:02}-{:02}_{:02}-{:02}-{:02}.mp3",
+        t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond
+    )
 }
 
 /// Kicks off the stream (engine encoding + network side). If the user never
@@ -449,6 +535,21 @@ pub fn start_streaming(app: &Rc<App>) {
         bitrate_kbps: bitrate,
         out: tx,
     });
+    if info.record {
+        let desired = app
+            .config
+            .borrow()
+            .archiving
+            .recording_dir()
+            .join(recording_filename(&info.title));
+        // Guard against clobbering a prior recording that resolved to the same
+        // name (a stop/start within the same one-second timestamp).
+        let path = crate::audio::recorder::unique_path(&desired);
+        app.engine.send(EngineCommand::StartRecording {
+            bitrate_kbps: bitrate,
+            path,
+        });
+    }
     app.net.send(NetCommand::StartStream {
         title: info.title,
         description: info.description,
@@ -521,7 +622,8 @@ pub fn build(app: Rc<App>) {
     build_menu(&app, &frame);
 
     // Tabs fill in the Widgets struct.
-    let (overview, stream_button, home_scene_list, mixer_panel) = home::build(&app, &home_panel);
+    let (overview, stream_button, record_button, home_scene_list, mixer_panel) =
+        home::build(&app, &home_panel);
     let (chat_list, chat_input) = chat::build(&app, &chat_panel);
     let (scenes_list, sources_list) = scenes::build(&app, &scenes_panel);
     let (bus_list, fx_list) = buses::build(&app, &buses_panel);
@@ -531,6 +633,7 @@ pub fn build(app: Rc<App>) {
         status_bar,
         overview,
         stream_button,
+        record_button,
         home_scene_list,
         mixer_panel,
         mixer_inner: RefCell::new(None),
@@ -800,6 +903,7 @@ fn pump_events(app: &Rc<App>) {
             }
             NetEvent::StreamEnded => {
                 app.engine.send(EngineCommand::StopEncoding);
+                app.engine.send(EngineCommand::StopRecording);
                 let mut run = app.run.borrow_mut();
                 run.stream = StreamState::Idle;
                 run.stream_started = None;
@@ -808,6 +912,7 @@ fn pump_events(app: &Rc<App>) {
             }
             NetEvent::StreamError { message } => {
                 app.engine.send(EngineCommand::StopEncoding);
+                app.engine.send(EngineCommand::StopRecording);
                 let mut run = app.run.borrow_mut();
                 run.stream = StreamState::Idle;
                 run.stream_started = None;
@@ -1008,5 +1113,20 @@ mod token_tests {
             "Now live: Tuesday hangout - listen at https://audiopub.site/live/abc123"
         );
         assert_eq!(super::expand_stream_tokens("no tokens", "t", "u"), "no tokens");
+    }
+
+    #[test]
+    fn recording_filename_sanitizes_and_stamps() {
+        let name = super::recording_filename("My Show: 100% Fun / <live>");
+        // Spaces -> underscores; illegal chars (:/<>) -> underscores.
+        assert!(name.starts_with("My_Show__100%_Fun____live"), "got {name}");
+        assert!(name.ends_with(".mp3"));
+        // "<sanitized>_<yyyy-mm-dd>_<HH-MM-SS>.mp3"
+        let stamp = name.trim_end_matches(".mp3").rsplit('_').next().unwrap();
+        assert_eq!(stamp.len(), 8, "time HH-MM-SS in {name}");
+
+        // Empty / all-illegal titles fall back to a usable name.
+        assert!(super::recording_filename("   ").starts_with("Stream_"));
+        assert!(super::recording_filename("///").starts_with("Stream_"));
     }
 }

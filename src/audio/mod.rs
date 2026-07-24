@@ -7,6 +7,7 @@ pub mod device;
 pub mod encoder;
 pub mod fx_chain;
 pub mod mixer;
+pub mod recorder;
 
 use fx_chain::FxChain;
 
@@ -90,6 +91,14 @@ pub enum EngineCommand {
         out: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     },
     StopEncoding,
+    /// Begin recording the master mix to `path` as MP3, using a dedicated
+    /// encoder independent of streaming. Ignored if a recording is already
+    /// active.
+    StartRecording {
+        bitrate_kbps: u32,
+        path: std::path::PathBuf,
+    },
+    StopRecording,
     Shutdown,
 }
 
@@ -248,6 +257,9 @@ fn engine_loop(
         encoder::Mp3Encoder,
         tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     )> = None;
+    // Recording runs on its own encoder so it works with or without streaming.
+    let mut rec_encoder: Option<encoder::Mp3Encoder> = None;
+    let mut recorder: Option<recorder::Recorder> = None;
 
     let block_period = Duration::from_millis(10);
     let mut next_tick = Instant::now() + block_period;
@@ -348,7 +360,30 @@ fn engine_loop(
                         }
                     }
                 }
+                Ok(EngineCommand::StartRecording { bitrate_kbps, path }) => {
+                    if recorder.is_none() {
+                        match (
+                            encoder::Mp3Encoder::new(bitrate_kbps),
+                            recorder::Recorder::new(&path),
+                        ) {
+                            (Ok(enc), Ok(rec)) => {
+                                rec_encoder = Some(enc);
+                                recorder = Some(rec);
+                            }
+                            (Err(e), _) => {
+                                log::error!("Failed to create recording encoder: {e}")
+                            }
+                            (_, Err(e)) => {
+                                log::error!("Failed to start recording {path:?}: {e}")
+                            }
+                        }
+                    }
+                }
+                Ok(EngineCommand::StopRecording) => {
+                    finalize_recording(&mut rec_encoder, &mut recorder);
+                }
                 Ok(EngineCommand::Shutdown) => {
+                    finalize_recording(&mut rec_encoder, &mut recorder);
                     stop_sources(&mut sources);
                     return;
                 }
@@ -371,8 +406,13 @@ fn engine_loop(
         );
         crate::vst::host2::advance_transport(mixer::BLOCK_FRAMES as u64);
 
-        if let Some((enc, out)) = &mut encoder {
+        // Convert the block to i16 once and feed the stream and recording
+        // encoders (either, both, or neither may be active).
+        if encoder.is_some() || rec_encoder.is_some() {
             mixer::to_i16(&mix_block, &mut pcm_i16);
+        }
+
+        if let Some((enc, out)) = &mut encoder {
             match enc.encode(&pcm_i16) {
                 Ok(bytes) if !bytes.is_empty() => {
                     if out.send(bytes.to_vec()).is_err() {
@@ -386,6 +426,17 @@ fn engine_loop(
                     log::error!("MP3 encode error: {e}");
                     encoder = None;
                     let _ = events.send(EngineEvent::EncodingStopped);
+                }
+            }
+        }
+
+        if let (Some(enc), Some(rec)) = (&mut rec_encoder, &mut recorder) {
+            match enc.encode(&pcm_i16) {
+                Ok(bytes) if !bytes.is_empty() => rec.write(bytes),
+                Ok(_) => {}
+                Err(e) => {
+                    log::error!("Recording encode error: {e}");
+                    rec_encoder = None;
                 }
             }
         }
@@ -456,6 +507,24 @@ fn stop_sources(sources: &mut Vec<ActiveSource>) {
         source.stop.store(true, Ordering::Relaxed);
     }
     sources.clear();
+}
+
+/// Flushes the recording encoder's tail into the file and closes it. Safe to
+/// call when nothing is recording.
+fn finalize_recording(
+    rec_encoder: &mut Option<encoder::Mp3Encoder>,
+    recorder: &mut Option<recorder::Recorder>,
+) {
+    if let Some(enc) = rec_encoder.take() {
+        if let Ok(tail) = enc.finish() {
+            if let Some(rec) = recorder {
+                rec.write(&tail);
+            }
+        }
+    }
+    if let Some(rec) = recorder.take() {
+        rec.finish();
+    }
 }
 
 #[cfg(test)]

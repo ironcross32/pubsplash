@@ -2,6 +2,9 @@
 name = "pubsplash"
 version = "0.1.0"
 edition = "2024"
+# Two binaries live here (pubsplash + the out-of-process pubsplash-scan helper),
+# so `cargo run` is ambiguous without naming the default target.
+default-run = "pubsplash"
 
 # Loads a single VST plugin and reports its info; kept out-of-process so a
 # crashing plugin cannot take down Pubsplash during a scan.
@@ -34,7 +37,7 @@ mp3lame-encoder = "0.2"
 rtrb = "0.3"
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
 windows-core = "0.62.2"
-windows = { version = "0.62", features = ["Win32_Media_Speech", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_Foundation", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Accessibility", "Win32_UI_Shell", "Win32_System_Variant", "Win32_System_Ole"] }
+windows = { version = "0.62", features = ["Win32_Media_Speech", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_Foundation", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Accessibility", "Win32_UI_Shell", "Win32_System_Variant", "Win32_System_Ole"] }
 
 [package.metadata.packager]
 before-packaging-command = "cargo build --release"

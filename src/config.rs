@@ -226,14 +226,48 @@ impl StreamFormat {
     }
 }
 
-/// Archiving preferences. Currently just the stream-archiving default; the
-/// Preferences "Archiving" tab also reserves a "Recording" group for later.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+/// Archiving and local-recording preferences.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ArchivingConfig {
     /// When set, the "Archive the stream" checkbox in the stream-info dialog
     /// starts checked on each fresh launch. Defaults to off.
     pub archive_streams_by_default: bool,
+    /// When set, the "Record this stream" checkbox in the stream-info dialog
+    /// starts checked on each fresh launch. Defaults to off.
+    pub record_streams_by_default: bool,
+    /// Folder that stream recordings are written to. Empty means "use the
+    /// music library" (see `recording_dir`).
+    pub recording_folder: String,
+}
+
+impl Default for ArchivingConfig {
+    fn default() -> Self {
+        Self {
+            archive_streams_by_default: false,
+            record_streams_by_default: false,
+            recording_folder: default_recording_dir().to_string_lossy().into_owned(),
+        }
+    }
+}
+
+impl ArchivingConfig {
+    /// Resolves the folder recordings are written to: the configured folder, or
+    /// the music library if it is blank.
+    pub fn recording_dir(&self) -> PathBuf {
+        let trimmed = self.recording_folder.trim();
+        if trimmed.is_empty() {
+            default_recording_dir()
+        } else {
+            PathBuf::from(trimmed)
+        }
+    }
+}
+
+/// The default recordings folder: the user's music library
+/// (`%USERPROFILE%\Music`), falling back to the config dir if unavailable.
+pub fn default_recording_dir() -> PathBuf {
+    dirs::audio_dir().unwrap_or_else(config_dir)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
