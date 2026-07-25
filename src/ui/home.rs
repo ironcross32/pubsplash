@@ -2,8 +2,8 @@
 
 use super::slider_uia;
 use super::{
-    App, ID_MIXER_BOOST, WXK_DOWN, WXK_END, WXK_HOME, WXK_LEFT, WXK_PAGEDOWN, WXK_PAGEUP,
-    WXK_RIGHT, WXK_UP,
+    App, ID_MIXER_BOOST, ID_MIXER_MONITOR, Monitors, WXK_DOWN, WXK_END, WXK_HOME, WXK_LEFT,
+    WXK_PAGEDOWN, WXK_PAGEUP, WXK_RIGHT, WXK_UP,
 };
 use crate::audio::EngineCommand;
 use crate::config::max_volume;
@@ -43,7 +43,11 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, Button, ListBox
     let switch_button = Button::builder(panel)
         .with_label("S&witch to scene")
         .build();
-    super::help::tag(&switch_button, "tab.home.switchScene", "Switch to scene button");
+    super::help::tag(
+        &switch_button,
+        "tab.home.switchScene",
+        "Switch to scene button",
+    );
     sizer.add(&scene_label, 0, SizerFlag::All, 4);
     sizer.add(&scene_list, 1, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&switch_button, 0, SizerFlag::All, 4);
@@ -53,12 +57,20 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, Button, ListBox
     let stream_button = Button::builder(panel)
         .with_label("&Start streaming")
         .build();
-    super::help::tag(&stream_button, "tab.home.streamButton", "Start/stop streaming button");
+    super::help::tag(
+        &stream_button,
+        "tab.home.streamButton",
+        "Start/stop streaming button",
+    );
     sizer.add(&stream_button, 0, SizerFlag::All, 8);
     let record_button = Button::builder(panel)
         .with_label("Start &recording")
         .build();
-    super::help::tag(&record_button, "tab.home.recordButton", "Start/stop recording button");
+    super::help::tag(
+        &record_button,
+        "tab.home.recordButton",
+        "Start/stop recording button",
+    );
     sizer.add(&record_button, 0, SizerFlag::All, 8);
 
     panel.set_sizer(sizer, true);
@@ -99,7 +111,13 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, Button, ListBox
         });
     }
 
-    (overview, stream_button, record_button, scene_list, mixer_panel)
+    (
+        overview,
+        stream_button,
+        record_button,
+        scene_list,
+        mixer_panel,
+    )
 }
 
 fn switch_to_selected_scene(app: &Rc<App>, list: &ListBox) {
@@ -117,6 +135,8 @@ fn switch_to_selected_scene(app: &Rc<App>, list: &ListBox) {
     // Switching to the already-active scene must do nothing.
     if changed == crate::state::ListEdit::Changed {
         app.save_config();
+        // The new scene's sources are different strips at the same positions.
+        app.clear_source_monitors();
         app.sync_engine_sources();
         rebuild_mixer(app);
         refresh_scene_list(app);
@@ -150,6 +170,8 @@ const STEP: i32 = 1;
 /// Volume change per Page Up / Page Down press, in percentage points. Kept the
 /// same whether or not the strip is boosted, so a page always means "10%".
 const PAGE_STEP: i32 = 10;
+/// CTRL+M toggles monitoring. wx reports letter keys as uppercase ASCII.
+const KEY_M: i32 = b'M' as i32;
 
 /// What a mixer strip controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,7 +205,7 @@ pub fn rebuild_mixer(app: &Rc<App>) {
 
     // Strip names are derived from what each source points at (device, running
     // application, voice) rather than from `SourceConfig.name`, which is only
-    // ever the kind's display name — see `crate::source_name`.
+    // ever the kind's display name â€” see `crate::source_name`.
     let ((master_volume, master_muted, master_boost), sources, buses) = {
         let config = app.config.borrow();
         let ctx = app.name_context(
@@ -268,7 +290,7 @@ pub fn rebuild_mixer(app: &Rc<App>) {
 }
 
 /// One live mixer strip. Kept so a strip can be re-named without recreating it
-/// — see [`relabel_source_strips`].
+/// â€” see [`relabel_source_strips`].
 #[derive(Clone)]
 pub struct MixerStrip {
     /// Index into the active scene's sources, or `None` for master and buses
@@ -283,10 +305,12 @@ pub struct MixerStrip {
     /// Shared with the boost handler, which is the other thing that can change
     /// what the slider announces.
     boost: Rc<Cell<bool>>,
+    /// Shared with the monitoring handlers (context menu and CTRL+M).
+    monitor: Rc<Cell<bool>>,
 }
 
 /// Removes the UIA providers installed on the current mixer sliders. Must run
-/// while those sliders' windows still exist — i.e. before `rebuild_mixer`
+/// while those sliders' windows still exist â€” i.e. before `rebuild_mixer`
 /// destroys the inner panel, and before the frame is torn down.
 pub fn drop_mixer_strips(app: &Rc<App>) {
     app.widgets(|w| {
@@ -297,7 +321,7 @@ pub fn drop_mixer_strips(app: &Rc<App>) {
 }
 
 /// Re-derives the source strips' names and applies any that changed, without
-/// creating or destroying a widget — so keyboard focus survives. This runs off
+/// creating or destroying a widget â€” so keyboard focus survives. This runs off
 /// the pump when an application starts or exits, which is exactly when the user
 /// is likely to be on that strip.
 pub fn relabel_source_strips(app: &Rc<App>) {
@@ -318,32 +342,50 @@ pub fn relabel_source_strips(app: &Rc<App>) {
                 continue;
             }
             *strip.name.borrow_mut() = name.clone();
-            apply_strip_name(strip);
+            apply_strip_name(strip, true);
         }
     });
 }
 
-/// The slider's announced name. Boost is part of the name so a screen reader
-/// says which strips are amplified when tabbing through the mixer.
-fn spoken_name(name: &str, boost: bool) -> String {
+/// The slider's announced name. Boost and monitoring are part of the name so a
+/// screen reader says which strips are amplified, and which are being listened
+/// to, when tabbing through the mixer.
+fn spoken_name(name: &str, boost: bool, monitor: bool) -> String {
+    let mut spoken = format!("{name} volume");
     if boost {
-        format!("{name} volume, boost")
-    } else {
-        format!("{name} volume")
+        spoken.push_str(", boost");
     }
+    if monitor {
+        spoken.push_str(", monitoring");
+    }
+    spoken
 }
 
 /// Pushes a strip's current name out to every place it is read from: the
 /// visible label, the slider's accessible name, the UIA announcement, and the
 /// mute checkbox.
-fn apply_strip_name(strip: &MixerStrip) {
+///
+/// `speak_value` re-announces the slider's value through the UIA provider. Pass
+/// false when something else is already speaking the change, so it isn't
+/// chased by a redundant "100%".
+fn apply_strip_name(strip: &MixerStrip, speak_value: bool) {
     let name = strip.name.borrow();
-    let spoken = spoken_name(&name, strip.boost.get());
-    strip.label.set_label(&format!("{name} volume"));
+    let monitor = strip.monitor.get();
+    let spoken = spoken_name(&name, strip.boost.get(), monitor);
+    // The visible label carries the monitoring state too, so it is there for
+    // sighted users and for readers that fall back to the label.
+    strip.label.set_label(&if monitor {
+        format!("{name} volume (monitoring)")
+    } else {
+        format!("{name} volume")
+    });
     super::set_accessible_name(&strip.slider, &spoken);
-    strip
-        .announcer
-        .update(&spoken, &format!("{}%", strip.slider.value()));
+    let value = format!("{}%", strip.slider.value());
+    if speak_value {
+        strip.announcer.update(&spoken, &value);
+    } else {
+        strip.announcer.set_text(&spoken, &value);
+    }
     super::set_accessible_name(&strip.mute, &format!("Mute {name}"));
 }
 
@@ -370,7 +412,11 @@ fn add_strip(
         .with_min_value(0)
         .with_max_value(max.get())
         .build();
-    super::help::tag(&slider, "tab.home.mixer.strip.volume", "Mixer strip volume slider");
+    super::help::tag(
+        &slider,
+        "tab.home.mixer.strip.volume",
+        "Mixer strip volume slider",
+    );
     // A native trackbar announces its position as a percentage of its *range*,
     // which is wrong once the range is 0-500 (100 would be read as "20%"). Our
     // own UIA provider speaks the literal value instead.
@@ -386,17 +432,37 @@ fn add_strip(
         announcer: announcer.clone(),
         name: Rc::new(RefCell::new(name.to_string())),
         boost: Rc::new(Cell::new(boost)),
+        // Monitoring is session state; a rebuilt mixer picks up whatever is
+        // playing right now rather than resetting it.
+        monitor: Rc::new(Cell::new(monitor_of(app, target))),
     };
-    apply_strip_name(&strip);
+    apply_strip_name(&strip, true);
     let name = strip.name.clone();
     let boost_now = strip.boost.clone();
+    let monitor_now = strip.monitor.clone();
     let strip_for_boost = strip.clone();
+    let strip_for_menu_monitor = strip.clone();
+    let strip_for_key_monitor = strip.clone();
     app.widgets(|w| w.mixer_strips.borrow_mut().push(strip));
-    super::help::tag(&mute_check, "tab.home.mixer.strip.mute", "Mixer strip mute checkbox");
+    super::help::tag(
+        &mute_check,
+        "tab.home.mixer.strip.mute",
+        "Mixer strip mute checkbox",
+    );
 
-    row.add(&label, 0, SizerFlag::AlignCenterVertical | SizerFlag::All, 4);
+    row.add(
+        &label,
+        0,
+        SizerFlag::AlignCenterVertical | SizerFlag::All,
+        4,
+    );
     row.add(&slider, 1, SizerFlag::Expand | SizerFlag::All, 4);
-    row.add(&mute_check, 0, SizerFlag::AlignCenterVertical | SizerFlag::All, 4);
+    row.add(
+        &mute_check,
+        0,
+        SizerFlag::AlignCenterVertical | SizerFlag::All,
+        4,
+    );
     sizer.add_sizer(&row, 0, SizerFlag::Expand, 0);
 
     // Volume changes.
@@ -407,11 +473,12 @@ fn add_strip(
         let max = max.clone();
         let name = name.clone();
         let boost_now = boost_now.clone();
+        let monitor_now = monitor_now.clone();
         slider.on_slider(move |_| {
             let value = slider_for_handler.value().clamp(0, max.get()) as u32;
             apply_volume(&app, target, value);
             announcer.update(
-                &spoken_name(&name.borrow(), boost_now.get()),
+                &spoken_name(&name.borrow(), boost_now.get(), monitor_now.get()),
                 &format!("{value}%"),
             );
         });
@@ -434,11 +501,19 @@ fn add_strip(
         let max = max.clone();
         let name = name.clone();
         let boost_now = boost_now.clone();
+        let monitor_now = monitor_now.clone();
         slider.on_key_down(move |event| {
-            let Some((code, _)) = super::key_of(&event) else {
+            let Some((code, ctrl)) = super::key_of(&event) else {
                 event.skip(true);
                 return;
             };
+            // CTRL+M toggles monitoring for the focused strip. wx reports
+            // letter keys as their uppercase ASCII code.
+            if ctrl && code == KEY_M {
+                event.skip(false);
+                toggle_monitor(&app, target, &strip_for_key_monitor);
+                return;
+            }
             let ceiling = max.get();
             let current = slider_for_keys.value();
             let value = match code {
@@ -462,13 +537,13 @@ fn add_strip(
             // Announced even when already at the end of the range, so the key
             // always produces spoken feedback.
             announcer.update(
-                &spoken_name(&name.borrow(), boost_now.get()),
+                &spoken_name(&name.borrow(), boost_now.get(), monitor_now.get()),
                 &format!("{value}%"),
             );
         });
     }
 
-    // Context menu (right-click, SHIFT+F10, or the applications key — Windows
+    // Context menu (right-click, SHIFT+F10, or the applications key â€” Windows
     // raises WM_CONTEXTMENU for all three, which wx turns into this event).
     // `Slider` doesn't implement wxdragon's `MenuEvents` trait and the orphan
     // rule blocks adding it, so bind the raw event types instead.
@@ -477,14 +552,21 @@ fn add_strip(
         let slider_for_menu = slider.clone();
         slider.bind_internal(EventType::CONTEXT_MENU, move |_| {
             let boost = boost_of(&app, target);
+            let monitor = monitor_of(&app, target);
             let mut menu = Menu::builder()
                 .append_check_item(
                     ID_MIXER_BOOST,
                     "Enable volume boost",
                     "Allow this strip's volume to go above 100%, up to 500%",
                 )
+                .append_check_item(
+                    ID_MIXER_MONITOR,
+                    "&Monitor this strip",
+                    "Play this strip through your speakers or headphones",
+                )
                 .build();
             menu.check_item(ID_MIXER_BOOST, boost);
+            menu.check_item(ID_MIXER_MONITOR, monitor);
             // Anchor to the slider rather than the mouse so the keyboard paths
             // put the menu next to the control they came from.
             let at = slider_for_menu.client_to_screen(Point { x: 8, y: 8 });
@@ -510,7 +592,15 @@ fn add_strip(
             slider_for_boost.set_value(value);
             apply_volume(&app, target, value as u32);
             // Boost is spoken as part of the name, so re-announce the strip.
-            apply_strip_name(&strip_for_boost);
+            apply_strip_name(&strip_for_boost, true);
+        });
+    }
+
+    // Monitoring, from the same popup.
+    {
+        let app = app.clone();
+        slider.bind_with_id_internal(EventType::MENU, ID_MIXER_MONITOR, move |_| {
+            toggle_monitor(&app, target, &strip_for_menu_monitor);
         });
     }
 
@@ -553,6 +643,48 @@ fn add_strip(
             app.save_config();
         });
     }
+}
+
+/// Whether `target` is currently being monitored. Monitoring is session state,
+/// so unlike boost this reads `Runtime`, not `Config`.
+fn monitor_of(app: &Rc<App>, target: StripTarget) -> bool {
+    let monitors = &app.run.borrow().monitors;
+    match target {
+        StripTarget::Master => monitors.master,
+        StripTarget::Source(i) => monitors.source(i),
+        StripTarget::Bus(i) => monitors.bus(i),
+    }
+}
+
+/// Flips `target`'s monitoring, tells the engine, re-labels the strip, and
+/// announces the change.
+///
+/// The announcement is a UIA notification rather than a value change: the
+/// slider's value hasn't moved, and a notification interrupts, so the answer
+/// arrives the moment the key is pressed. The strip's name (and its visible
+/// label) then carry "monitoring" for the next time it takes focus.
+fn toggle_monitor(app: &Rc<App>, target: StripTarget, strip: &MixerStrip) {
+    let on = !monitor_of(app, target);
+    {
+        let monitors = &mut app.run.borrow_mut().monitors;
+        match target {
+            StripTarget::Master => monitors.master = on,
+            StripTarget::Source(i) => Monitors::set(&mut monitors.sources, i, on),
+            StripTarget::Bus(i) => Monitors::set(&mut monitors.buses, i, on),
+        }
+    }
+    app.engine.send(match target {
+        StripTarget::Master => EngineCommand::SetMasterMonitor(on),
+        StripTarget::Source(i) => EngineCommand::SetSourceMonitor(i, on),
+        StripTarget::Bus(i) => EngineCommand::SetBusMonitor(i, on),
+    });
+    strip.monitor.set(on);
+    apply_strip_name(strip, false);
+    let name = strip.name.borrow().clone();
+    super::help::announce(&format!(
+        "{name} monitoring {}",
+        if on { "on" } else { "off" }
+    ));
 }
 
 /// Whether `target`'s volume boost is currently on.
@@ -625,6 +757,9 @@ pub fn on_sources_changed(app: &Rc<App>) {
     // Resolve applications first: both the engine's pid and the strip names
     // come out of that cache.
     app.refresh_app_processes();
+    // Sources may have been added, removed, or reordered; monitoring is held
+    // by position, so keeping the flags would monitor the wrong strip.
+    app.clear_source_monitors();
     app.sync_engine_sources();
     rebuild_mixer(app);
     refresh_scene_list(app);

@@ -51,6 +51,8 @@ const ID_MENU_README: i32 = 2102;
 /// menu. One id serves every strip: the menu is popped up on the slider, so
 /// the command comes back to that slider's own handler.
 pub const ID_MIXER_BOOST: i32 = 2201;
+/// Command id of the "Monitor this strip" item in the same menu.
+pub const ID_MIXER_MONITOR: i32 = 2202;
 
 const README_URL: &str = "https://github.com/ironcross32/pubsplash#readme";
 
@@ -111,6 +113,39 @@ pub struct Runtime {
     /// Identity names (`SourceConfig.name`) of sources whose capture thread is
     /// currently failing and retrying. Drives the "(reconnecting)" labels.
     pub failing: HashSet<String>,
+    /// Which mixer strips are being monitored through the local playback
+    /// device. Deliberately not persisted — see [`Monitors`].
+    pub monitors: Monitors,
+}
+
+/// Which mixer strips are monitored, by the same indices the mixer and engine
+/// use. Session-only on purpose: Pubsplash must never open the speakers (or
+/// start feeding a microphone back at the room) at launch because of a choice
+/// made days ago.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Monitors {
+    pub master: bool,
+    /// Indexed by position in the active scene's sources.
+    pub sources: Vec<bool>,
+    /// Indexed by position in `config.buses.buses`.
+    pub buses: Vec<bool>,
+}
+
+impl Monitors {
+    pub fn source(&self, index: usize) -> bool {
+        self.sources.get(index).copied().unwrap_or(false)
+    }
+
+    pub fn bus(&self, index: usize) -> bool {
+        self.buses.get(index).copied().unwrap_or(false)
+    }
+
+    fn set(flags: &mut Vec<bool>, index: usize, on: bool) {
+        if flags.len() <= index {
+            flags.resize(index + 1, false);
+        }
+        flags[index] = on;
+    }
 }
 
 impl Default for Runtime {
@@ -128,6 +163,7 @@ impl Default for Runtime {
             recording: false,
             apps: HashMap::new(),
             failing: HashSet::new(),
+            monitors: Monitors::default(),
         }
     }
 }
@@ -365,11 +401,28 @@ impl App {
         (true, capture_changed)
     }
 
+    /// Forgets which sources were being monitored. Source monitoring is held by
+    /// position, so any edit that moves, adds, or removes a source would leave
+    /// the flags pointing at a different strip than the user chose — and the
+    /// mistake is one you hear. Call this before re-syncing the engine, which
+    /// carries the flags in `SourceSpec`.
+    pub fn clear_source_monitors(&self) {
+        self.run.borrow_mut().monitors.sources.clear();
+    }
+
+    /// The bus equivalent of [`App::clear_source_monitors`].
+    pub fn clear_bus_monitors(&self) {
+        self.run.borrow_mut().monitors.buses.clear();
+    }
+
     /// Sends the active scene's sources to the audio engine (mixer order).
     /// Send targets are translated from bus names to current bus indices,
     /// so call this again after any bus reorder.
     pub fn sync_engine_sources(&self) {
-        let apps = self.run.borrow().apps.clone();
+        let (apps, monitors) = {
+            let run = self.run.borrow();
+            (run.apps.clone(), run.monitors.clone())
+        };
         let config = self.config.borrow();
         let Some(scene) = config.scenes.active_scene() else {
             return;
@@ -378,10 +431,12 @@ impl App {
         let specs: Vec<SourceSpec> = scene
             .sources
             .iter()
-            .map(|s| SourceSpec {
+            .enumerate()
+            .map(|(index, s)| SourceSpec {
                 name: s.name.clone(),
                 volume: s.volume,
                 muted: s.muted,
+                monitor: monitors.source(index),
                 to_master: s.to_master,
                 sends: s
                     .sends

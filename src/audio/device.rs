@@ -72,8 +72,7 @@ pub fn capture_device(id: Option<&str>) -> Result<wasapi::Device, String> {
     }
 }
 
-/// The default render device (kept for future monitoring output).
-#[allow(dead_code)]
+/// The default render device, used by the monitoring output.
 pub fn default_render_device() -> Result<wasapi::Device, String> {
     ensure_com_initialized();
     let enumerator = DeviceEnumerator::new().map_err(|e| e.to_string())?;
@@ -219,7 +218,10 @@ mod tests {
             resolve_apps(&names);
         }
         let each = start.elapsed() / 5;
-        assert!(each < std::time::Duration::from_millis(50), "{each:?} per poll");
+        assert!(
+            each < std::time::Duration::from_millis(50),
+            "{each:?} per poll"
+        );
     }
 
     /// Spotify's version resource really does read `Spotify\0` followed by
@@ -232,7 +234,10 @@ mod tests {
             first_string("Spotify\0\u{38}\u{16}\u{1}FileV"),
             Some("Spotify".to_string())
         );
-        assert_eq!(first_string("Windows Explorer"), Some("Windows Explorer".into()));
+        assert_eq!(
+            first_string("Windows Explorer"),
+            Some("Windows Explorer".into())
+        );
         assert_eq!(first_string("  NVDA \0"), Some("NVDA".to_string()));
         assert_eq!(first_string("\0anything"), None);
         assert_eq!(first_string("   "), None);
@@ -250,9 +255,7 @@ mod tests {
 
     #[test]
     fn a_process_that_is_not_running_is_absent() {
-        assert!(
-            resolve_apps(&["definitely-not-a-real-program".to_string()]).is_empty()
-        );
+        assert!(resolve_apps(&["definitely-not-a-real-program".to_string()]).is_empty());
     }
 }
 

@@ -12,8 +12,8 @@ use super::App;
 use crate::audio::fx_chain::{FxChain, FxUnit};
 use crate::audio::{BusSpec, EngineCommand};
 use crate::config::{FxSlotConfig, PluginRef};
-use crate::vst::host2::Vst2Plugin;
 use crate::vst::PluginFormat;
+use crate::vst::host2::Vst2Plugin;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -45,7 +45,7 @@ fn load_slot(app: &Rc<App>, slot: &FxSlotConfig) -> Option<Arc<Vst2Plugin>> {
 
 /// Instantiates every configured chain at startup, filling `App.fx`. Returns
 /// the plugin references that could not be loaded, for a single summary
-/// dialog. Config is never rewritten — missing plugins stay as gaps and come
+/// dialog. Config is never rewritten â€” missing plugins stay as gaps and come
 /// back when installed and rescanned.
 pub fn instantiate_all(app: &Rc<App>) -> Vec<PluginRef> {
     let mut missing = Vec::new();
@@ -105,6 +105,7 @@ fn build_chain(instances: &[Option<Arc<Vst2Plugin>>], slots: &[FxSlotConfig]) ->
 /// Pushes the current bus set and master chain (with live plugins) to the
 /// engine. Call after any chain or bus change.
 pub fn sync_engine_buses(app: &Rc<App>) {
+    let monitors = app.run.borrow().monitors.clone();
     let config = app.config.borrow();
     let fx = app.fx.borrow();
     let mut specs = Vec::new();
@@ -114,6 +115,7 @@ pub fn sync_engine_buses(app: &Rc<App>) {
             volume: bus.volume,
             muted: bus.muted,
             chain: build_chain(instances, &bus.chain),
+            monitor: monitors.bus(i),
         });
     }
     app.engine.send(EngineCommand::SetBuses(specs));
@@ -132,6 +134,9 @@ pub fn on_bus_added(app: &Rc<App>) {
 pub fn on_bus_removed(app: &Rc<App>, index: usize) {
     // Bus indices (and thus editor targets) shift; close open editors.
     super::fx_editor::close_all(app);
+    // Monitoring is held by bus index too, so the same shift would leave it
+    // pointing at a bus the user never chose.
+    app.clear_bus_monitors();
     let mut fx = app.fx.borrow_mut();
     if index < fx.buses.len() {
         let removed = fx.buses.remove(index);
@@ -141,6 +146,7 @@ pub fn on_bus_removed(app: &Rc<App>, index: usize) {
 
 pub fn on_bus_moved(app: &Rc<App>, a: usize, b: usize) {
     super::fx_editor::close_all(app);
+    app.clear_bus_monitors();
     let mut fx = app.fx.borrow_mut();
     if a < fx.buses.len() && b < fx.buses.len() {
         fx.buses.swap(a, b);
@@ -321,11 +327,7 @@ pub fn replace_chain(app: &Rc<App>, target: ChainTarget, slots: Vec<FxSlotConfig
 }
 
 /// Reads the live instance for a slot, if loaded.
-pub fn instance_at(
-    app: &Rc<App>,
-    target: ChainTarget,
-    slot: usize,
-) -> Option<Arc<Vst2Plugin>> {
+pub fn instance_at(app: &Rc<App>, target: ChainTarget, slot: usize) -> Option<Arc<Vst2Plugin>> {
     let fx = app.fx.borrow();
     let list = match target {
         ChainTarget::Bus(i) => fx.buses.get(i),

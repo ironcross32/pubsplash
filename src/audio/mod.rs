@@ -8,6 +8,7 @@ pub mod device;
 pub mod encoder;
 pub mod fx_chain;
 pub mod mixer;
+pub mod monitor;
 pub mod recorder;
 
 use fx_chain::FxChain;
@@ -43,6 +44,10 @@ pub struct SourceSpec {
     /// Whether the source mixes directly into master (in addition to sends).
     pub to_master: bool,
     pub sends: Vec<SendSpec>,
+    /// Whether this source's post-fader signal is played out of the local
+    /// monitoring device. Session-only state, so it rides along in the spec
+    /// and is re-sent with every `SetSources`.
+    pub monitor: bool,
 }
 
 /// A source's send into a bus, addressed by bus index (matching the order
@@ -62,6 +67,8 @@ pub struct BusSpec {
     pub volume: u32,
     pub muted: bool,
     pub chain: FxChain,
+    /// See [`SourceSpec::monitor`].
+    pub monitor: bool,
 }
 
 pub enum EngineCommand {
@@ -70,11 +77,17 @@ pub enum EngineCommand {
     SetSources(Vec<SourceSpec>),
     SetSourceVolume(usize, u32),
     SetSourceMute(usize, bool),
+    /// Play (or stop playing) this source's post-fader signal out of the local
+    /// monitoring device. The output device is opened on the first strip that
+    /// asks for it and closed again when the last one stops.
+    SetSourceMonitor(usize, bool),
     /// Replace the bus set, including each bus's FX chain. Send `SetSources`
     /// (or `SetSourceSends`) after a bus reorder so send indices match again.
     SetBuses(Vec<BusSpec>),
     SetBusVolume(usize, u32),
     SetBusMute(usize, bool),
+    /// See [`EngineCommand::SetSourceMonitor`].
+    SetBusMonitor(usize, bool),
     /// Replace the master output's FX chain.
     SetMasterChain(FxChain),
     /// Toggle bypass on one plugin. `bus: None` targets the master chain.
@@ -85,6 +98,9 @@ pub enum EngineCommand {
     },
     SetMasterVolume(u32),
     SetMasterMute(bool),
+    /// See [`EngineCommand::SetSourceMonitor`]. The master tap is taken after
+    /// the master FX chain and fader, so it is exactly what goes out.
+    SetMasterMonitor(bool),
     /// Begin encoding; encoded MP3 chunks flow into the sender (consumed by
     /// the Icecast task on the network runtime).
     StartEncoding {
@@ -171,6 +187,7 @@ struct ActiveSource {
     scratch: Vec<f32>,
     to_master: bool,
     sends: Vec<ActiveSend>,
+    monitor: bool,
 }
 
 /// A live send: the level is a `ChannelStrip` so level changes ramp
@@ -185,6 +202,21 @@ struct ActiveBus {
     chain: FxChain,
     /// This block's summed sends, reused across iterations.
     buffer: Vec<f32>,
+    monitor: bool,
+}
+
+/// The live monitoring output: the producer half of the ring the render thread
+/// drains, plus its stop flag. Dropped (and stopped) as soon as the last strip
+/// stops monitoring, so the playback device is not held open for nothing.
+struct MonitorOutput {
+    producer: rtrb::Producer<f32>,
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for MonitorOutput {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
 fn active_sends(specs: Vec<SendSpec>) -> Vec<ActiveSend> {
@@ -267,6 +299,8 @@ fn engine_loop(
     let mut buses: Vec<ActiveBus> = Vec::new();
     let mut master_chain = FxChain::empty();
     let mut master = ChannelStrip::new(100, false);
+    let mut master_monitor = false;
+    let mut monitor_out: Option<MonitorOutput> = None;
     let mut encoder: Option<(
         encoder::Mp3Encoder,
         tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
@@ -278,6 +312,7 @@ fn engine_loop(
     let block_period = Duration::from_millis(10);
     let mut next_tick = Instant::now() + block_period;
     let mut mix_block = vec![0f32; BLOCK_SAMPLES];
+    let mut monitor_block = vec![0f32; BLOCK_SAMPLES];
     let mut send_scratch = vec![0f32; BLOCK_SAMPLES];
     let mut pcm_i16: Vec<i16> = Vec::with_capacity(BLOCK_SAMPLES);
 
@@ -320,6 +355,7 @@ fn engine_loop(
                             scratch: vec![0f32; BLOCK_SAMPLES],
                             to_master: spec.to_master,
                             sends: active_sends(spec.sends),
+                            monitor: spec.monitor,
                         });
                     }
                 }
@@ -333,6 +369,11 @@ fn engine_loop(
                         s.strip.set_muted(m);
                     }
                 }
+                Ok(EngineCommand::SetSourceMonitor(i, m)) => {
+                    if let Some(s) = sources.get_mut(i) {
+                        s.monitor = m;
+                    }
+                }
                 Ok(EngineCommand::SetBuses(specs)) => {
                     buses = specs
                         .into_iter()
@@ -340,6 +381,7 @@ fn engine_loop(
                             strip: ChannelStrip::new(spec.volume, spec.muted),
                             chain: spec.chain,
                             buffer: vec![0f32; BLOCK_SAMPLES],
+                            monitor: spec.monitor,
                         })
                         .collect();
                     let _ = events.send(EngineEvent::BusesApplied);
@@ -352,6 +394,11 @@ fn engine_loop(
                 Ok(EngineCommand::SetBusMute(i, m)) => {
                     if let Some(b) = buses.get_mut(i) {
                         b.strip.set_muted(m);
+                    }
+                }
+                Ok(EngineCommand::SetBusMonitor(i, m)) => {
+                    if let Some(b) = buses.get_mut(i) {
+                        b.monitor = m;
                     }
                 }
                 Ok(EngineCommand::SetMasterChain(chain)) => {
@@ -368,6 +415,7 @@ fn engine_loop(
                 },
                 Ok(EngineCommand::SetMasterVolume(v)) => master.set_volume(v),
                 Ok(EngineCommand::SetMasterMute(m)) => master.set_muted(m),
+                Ok(EngineCommand::SetMasterMonitor(m)) => master_monitor = m,
                 Ok(EngineCommand::StartEncoding { bitrate_kbps, out }) => {
                     match encoder::Mp3Encoder::new(bitrate_kbps) {
                         Ok(enc) => encoder = Some((enc, out)),
@@ -438,15 +486,46 @@ fn engine_loop(
             let _ = events.send(event);
         }
 
+        // The playback device is only held open while something is actually
+        // being monitored, so this is re-evaluated every block: a scene switch
+        // or bus rebuild can retire the last monitored strip without any
+        // command that mentions monitoring.
+        let wanted =
+            master_monitor || sources.iter().any(|s| s.monitor) || buses.iter().any(|b| b.monitor);
+        match (wanted, monitor_out.is_some()) {
+            (true, false) => {
+                let (producer, consumer) = RingBuffer::new(RING_CAPACITY);
+                let stop = Arc::new(AtomicBool::new(false));
+                monitor::spawn(consumer, stop.clone());
+                monitor_out = Some(MonitorOutput { producer, stop });
+            }
+            // Dropping it sets the stop flag; the thread notices and releases
+            // the endpoint.
+            (false, true) => monitor_out = None,
+            _ => {}
+        }
+
         mix_one_block(
             &mut sources,
             &mut buses,
             &mut master_chain,
             &mut master,
             &mut mix_block,
+            &mut monitor_block,
             &mut send_scratch,
+            master_monitor,
         );
         crate::vst::host2::advance_transport(mixer::BLOCK_FRAMES as u64);
+
+        if let Some(out) = &mut monitor_out {
+            // Full ring means the render thread is behind; dropping the block
+            // is the only option that keeps the mixer on its cadence.
+            for &sample in monitor_block.iter() {
+                if out.producer.push(sample).is_err() {
+                    break;
+                }
+            }
+        }
 
         // Convert the block to i16 once and feed the stream and recording
         // encoders (either, both, or neither may be active).
@@ -498,15 +577,24 @@ fn engine_loop(
 /// Mixes one 10 ms block: sources into master (if routed there) and into
 /// their send buses (post-fader, per-send level), then each bus through its
 /// strip into master, then the master strip. Allocation-free.
+///
+/// `monitor_block` collects the local monitoring mix. Every tap is taken
+/// **post-fader and post-mute**, so what a monitored strip sounds like is
+/// exactly what it contributes: muting it silences the monitor too, and its
+/// volume slider moves the monitor level.
+#[allow(clippy::too_many_arguments)]
 fn mix_one_block(
     sources: &mut [ActiveSource],
     buses: &mut [ActiveBus],
     master_chain: &mut FxChain,
     master: &mut ChannelStrip,
     mix_block: &mut [f32],
+    monitor_block: &mut [f32],
     send_scratch: &mut [f32],
+    master_monitor: bool,
 ) {
     mix_block.fill(0.0);
+    monitor_block.fill(0.0);
     for bus in buses.iter_mut() {
         bus.buffer.fill(0.0);
     }
@@ -521,6 +609,9 @@ fn mix_one_block(
         }
         source.scratch[take..].fill(0.0);
         source.strip.process(&mut source.scratch);
+        if source.monitor {
+            mixer::mix_into(monitor_block, &source.scratch);
+        }
         if source.to_master {
             mixer::mix_into(mix_block, &source.scratch);
         }
@@ -538,10 +629,16 @@ fn mix_one_block(
     for bus in buses.iter_mut() {
         bus.chain.process(&mut bus.buffer);
         bus.strip.process(&mut bus.buffer);
+        if bus.monitor {
+            mixer::mix_into(monitor_block, &bus.buffer);
+        }
         mixer::mix_into(mix_block, &bus.buffer);
     }
     master_chain.process(mix_block);
     master.process(mix_block);
+    if master_monitor {
+        mixer::mix_into(monitor_block, mix_block);
+    }
 }
 
 fn stop_sources(sources: &mut Vec<ActiveSource>) {
@@ -594,6 +691,7 @@ mod routing_tests {
             scratch: vec![0f32; BLOCK_SAMPLES],
             to_master,
             sends: active_sends(sends),
+            monitor: false,
         }
     }
 
@@ -602,13 +700,24 @@ mod routing_tests {
             strip: ChannelStrip::new(volume, muted),
             chain: FxChain::empty(),
             buffer: vec![0f32; BLOCK_SAMPLES],
+            monitor: false,
         }
     }
 
     fn run_block(sources: &mut [ActiveSource], buses: &mut [ActiveBus]) -> Vec<f32> {
+        run_block_monitoring(sources, buses, false).0
+    }
+
+    /// Runs one block and returns `(master mix, monitor mix)`.
+    fn run_block_monitoring(
+        sources: &mut [ActiveSource],
+        buses: &mut [ActiveBus],
+        master_monitor: bool,
+    ) -> (Vec<f32>, Vec<f32>) {
         let mut master_chain = FxChain::empty();
         let mut master = ChannelStrip::new(100, false);
         let mut mix_block = vec![0f32; BLOCK_SAMPLES];
+        let mut monitor_block = vec![0f32; BLOCK_SAMPLES];
         let mut send_scratch = vec![0f32; BLOCK_SAMPLES];
         mix_one_block(
             sources,
@@ -616,9 +725,11 @@ mod routing_tests {
             &mut master_chain,
             &mut master,
             &mut mix_block,
+            &mut monitor_block,
             &mut send_scratch,
+            master_monitor,
         );
-        mix_block
+        (mix_block, monitor_block)
     }
 
     fn send(bus_index: usize, level: u32) -> SendSpec {
@@ -671,6 +782,64 @@ mod routing_tests {
         let mut buses = vec![test_bus(100, false)];
         let out = run_block(&mut sources, &mut buses);
         assert!((out[0] - 0.75).abs() < 1e-6, "got {}", out[0]);
+    }
+
+    #[test]
+    fn only_monitored_sources_reach_the_monitor_mix() {
+        // Half-volume monitored source plus an unmonitored one at full volume:
+        // the monitor hears 0.5, master hears both.
+        let mut sources = vec![
+            test_source(1.0, 50, false, true, vec![]),
+            test_source(1.0, 100, false, true, vec![]),
+        ];
+        sources[0].monitor = true;
+        let mut buses = Vec::new();
+        let (mix, monitor) = run_block_monitoring(&mut sources, &mut buses, false);
+        assert!(
+            (monitor[0] - 0.5).abs() < 1e-6,
+            "post-fader tap: {}",
+            monitor[0]
+        );
+        assert!((mix[0] - 1.5).abs() < 1e-6, "master unaffected: {}", mix[0]);
+    }
+
+    #[test]
+    fn a_muted_source_is_silent_in_the_monitor_mix() {
+        // The tap is post-mute, so muting a strip silences its monitor too.
+        let mut sources = vec![test_source(1.0, 100, true, true, vec![])];
+        sources[0].monitor = true;
+        let mut buses = Vec::new();
+        let (_, monitor) = run_block_monitoring(&mut sources, &mut buses, false);
+        assert!(monitor.iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn monitoring_a_bus_hears_it_after_its_own_strip() {
+        let mut sources = vec![test_source(1.0, 100, false, false, vec![send(0, 100)])];
+        let mut buses = vec![test_bus(50, false)];
+        buses[0].monitor = true;
+        let (_, monitor) = run_block_monitoring(&mut sources, &mut buses, false);
+        assert!((monitor[0] - 0.5).abs() < 1e-6, "got {}", monitor[0]);
+    }
+
+    #[test]
+    fn monitoring_master_hears_the_whole_mix() {
+        let mut sources = vec![
+            test_source(0.25, 100, false, true, vec![]),
+            test_source(0.5, 100, false, true, vec![]),
+        ];
+        let mut buses = Vec::new();
+        let (mix, monitor) = run_block_monitoring(&mut sources, &mut buses, true);
+        assert_eq!(mix, monitor, "the master tap is the master mix");
+        assert!((monitor[0] - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn nothing_monitored_leaves_the_monitor_mix_silent() {
+        let mut sources = vec![test_source(1.0, 100, false, true, vec![])];
+        let mut buses = Vec::new();
+        let (_, monitor) = run_block_monitoring(&mut sources, &mut buses, false);
+        assert!(monitor.iter().all(|&s| s == 0.0));
     }
 
     #[test]

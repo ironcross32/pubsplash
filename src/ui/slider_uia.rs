@@ -26,15 +26,16 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
     IRawElementProviderSimple, IRawElementProviderSimple_Impl, IValueProvider, IValueProvider_Impl,
-    ProviderOptions, ProviderOptions_ServerSideProvider, UiaClientsAreListening,
-    UiaDisconnectProvider, UiaHostProviderFromHwnd, UiaRaiseAutomationPropertyChangedEvent,
-    UiaReturnRawElementProvider, UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId,
-    UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID,
-    UIA_SliderControlTypeId, UIA_ValuePatternId, UIA_ValueValuePropertyId, UiaRootObjectId,
+    ProviderOptions, ProviderOptions_ServerSideProvider, UIA_ControlTypePropertyId,
+    UIA_HasKeyboardFocusPropertyId, UIA_IsKeyboardFocusablePropertyId, UIA_NamePropertyId,
+    UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_SliderControlTypeId, UIA_ValuePatternId,
+    UIA_ValueValuePropertyId, UiaClientsAreListening, UiaDisconnectProvider,
+    UiaHostProviderFromHwnd, UiaRaiseAutomationPropertyChangedEvent, UiaReturnRawElementProvider,
+    UiaRootObjectId,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
-use windows::Win32::UI::WindowsAndMessaging::{GetGUIThreadInfo, GUITHREADINFO, WM_GETOBJECT};
-use windows::core::{implement, BOOL, BSTR, Error, IUnknown, PCWSTR, Result};
+use windows::Win32::UI::WindowsAndMessaging::{GUITHREADINFO, GetGUIThreadInfo, WM_GETOBJECT};
+use windows::core::{BOOL, BSTR, Error, IUnknown, PCWSTR, Result, implement};
 use windows_core::IUnknownImpl;
 use wxdragon::prelude::WxWidget;
 
@@ -203,14 +204,20 @@ pub fn install(slider: &dyn WxWidget) -> SliderAnnouncer {
 }
 
 impl SliderAnnouncer {
+    /// Sets the announced name and formatted value without raising an event, so
+    /// the new text is what a screen reader reads the next time the slider is
+    /// focused or queried. Use this when something else is already speaking the
+    /// change, so it isn't followed by a redundant value re-read.
+    pub fn set_text(&self, name: &str, value: &str) {
+        let mut guard = lock(&self.inner.text);
+        *guard = (name.to_string(), value.to_string());
+    }
+
     /// Sets the announced name and formatted value and, if a screen reader is
     /// listening, raises a UIA Value property-changed event so it speaks the new
     /// value on a keyboard step (no focus change required).
     pub fn update(&self, name: &str, value: &str) {
-        {
-            let mut guard = lock(&self.inner.text);
-            *guard = (name.to_string(), value.to_string());
-        }
+        self.set_text(name, value);
         unsafe {
             if !UiaClientsAreListening().as_bool() {
                 return;
@@ -235,7 +242,8 @@ impl SliderAnnouncer {
             return;
         }
         unsafe {
-            let _ = RemoveWindowSubclass(HWND(self.hwnd as *mut _), Some(subclass_proc), SUBCLASS_ID);
+            let _ =
+                RemoveWindowSubclass(HWND(self.hwnd as *mut _), Some(subclass_proc), SUBCLASS_ID);
             if let Err(e) = UiaDisconnectProvider(&self.provider) {
                 log::warn!("slider_uia: UiaDisconnectProvider failed: {e}");
             }

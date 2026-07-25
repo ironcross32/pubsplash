@@ -31,11 +31,11 @@ use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
     IRawElementProviderSimple, IRawElementProviderSimple_Impl, NotificationKind_Other,
-    NotificationProcessing_ImportantMostRecent, ProviderOptions, ProviderOptions_ServerSideProvider,
-    UIA_ControlTypePropertyId, UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID,
-    UIA_WindowControlTypeId, UiaClientsAreListening, UiaDisconnectProvider,
-    UiaHostProviderFromHwnd, UiaRaiseNotificationEvent, UiaReturnRawElementProvider,
-    UiaRootObjectId,
+    NotificationProcessing_ImportantMostRecent, ProviderOptions,
+    ProviderOptions_ServerSideProvider, UIA_ControlTypePropertyId, UIA_NamePropertyId,
+    UIA_PATTERN_ID, UIA_PROPERTY_ID, UIA_WindowControlTypeId, UiaClientsAreListening,
+    UiaDisconnectProvider, UiaHostProviderFromHwnd, UiaRaiseNotificationEvent,
+    UiaReturnRawElementProvider, UiaRootObjectId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::VK_F1;
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
@@ -208,8 +208,7 @@ unsafe extern "system" fn frame_subclass(
     _refdata: usize,
 ) -> LRESULT {
     if msg == WM_GETOBJECT && lparam.0 as i32 == UiaRootObjectId {
-        if let Some(provider) =
-            FRAME_PROVIDER.with(|r| r.borrow().get(&(hwnd.0 as isize)).cloned())
+        if let Some(provider) = FRAME_PROVIDER.with(|r| r.borrow().get(&(hwnd.0 as isize)).cloned())
         {
             return unsafe { UiaReturnRawElementProvider(hwnd, wparam, lparam, &provider) };
         }
@@ -238,7 +237,8 @@ pub fn uninstall_announcer() {
     let entry = ANNOUNCER.with(|a| a.borrow_mut().take());
     if let Some((key, provider)) = entry {
         unsafe {
-            let _ = RemoveWindowSubclass(HWND(key as *mut _), Some(frame_subclass), FRAME_SUBCLASS_ID);
+            let _ =
+                RemoveWindowSubclass(HWND(key as *mut _), Some(frame_subclass), FRAME_SUBCLASS_ID);
             if let Err(e) = UiaDisconnectProvider(&provider) {
                 log::warn!("help: UiaDisconnectProvider failed: {e}");
             }
@@ -249,7 +249,10 @@ pub fn uninstall_announcer() {
     }
 }
 
-fn announce(text: &str) {
+/// Speaks `text` through the running screen reader immediately, interrupting
+/// whatever it was saying. Used for F1 help and for state changes that have no
+/// control of their own to announce them (see the mixer's monitoring toggle).
+pub fn announce(text: &str) {
     ANNOUNCER.with(|a| {
         let Some((_, provider)) = a.borrow().clone() else {
             return;
