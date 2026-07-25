@@ -15,7 +15,7 @@
 
 use crate::audio::device::{AppProcess, DeviceInfo};
 use crate::config::{SourceConfig, SourceKindConfig};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// What the labels need to know about the machine's current state.
 #[derive(Debug, Clone, Default)]
@@ -25,13 +25,19 @@ pub struct NameContext {
     /// Running applications, keyed by the configured process name, lowercased
     /// and trimmed. Absent means "not running right now".
     pub apps: HashMap<String, AppProcess>,
+    /// Identity names of sources whose capture thread is failing and retrying.
+    pub failing: HashSet<String>,
 }
 
 impl NameContext {
     /// Gathers what the given sources need. Capture devices are enumerated
     /// only when some source actually names one, since that costs a WASAPI
     /// round trip and most scenes are on the default device.
-    pub fn build(sources: &[SourceConfig], apps: HashMap<String, AppProcess>) -> Self {
+    pub fn build(
+        sources: &[SourceConfig],
+        apps: HashMap<String, AppProcess>,
+        failing: HashSet<String>,
+    ) -> Self {
         let needs_devices = sources.iter().any(|s| {
             matches!(
                 s.kind,
@@ -47,6 +53,7 @@ impl NameContext {
                 Vec::new()
             },
             apps,
+            failing,
         }
     }
 
@@ -59,6 +66,18 @@ impl NameContext {
 
     fn app(&self, process_name: &str) -> Option<&AppProcess> {
         self.apps.get(&process_name.trim().to_ascii_lowercase())
+    }
+}
+
+/// Marks a label whose source cannot currently reach its device. The capture
+/// thread keeps retrying, so this is a state the source comes back from — the
+/// word has to say that, or a user hearing it would go looking for a setting to
+/// fix instead of waiting a couple of seconds.
+fn with_state(label: String, source: &SourceConfig, ctx: &NameContext) -> String {
+    if ctx.failing.contains(&source.name) {
+        format!("{label} (reconnecting)")
+    } else {
+        label
     }
 }
 
@@ -77,6 +96,10 @@ pub fn strip_labels(sources: &[SourceConfig], ctx: &NameContext) -> Vec<String> 
 /// The single-source form, for callers that have one source in hand and no
 /// sibling list to disambiguate against.
 pub fn strip_label(source: &SourceConfig, ctx: &NameContext) -> String {
+    with_state(base_strip_label(source, ctx), source, ctx)
+}
+
+fn base_strip_label(source: &SourceConfig, ctx: &NameContext) -> String {
     match &source.kind {
         SourceKindConfig::Microphone { device_id: None } => "Microphone".to_string(),
         SourceKindConfig::Microphone {
@@ -108,9 +131,13 @@ pub fn strip_label(source: &SourceConfig, ctx: &NameContext) -> String {
 }
 
 fn list_label(source: &SourceConfig, ctx: &NameContext) -> String {
+    with_state(base_list_label(source, ctx), source, ctx)
+}
+
+fn base_list_label(source: &SourceConfig, ctx: &NameContext) -> String {
     match &source.kind {
         SourceKindConfig::Microphone { device_id: None } => "Microphone (default device)".to_string(),
-        SourceKindConfig::Microphone { device_id: Some(_) } => strip_label(source, ctx),
+        SourceKindConfig::Microphone { device_id: Some(_) } => base_strip_label(source, ctx),
         SourceKindConfig::DesktopAudio => "Desktop Audio".to_string(),
         SourceKindConfig::Application { process_name } => {
             if process_name.trim().is_empty() {
@@ -172,6 +199,7 @@ mod tests {
                     display_name: "NVDA".to_string(),
                 },
             )]),
+            failing: HashSet::new(),
         }
     }
 
@@ -205,6 +233,54 @@ mod tests {
             device_id: Some("unplugged".to_string()),
         });
         assert_eq!(strip_label(&src, &ctx()), "Microphone (unavailable)");
+    }
+
+    /// A source whose device dropped out is retrying, not broken, and both
+    /// forms have to say so — the mixer strip is the only place a screen-reader
+    /// user finds out their microphone is not on air.
+    #[test]
+    fn a_reconnecting_source_says_so_in_both_forms() {
+        let src = source(SourceKindConfig::Microphone {
+            device_id: Some("zoom-id".to_string()),
+        });
+        let mut ctx = ctx();
+        ctx.failing.insert(src.name.clone());
+        assert_eq!(
+            strip_label(&src, &ctx),
+            "Microphone (ZOOM H1essential) (reconnecting)"
+        );
+        assert_eq!(
+            list_label(&src, &ctx),
+            "Microphone (ZOOM H1essential) (reconnecting)"
+        );
+    }
+
+    /// The suffix is applied once, at the outer label, even though the verbose
+    /// form of a device-specific microphone is built from the concise one.
+    #[test]
+    fn reconnecting_is_not_said_twice() {
+        let src = source(SourceKindConfig::Microphone {
+            device_id: Some("zoom-id".to_string()),
+        });
+        let mut ctx = ctx();
+        ctx.failing.insert(src.name.clone());
+        assert_eq!(list_label(&src, &ctx).matches("reconnecting").count(), 1);
+    }
+
+    /// Only the source that is actually failing is marked, and the dedup
+    /// counter still lands on the labels that really do collide.
+    #[test]
+    fn only_the_failing_source_is_marked() {
+        let mut a = source(SourceKindConfig::Microphone { device_id: None });
+        a.name = "Microphone".to_string();
+        let mut b = source(SourceKindConfig::Microphone { device_id: None });
+        b.name = "Microphone 2".to_string();
+        let mut ctx = ctx();
+        ctx.failing.insert("Microphone 2".to_string());
+        assert_eq!(
+            strip_labels(&[a, b], &ctx),
+            vec!["Microphone", "Microphone (reconnecting)"]
+        );
     }
 
     #[test]

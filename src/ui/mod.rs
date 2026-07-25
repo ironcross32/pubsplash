@@ -21,7 +21,7 @@ use crate::config::{Config, SourceKindConfig};
 use crate::net::{NetCommand, NetEvent, NetHandle};
 use crate::source_name::NameContext;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -107,6 +107,9 @@ pub struct Runtime {
     /// keyed by the configured process name (lowercased). Refreshed by the
     /// pump; drives both the labels and the pid an Application source captures.
     pub apps: HashMap<String, crate::audio::device::AppProcess>,
+    /// Identity names (`SourceConfig.name`) of sources whose capture thread is
+    /// currently failing and retrying. Drives the "(reconnecting)" labels.
+    pub failing: HashSet<String>,
 }
 
 impl Default for Runtime {
@@ -123,6 +126,7 @@ impl Default for Runtime {
             stream_info_set: false,
             recording: false,
             apps: HashMap::new(),
+            failing: HashSet::new(),
         }
     }
 }
@@ -303,7 +307,8 @@ impl App {
     /// sources explicitly because the Sources list shows whichever scene is
     /// selected, which is not always the active one.
     pub fn name_context(&self, sources: &[crate::config::SourceConfig]) -> NameContext {
-        NameContext::build(sources, self.run.borrow().apps.clone())
+        let run = self.run.borrow();
+        NameContext::build(sources, run.apps.clone(), run.failing.clone())
     }
 
     /// Re-enumerates the processes behind every scene's Application sources —
@@ -1039,10 +1044,18 @@ fn pump_events(app: &Rc<App>) {
         }
     }
 
+    // Sources whose capture threads changed state. The capture thread has
+    // already logged the detail, so nothing is logged again here; what matters
+    // is telling the user, which the strip labels do.
+    let mut labels_dirty = false;
     while let Ok(event) = app.engine.events.try_recv() {
         match event {
             crate::audio::EngineEvent::SourceError { name, message } => {
-                log::error!("Source {name:?} failed: {message}");
+                log::debug!("Source {name:?} is reconnecting: {message}");
+                labels_dirty |= app.run.borrow_mut().failing.insert(name);
+            }
+            crate::audio::EngineEvent::SourceRecovered { name } => {
+                labels_dirty |= app.run.borrow_mut().failing.remove(&name);
             }
             crate::audio::EngineEvent::EncodingStopped => {}
             // The audio thread has swapped to the new bus set and no longer
@@ -1052,6 +1065,13 @@ fn pump_events(app: &Rc<App>) {
                 app.fx.borrow_mut().retiring.clear();
             }
         }
+    }
+
+    if labels_dirty {
+        // In place, exactly as the application poll does it: rebuilding the
+        // mixer would move focus out from under whoever is tabbing through it.
+        home::relabel_source_strips(app);
+        scenes::refresh_sources_list(app);
     }
 
     pump_scan_events(app);

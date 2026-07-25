@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use wasapi::{DeviceEnumerator, Direction};
+use wasapi::{DeviceEnumerator, DeviceState, Direction};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInfo {
@@ -38,20 +38,38 @@ pub fn capture_devices() -> Vec<DeviceInfo> {
     devices
 }
 
-/// Resolves a configured device id to a WASAPI device, falling back to the
-/// default capture device when `id` is `None` or no longer present.
+/// Resolves a configured device id to a WASAPI device, or the default capture
+/// device when `id` is `None`.
+///
+/// A configured device is never silently swapped for a different one: going on
+/// air through the laptop's built-in microphone because the good one was a
+/// moment late to enumerate is worse than going on air silent. The caller
+/// retries instead (see `capture::spawn`).
+///
+/// The state check is the point of this function. `IMMDeviceEnumerator::
+/// GetDevice` happily returns endpoints in *any* state, including `Unplugged`
+/// and `NotPresent`, and `Activate` on one of those fails with a bare
+/// `ERROR_FILE_NOT_FOUND` that reads like a bug in us. USB interfaces sit in
+/// exactly that state for a moment while Windows brings them up, which is a
+/// window Pubsplash lands in because it opens its sources within a few hundred
+/// milliseconds of launch. Rejecting a non-`Active` endpoint here turns that
+/// into an accurate, retryable answer.
 pub fn capture_device(id: Option<&str>) -> Result<wasapi::Device, String> {
     ensure_com_initialized();
     let enumerator = DeviceEnumerator::new().map_err(|e| e.to_string())?;
-    if let Some(id) = id {
-        match enumerator.get_device(id) {
-            Ok(device) => return Ok(device),
-            Err(e) => log::warn!("Configured microphone {id:?} not found ({e}); using default"),
-        }
+    let Some(id) = id else {
+        return enumerator
+            .get_default_device(&Direction::Capture)
+            .map_err(|e| format!("opening the default microphone: {e}"));
+    };
+    let device = enumerator
+        .get_device(id)
+        .map_err(|e| format!("looking up the configured microphone: {e}"))?;
+    match device.get_state() {
+        Ok(DeviceState::Active) => Ok(device),
+        Ok(state) => Err(format!("the configured microphone is {state:?}")),
+        Err(e) => Err(format!("reading the configured microphone's state: {e}")),
     }
-    enumerator
-        .get_default_device(&Direction::Capture)
-        .map_err(|e| e.to_string())
 }
 
 /// The default render device (kept for future monitoring output).

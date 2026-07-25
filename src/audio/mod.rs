@@ -104,8 +104,12 @@ pub enum EngineCommand {
 
 #[derive(Debug, Clone)]
 pub enum EngineEvent {
-    /// A capture source failed (device unplugged, process exited...).
+    /// A capture source failed (device unplugged, process exited, not ready
+    /// yet...). The source is not dead: its thread is retrying with a backoff,
+    /// and will send `SourceRecovered` if it gets the device back.
     SourceError { name: String, message: String },
+    /// A capture source that had reported `SourceError` is running again.
+    SourceRecovered { name: String },
     /// Encoding stopped because the outgoing channel closed.
     EncodingStopped,
     /// The engine finished applying a `SetBuses`; any plugin instances the
@@ -248,7 +252,16 @@ fn engine_loop(
         _mm_setcsr(_mm_getcsr() | 0x8040);
     }
 
-    let (capture_err_tx, capture_err_rx) = crossbeam_channel::unbounded::<(String, String)>();
+    let (capture_tx, capture_rx) = crossbeam_channel::unbounded::<capture::CaptureReport>();
+    // Bumped on every `SetSources`. Capture threads retire asynchronously and a
+    // retrying one may be mid-backoff, so reports are stamped with the
+    // generation they were spawned for and stale ones are dropped: otherwise a
+    // thread on its way out could report a failure against a name that the
+    // current source set has running perfectly well.
+    let mut epoch: u64 = 0;
+    // Which sources are currently reporting failure, so only transitions reach
+    // the UI.
+    let mut failing: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut sources: Vec<ActiveSource> = Vec::new();
     let mut buses: Vec<ActiveBus> = Vec::new();
     let mut master_chain = FxChain::empty();
@@ -274,6 +287,12 @@ fn engine_loop(
                 Ok(EngineCommand::SetSources(specs)) => {
                     stop_sources(&mut sources);
                     feeds.clear();
+                    epoch = epoch.wrapping_add(1);
+                    // The new threads start from a clean slate, so anything the
+                    // old set was reporting is no longer true of this one.
+                    for name in failing.drain() {
+                        let _ = events.send(EngineEvent::SourceRecovered { name });
+                    }
                     for spec in specs {
                         let (producer, consumer) = RingBuffer::new(RING_CAPACITY);
                         let stop = Arc::new(AtomicBool::new(false));
@@ -281,10 +300,11 @@ fn engine_loop(
                             FeedKind::Capture(kind) => {
                                 capture::spawn(
                                     spec.name.clone(),
+                                    epoch,
                                     kind,
                                     producer,
                                     stop.clone(),
-                                    capture_err_tx.clone(),
+                                    capture_tx.clone(),
                                 );
                             }
                             FeedKind::External => {
@@ -391,9 +411,30 @@ fn engine_loop(
             }
         }
 
-        // Surface capture errors.
-        while let Ok((name, message)) = capture_err_rx.try_recv() {
-            let _ = events.send(EngineEvent::SourceError { name, message });
+        // Surface capture state changes, ignoring threads from a retired
+        // source set and repeats of what the UI already knows.
+        while let Ok(report) = capture_rx.try_recv() {
+            if report.epoch != epoch {
+                continue;
+            }
+            let event = match report.state {
+                capture::CaptureState::Failed(message) => {
+                    if !failing.insert(report.name.clone()) {
+                        continue;
+                    }
+                    EngineEvent::SourceError {
+                        name: report.name,
+                        message,
+                    }
+                }
+                capture::CaptureState::Running => {
+                    if !failing.remove(&report.name) {
+                        continue;
+                    }
+                    EngineEvent::SourceRecovered { name: report.name }
+                }
+            };
+            let _ = events.send(event);
         }
 
         mix_one_block(

@@ -11,6 +11,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - Scenes: group any number of audio sources and switch between them
 - Source types: microphone, desktop audio, per-application audio, text-to-speech, and sound events
 - Sources name themselves after what they capture — the microphone device, the running application's real name, the chosen speech voice — so the mixer's sliders say exactly what you are adjusting even with several of the same type in a scene
+- Sources reconnect on their own if their device is unplugged, resets, or is not ready yet when Pubsplash starts. A source that is retrying reads "(reconnecting)" on its mixer strip, and a source set to a particular microphone is never silently switched to a different one
 - Chat: read incoming messages in an accessible list, send outbound messages, and have chat read aloud automatically with text-to-speech (optionally spoken into the stream as well)
 - Loop-safe by design: Desktop Audio capture excludes Pubsplash's own audio, so text-to-speech and sound cues can never echo into your stream
 - Audio cues for stream events (listener changes, incoming and outgoing messages), with custom sound pack support planned for the future
