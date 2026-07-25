@@ -8,6 +8,7 @@ mod connect_dialog;
 mod fx;
 mod fx_editor;
 mod fx_params;
+mod help;
 mod home;
 mod preferences;
 mod scenes;
@@ -171,6 +172,8 @@ pub struct Widgets {
     pub sources_list: ListBox,
     pub bus_list: ListBox,
     pub fx_list: ListBox,
+    /// Reflects (and toggles) the selected plugin's bypass state.
+    pub fx_bypass: CheckBox,
 }
 
 /// Live handles into the Configure Audio Pub dialog while it is open, so
@@ -626,7 +629,7 @@ pub fn build(app: Rc<App>) {
         home::build(&app, &home_panel);
     let (chat_list, chat_input) = chat::build(&app, &chat_panel);
     let (scenes_list, sources_list) = scenes::build(&app, &scenes_panel);
-    let (bus_list, fx_list) = buses::build(&app, &buses_panel);
+    let (bus_list, fx_list, fx_bypass) = buses::build(&app, &buses_panel);
 
     *app.widgets.borrow_mut() = Some(Widgets {
         frame: frame.clone(),
@@ -644,6 +647,7 @@ pub fn build(app: Rc<App>) {
         sources_list,
         bus_list,
         fx_list,
+        fx_bypass,
     });
 
     // Instantiate the configured FX chains before syncing the engine; collect
@@ -704,6 +708,9 @@ pub fn build(app: Rc<App>) {
             }
             // Close plugin editors (and remove the keyboard hook) on exit.
             fx_editor::close_all(&app);
+            // Remove the F1 hook and drop the help announcer provider.
+            help::uninstall_hook();
+            help::uninstall_announcer();
             app.save_config();
             // Destroy explicitly (deferred, wx-managed) rather than skipping to
             // the platform default. On the native ALT+F4 path, skipping hands the
@@ -714,6 +721,11 @@ pub fn build(app: Rc<App>) {
             frame_for_close.destroy();
         });
     }
+
+    // Context-sensitive help: capture the frame's UIA provider for spoken
+    // announcements and install the app-wide F1 hook.
+    help::install_announcer(&frame);
+    help::install_hook();
 
     // The pump: carries events from the engine/net threads onto the UI
     // thread and refreshes time-based displays.
@@ -962,6 +974,7 @@ fn pump_events(app: &Rc<App>) {
 
     pump_scan_events(app);
     fx_editor::pump(app);
+    help::pump();
 
     if stream_ui_dirty {
         app.refresh_stream_ui();

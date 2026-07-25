@@ -12,7 +12,9 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl) {
     let list_label = StaticText::builder(panel).with_label("Messages").build();
     let chat_list = ListBox::builder(panel).build();
     super::set_accessible_name(&chat_list, "Messages");
+    super::help::tag(&chat_list, "tab.chat.messageList", "Chat message list");
     let view_button = Button::builder(panel).with_label("&View message").build();
+    super::help::tag(&view_button, "tab.chat.viewButton", "View selected message button");
 
     let input_label = StaticText::builder(panel)
         .with_label("Send a message")
@@ -21,7 +23,9 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl) {
         .with_style(TextCtrlStyle::ProcessEnter)
         .build();
     super::set_accessible_name(&chat_input, "Send a message");
+    super::help::tag(&chat_input, "tab.chat.input", "Chat message input box");
     let send_button = Button::builder(panel).with_label("Se&nd").build();
+    super::help::tag(&send_button, "tab.chat.sendButton", "Send chat message button");
 
     sizer.add(&list_label, 0, SizerFlag::All, 4);
     sizer.add(&chat_list, 1, SizerFlag::Expand | SizerFlag::All, 4);
@@ -114,6 +118,7 @@ fn view_selected(app: &Rc<App>, list: &ListBox) {
         .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly)
         .with_value(&format!("{user}: {content}"))
         .build();
+    super::help::tag(&text, "dialog.chatView.text", "Full chat message text");
     let close = Button::builder(&panel).with_label("Close").build();
     {
         let dialog = dialog.clone();

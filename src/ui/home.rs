@@ -18,6 +18,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, Button, ListBox
         .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly)
         .build();
     super::set_accessible_name(&overview, "Stream overview");
+    super::help::tag(&overview, "tab.home.overview", "Stream overview");
     sizer.add(&overview_label, 0, SizerFlag::All, 4);
     sizer.add(&overview, 1, SizerFlag::Expand | SizerFlag::All, 4);
 
@@ -31,9 +32,11 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, Button, ListBox
     let scene_label = StaticText::builder(panel).with_label("Scenes").build();
     let scene_list = ListBox::builder(panel).build();
     super::set_accessible_name(&scene_list, "Scenes");
+    super::help::tag(&scene_list, "tab.home.sceneList", "Scenes list");
     let switch_button = Button::builder(panel)
         .with_label("S&witch to scene")
         .build();
+    super::help::tag(&switch_button, "tab.home.switchScene", "Switch to scene button");
     sizer.add(&scene_label, 0, SizerFlag::All, 4);
     sizer.add(&scene_list, 1, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&switch_button, 0, SizerFlag::All, 4);
@@ -43,10 +46,12 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, Button, ListBox
     let stream_button = Button::builder(panel)
         .with_label("&Start streaming")
         .build();
+    super::help::tag(&stream_button, "tab.home.streamButton", "Start/stop streaming button");
     sizer.add(&stream_button, 0, SizerFlag::All, 8);
     let record_button = Button::builder(panel)
         .with_label("Start &recording")
         .build();
+    super::help::tag(&record_button, "tab.home.recordButton", "Start/stop recording button");
     sizer.add(&record_button, 0, SizerFlag::All, 8);
 
     panel.set_sizer(sizer, true);
@@ -247,17 +252,15 @@ fn add_strip(
         .with_max_value(100)
         .build();
     super::set_accessible_name(&slider, &format!("{name} volume"));
-    let mute_button = Button::builder(parent)
-        .with_label(if muted { "Unmute" } else { "Mute" })
-        .build();
-    super::set_accessible_name(
-        &mute_button,
-        &format!("{} {name}", if muted { "Unmute" } else { "Mute" }),
-    );
+    super::help::tag(&slider, "tab.home.mixer.strip.volume", "Mixer strip volume slider");
+    let mute_check = CheckBox::builder(parent).with_label("Mute").build();
+    mute_check.set_value(muted);
+    super::set_accessible_name(&mute_check, &format!("Mute {name}"));
+    super::help::tag(&mute_check, "tab.home.mixer.strip.mute", "Mixer strip mute checkbox");
 
     row.add(&label, 0, SizerFlag::AlignCenterVertical | SizerFlag::All, 4);
     row.add(&slider, 1, SizerFlag::Expand | SizerFlag::All, 4);
-    row.add(&mute_button, 0, SizerFlag::All, 4);
+    row.add(&mute_check, 0, SizerFlag::AlignCenterVertical | SizerFlag::All, 4);
     sizer.add_sizer(&row, 0, SizerFlag::Expand, 0);
 
     // Volume changes.
@@ -291,19 +294,17 @@ fn add_strip(
         });
     }
 
-    // Mute toggling; unmute restores the last volume (kept in config).
+    // Mute toggling; unmute restores the last volume (kept in config). The
+    // checkbox's checked state is the mute state.
     {
         let app = app.clone();
-        let mute_button = mute_button.clone();
-        let name = name.to_string();
-        mute_button.clone().on_click(move |_| {
-            let now_muted = {
+        let mute_check = mute_check.clone();
+        mute_check.clone().on_toggled(move |_| {
+            let now_muted = mute_check.get_value();
+            {
                 let mut config = app.config.borrow_mut();
                 match target {
-                    StripTarget::Master => {
-                        config.audio.master_muted = !config.audio.master_muted;
-                        config.audio.master_muted
-                    }
+                    StripTarget::Master => config.audio.master_muted = now_muted,
                     StripTarget::Source(i) => {
                         let Some(source) = config
                             .scenes
@@ -312,18 +313,16 @@ fn add_strip(
                         else {
                             return;
                         };
-                        source.muted = !source.muted;
-                        source.muted
+                        source.muted = now_muted;
                     }
                     StripTarget::Bus(i) => {
                         let Some(bus) = config.buses.buses.get_mut(i) else {
                             return;
                         };
-                        bus.muted = !bus.muted;
-                        bus.muted
+                        bus.muted = now_muted;
                     }
                 }
-            };
+            }
             match target {
                 StripTarget::Master => app.engine.send(EngineCommand::SetMasterMute(now_muted)),
                 StripTarget::Source(i) => {
@@ -331,9 +330,6 @@ fn add_strip(
                 }
                 StripTarget::Bus(i) => app.engine.send(EngineCommand::SetBusMute(i, now_muted)),
             }
-            let action = if now_muted { "Unmute" } else { "Mute" };
-            mute_button.set_label(action);
-            super::set_accessible_name(&mute_button, &format!("{action} {name}"));
             app.save_config();
         });
     }

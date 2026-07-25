@@ -17,22 +17,28 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     let sites_label = StaticText::builder(&panel).with_label("Sites").build();
     let sites_list = ListBox::builder(&panel).build();
     super::set_accessible_name(&sites_list, "Sites");
+    super::help::tag(&sites_list, "dialog.connect.siteList", "Configured Audio Pub sites list");
     let site_buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let add_site = Button::builder(&panel).with_label("&Add site").build();
     let remove_site = Button::builder(&panel).with_label("&Remove site").build();
+    super::help::tag(&add_site, "dialog.connect.addSite", "Add site button");
+    super::help::tag(&remove_site, "dialog.connect.removeSite", "Remove site button");
     site_buttons.add(&add_site, 0, SizerFlag::All, 4);
     site_buttons.add(&remove_site, 0, SizerFlag::All, 4);
 
     let email_label = StaticText::builder(&panel).with_label("Email").build();
     let email_input = TextCtrl::builder(&panel).build();
     super::set_accessible_name(&email_input, "Email");
+    super::help::tag(&email_input, "dialog.connect.email", "Email address for the selected site");
     let password_label = StaticText::builder(&panel).with_label("Password").build();
     let password_input = TextCtrl::builder(&panel)
         .with_style(TextCtrlStyle::Password)
         .build();
     super::set_accessible_name(&password_input, "Password");
+    super::help::tag(&password_input, "dialog.connect.password", "Password for the selected site");
 
     let connect_button = Button::builder(&panel).with_label("&Connect").build();
+    super::help::tag(&connect_button, "dialog.connect.connectButton", "Connect or disconnect button");
     let close_button = Button::builder(&panel).with_label("C&lose").build();
 
     sizer.add(&sites_label, 0, SizerFlag::All, 4);

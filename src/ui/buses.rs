@@ -16,19 +16,25 @@ use wxdragon::prelude::*;
 /// Rows before a bus in the list (the pinned "Master output" row).
 const MASTER_ROWS: u32 = 1;
 
-pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
+pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     // --- Buses ---
     let label = StaticText::builder(panel).with_label("Buses").build();
     let bus_list = ListBox::builder(panel).build();
     super::set_accessible_name(&bus_list, "Buses");
+    super::help::tag(&bus_list, "tab.buses.busList", "Buses list (row 0 is the master output)");
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let add = Button::builder(panel).with_label("&Add bus").build();
     let rename = Button::builder(panel).with_label("&Rename bus").build();
     let remove = Button::builder(panel).with_label("Re&move bus").build();
     let up = Button::builder(panel).with_label("Move &up").build();
     let down = Button::builder(panel).with_label("Move &down").build();
+    super::help::tag(&add, "tab.buses.busAdd", "Add bus button");
+    super::help::tag(&rename, "tab.buses.busRename", "Rename bus button");
+    super::help::tag(&remove, "tab.buses.busRemove", "Remove bus button");
+    super::help::tag(&up, "tab.buses.busUp", "Move bus up button");
+    super::help::tag(&down, "tab.buses.busDown", "Move bus down button");
     for b in [&add, &rename, &remove, &up, &down] {
         buttons.add(b, 0, SizerFlag::All, 4);
     }
@@ -43,15 +49,28 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
         .build();
     let fx_list = ListBox::builder(panel).build();
     super::set_accessible_name(&fx_list, "Effects on selected bus");
+    super::help::tag(&fx_list, "tab.buses.fxList", "Effects chain on the selected bus");
     let fx_buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let fx_add = Button::builder(panel).with_label("Add &plugin").build();
     let fx_remove = Button::builder(panel).with_label("Remove plugi&n").build();
     let fx_up = Button::builder(panel).with_label("Move plugin u&p").build();
     let fx_down = Button::builder(panel).with_label("Move plugin do&wn").build();
-    let fx_bypass = Button::builder(panel).with_label("&Bypass").build();
+    let fx_bypass = CheckBox::builder(panel).with_label("&Bypass").build();
+    super::set_accessible_name(&fx_bypass, "Bypass selected plugin");
     let fx_edit = Button::builder(panel).with_label("&Edit parameters").build();
     let fx_open = Button::builder(panel).with_label("Open &interface").build();
-    for b in [&fx_add, &fx_remove, &fx_up, &fx_down, &fx_bypass, &fx_edit, &fx_open] {
+    super::help::tag(&fx_add, "tab.buses.fxAdd", "Add plugin to chain button");
+    super::help::tag(&fx_remove, "tab.buses.fxRemove", "Remove plugin from chain button");
+    super::help::tag(&fx_up, "tab.buses.fxUp", "Move plugin up in chain button");
+    super::help::tag(&fx_down, "tab.buses.fxDown", "Move plugin down in chain button");
+    super::help::tag(&fx_bypass, "tab.buses.fxBypass", "Bypass selected plugin checkbox");
+    super::help::tag(&fx_edit, "tab.buses.fxEditParams", "Edit plugin parameters button");
+    super::help::tag(&fx_open, "tab.buses.fxOpenInterface", "Open plugin interface button");
+    for b in [&fx_add, &fx_remove, &fx_up, &fx_down] {
+        fx_buttons.add(b, 0, SizerFlag::All, 4);
+    }
+    fx_buttons.add(&fx_bypass, 0, SizerFlag::AlignCenterVertical | SizerFlag::All, 4);
+    for b in [&fx_edit, &fx_open] {
         fx_buttons.add(b, 0, SizerFlag::All, 4);
     }
 
@@ -61,6 +80,10 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     let load_chain = Button::builder(panel).with_label("&Load chain...").build();
     let import_chain = Button::builder(panel).with_label("&Import chain...").build();
     let export_chain = Button::builder(panel).with_label("E&xport chain...").build();
+    super::help::tag(&save_chain, "tab.buses.chainSave", "Save FX chain to library button");
+    super::help::tag(&load_chain, "tab.buses.chainLoad", "Load FX chain from library button");
+    super::help::tag(&import_chain, "tab.buses.chainImport", "Import FX chain file button");
+    super::help::tag(&export_chain, "tab.buses.chainExport", "Export FX chain file button");
     for b in [&save_chain, &load_chain, &import_chain, &export_chain] {
         lib_buttons.add(b, 0, SizerFlag::All, 4);
     }
@@ -140,7 +163,17 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     {
         let app = app.clone();
         let list = fx_list.clone();
-        fx_bypass.on_click(move |_| toggle_bypass(&app, &list));
+        let fx_bypass = fx_bypass.clone();
+        fx_bypass
+            .clone()
+            .on_toggled(move |_| set_bypass(&app, &list, fx_bypass.get_value()));
+    }
+    // Keep the Bypass checkbox showing the newly selected plugin's state.
+    {
+        let app = app.clone();
+        fx_list
+            .clone()
+            .on_selection_changed(move |_| sync_bypass_check(&app));
     }
     {
         let app = app.clone();
@@ -183,7 +216,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
             });
     }
 
-    (bus_list, fx_list)
+    (bus_list, fx_list, fx_bypass)
 }
 
 /// The chain the given bus-list row targets.
@@ -245,6 +278,7 @@ pub fn refresh_fx_list(app: &Rc<App>) {
             w.fx_list.set_selection(index, true);
         }
     });
+    sync_bypass_check(app);
 }
 
 fn add_bus(app: &Rc<App>) {
@@ -409,17 +443,32 @@ fn move_plugin(app: &Rc<App>, list: &ListBox, towards_start: bool) {
     }
 }
 
-fn toggle_bypass(app: &Rc<App>, list: &ListBox) {
+/// Applies the Bypass checkbox state to the selected plugin.
+fn set_bypass(app: &Rc<App>, list: &ListBox, bypass: bool) {
     let target = selected_target(app);
     let Some(slot) = list.get_selection().map(|i| i as usize) else {
         return;
     };
-    let now = {
-        let slots = fx::slots_for(app, target);
-        !slots.get(slot).map(|s| s.bypass).unwrap_or(false)
-    };
-    fx::set_bypass(app, target, slot, now);
+    fx::set_bypass(app, target, slot, bypass);
     refresh_fx_list(app);
+}
+
+/// Reflects the selected plugin's bypass state in the Bypass checkbox (and
+/// disables it when no plugin is selected).
+fn sync_bypass_check(app: &Rc<App>) {
+    let target = selected_target(app);
+    let slots = fx::slots_for(app, target);
+    app.widgets(|w| match w.fx_list.get_selection() {
+        Some(i) => {
+            let bypassed = slots.get(i as usize).map(|s| s.bypass).unwrap_or(false);
+            w.fx_bypass.set_value(bypassed);
+            w.fx_bypass.enable(true);
+        }
+        None => {
+            w.fx_bypass.set_value(false);
+            w.fx_bypass.enable(false);
+        }
+    });
 }
 
 fn edit_parameters(app: &Rc<App>, list: &ListBox) {
@@ -546,6 +595,7 @@ fn pick_chain(app: &Rc<App>, frame: &Frame, names: &[String]) -> Option<usize> {
     let label = StaticText::builder(&panel).with_label("Saved chains").build();
     let list = ListBox::builder(&panel).build();
     super::set_accessible_name(&list, "Saved chains");
+    super::help::tag(&list, "dialog.loadChain.list", "Saved FX chains list");
     for name in names {
         list.append(name);
     }
@@ -556,6 +606,8 @@ fn pick_chain(app: &Rc<App>, frame: &Frame, names: &[String]) -> Option<usize> {
     let load = Button::builder(&panel).with_label("&Load").build();
     let delete = Button::builder(&panel).with_label("&Delete").build();
     let cancel = Button::builder(&panel).with_label("&Cancel").build();
+    super::help::tag(&load, "dialog.loadChain.load", "Load selected chain button");
+    super::help::tag(&delete, "dialog.loadChain.delete", "Delete selected chain button");
     for b in [&load, &delete, &cancel] {
         buttons.add(b, 0, SizerFlag::All, 4);
     }
@@ -725,6 +777,7 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
         .build();
     let list = ListBox::builder(&panel).build();
     super::set_accessible_name(&list, "Missing plugins");
+    super::help::tag(&list, "dialog.missingPlugins.list", "Missing plugins list");
     for plugin in &resolution.missing {
         list.append(&plugin.display());
     }
@@ -742,6 +795,7 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
             ))
             .build();
         let cancel = Button::builder(&panel).with_label("&Cancel").build();
+        super::help::tag(&apply, "dialog.missingPlugins.apply", "Apply chain with available plugins button");
         buttons.add(&apply, 0, SizerFlag::All, 4);
         buttons.add(&cancel, 0, SizerFlag::All, 4);
         {

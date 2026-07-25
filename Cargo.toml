@@ -12,6 +12,12 @@ default-run = "pubsplash"
 name = "pubsplash-scan"
 path = "src/bin/scan_helper.rs"
 
+# Dev tool: scans the UI source for `help::tag(..)` calls and round-trips the
+# hand-authored context-help strings in help.toml. Not shipped.
+[[bin]]
+name = "gen-help"
+path = "src/bin/gen_help.rs"
+
 [build-dependencies]
 winresource = "0.1"
 
@@ -23,6 +29,7 @@ flexi_logger = "0.31"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "1"
 dirs = "6"
 
 crossbeam-channel = "0.5"

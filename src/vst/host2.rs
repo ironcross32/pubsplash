@@ -53,6 +53,7 @@ const EFF_GET_PARAM_LABEL: i32 = 6;
 const EFF_GET_PARAM_DISPLAY: i32 = 7;
 const EFF_GET_PARAM_NAME: i32 = 8;
 const EFF_CAN_BE_AUTOMATED: i32 = 26;
+const EFF_STRING2PARAMETER: i32 = 27;
 
 // Host callback opcodes.
 const AUDIO_MASTER_AUTOMATE: i32 = 0;
@@ -462,6 +463,29 @@ impl Vst2Plugin {
 
     pub fn param_label(&self, index: i32) -> String {
         self.param_string(EFF_GET_PARAM_LABEL, index)
+    }
+
+    /// Asks the plugin to parse `text` (in its own display units, e.g. "-6 dB")
+    /// and set parameter `index` to the matching value. Returns whether the
+    /// plugin supported the conversion; this VST2 opcode is optional and many
+    /// plugins do not implement it. Must be called on the UI thread (dispatcher).
+    pub fn string_to_parameter(&self, index: i32, text: &str) -> bool {
+        // The plugin reads (and may write) a null-terminated string in this
+        // buffer, so it must be writable and large enough.
+        let mut buf = [0u8; 256];
+        let bytes = text.as_bytes();
+        let n = bytes.len().min(buf.len() - 1);
+        buf[..n].copy_from_slice(&bytes[..n]);
+        unsafe {
+            self.dispatcher()(
+                self.effect,
+                EFF_STRING2PARAMETER,
+                index,
+                0,
+                buf.as_mut_ptr() as *mut c_void,
+                0.0,
+            ) != 0
+        }
     }
 
     pub fn can_be_automated(&self, index: i32) -> bool {

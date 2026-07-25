@@ -52,6 +52,10 @@ pub trait ParamSource {
     fn display(&self, index: i32) -> String;
     fn label(&self, index: i32) -> String;
     fn automatable(&self, index: i32) -> bool;
+    /// Parses `text` in the parameter's own display units (e.g. "-6 dB") and
+    /// applies it, returning whether the plugin supported the conversion. This
+    /// VST2 opcode is optional and many plugins do not implement it.
+    fn set_from_string(&self, index: i32, text: &str) -> bool;
 }
 
 impl ParamSource for Arc<Vst2Plugin> {
@@ -76,6 +80,21 @@ impl ParamSource for Arc<Vst2Plugin> {
     fn automatable(&self, index: i32) -> bool {
         self.can_be_automated(index)
     }
+    fn set_from_string(&self, index: i32, text: &str) -> bool {
+        self.string_to_parameter(index, text)
+    }
+}
+
+/// Applies `text` (in the parameter's display units) via the plugin's optional
+/// string-to-parameter conversion. Returns the new normalized value if the
+/// plugin accepted it, or `None` if the text is blank or the plugin does not
+/// support the conversion.
+pub fn apply_typed_value(src: &dyn ParamSource, index: i32, text: &str) -> Option<f32> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    src.set_from_string(index, text).then(|| src.get(index))
 }
 
 /// The human-readable value: the plugin's formatted text plus its unit, or a
@@ -177,10 +196,12 @@ pub fn edit_parameters(
     let filter_label = StaticText::builder(&panel).with_label("Filter").build();
     let filter_box = TextCtrl::builder(&panel).build();
     super::set_accessible_name(&filter_box, "Filter parameters");
+    super::help::tag(&filter_box, "dialog.fxParams.filter", "Filter parameters by name box");
 
     let param_label = StaticText::builder(&panel).with_label("Parameter").build();
     let param_choice = Choice::builder(&panel).build();
     super::set_accessible_name(&param_choice, "Parameter");
+    super::help::tag(&param_choice, "dialog.fxParams.parameter", "Plugin parameter chooser");
 
     let value_label = StaticText::builder(&panel).with_label("Value").build();
     let value_slider = Slider::builder(&panel)
@@ -189,19 +210,22 @@ pub fn edit_parameters(
         .with_max_value(1000)
         .build();
     super::set_accessible_name(&value_slider, "Value");
+    super::help::tag(&value_slider, "dialog.fxParams.value", "Selected parameter value slider");
     // Give the slider a UIA provider so keyboard steps announce the plugin's
     // formatted value (see `slider_uia`). Kept alive until the dialog closes.
     let announcer = Rc::new(slider_uia::install(&value_slider));
 
     let value_text = TextCtrl::builder(&panel)
-        .with_style(TextCtrlStyle::ReadOnly)
+        .with_style(TextCtrlStyle::ProcessEnter)
         .build();
-    super::set_accessible_name(&value_text, "Value text");
+    super::set_accessible_name(&value_text, "Value entry");
+    super::help::tag(&value_text, "dialog.fxParams.valueText", "Type-in value entry for the selected parameter");
 
     let unnamed_check = CheckBox::builder(&panel)
         .with_label("Show &unnamed parameters")
         .build();
     super::set_accessible_name(&unnamed_check, "Show unnamed parameters");
+    super::help::tag(&unnamed_check, "dialog.fxParams.showUnnamed", "Show unnamed parameters checkbox");
 
     let close = Button::builder(&panel).with_label("&Close").build();
 
@@ -355,6 +379,52 @@ pub fn edit_parameters(
         });
     }
 
+    // The value-entry field: reads the current value (kept in sync by
+    // `announce_value`), and on tab-away or Enter parses what was typed, in the
+    // parameter's own display units, and applies it. If the plugin can't convert
+    // the text (or it's blank), the field reverts to the real value.
+    let apply_typed = {
+        let src = src.clone();
+        let visible = visible.clone();
+        let param_choice = param_choice.clone();
+        let value_slider = value_slider.clone();
+        let value_text = value_text.clone();
+        let announcer = announcer.clone();
+        move || {
+            let Some(sel) = param_choice.get_selection() else {
+                return;
+            };
+            let Some(&index) = visible.borrow().get(sel as usize) else {
+                return;
+            };
+            match apply_typed_value(src.as_ref(), index, &value_text.get_value()) {
+                Some(new_value) => {
+                    let text = formatted_value(src.as_ref(), index);
+                    announce_value(
+                        &announcer,
+                        &value_slider,
+                        &value_text,
+                        &src.name(index),
+                        new_value,
+                        &text,
+                    );
+                }
+                None => value_text.set_value(&formatted_value(src.as_ref(), index)),
+            }
+        }
+    };
+    {
+        let apply_typed = apply_typed.clone();
+        value_text.clone().on_kill_focus(move |event| {
+            apply_typed();
+            event.skip(true);
+        });
+    }
+    {
+        let apply_typed = apply_typed.clone();
+        value_text.clone().on_text_enter(move |_| apply_typed());
+    }
+
     // Ctrl+Tab anywhere in the dialog cycles parameters; Escape closes it.
     // (The value slider handles both itself, above.)
     let nav_keys = {
@@ -377,6 +447,10 @@ pub fn edit_parameters(
     {
         let nav_keys = nav_keys.clone();
         unnamed_check.clone().on_key_down(nav_keys);
+    }
+    {
+        let nav_keys = nav_keys.clone();
+        value_text.clone().on_key_down(nav_keys);
     }
 
     {
@@ -414,6 +488,9 @@ mod tests {
         /// Formats value into text; empty string means "no display".
         format: fn(f32) -> String,
         label: String,
+        /// Parses display text into a normalized value; `None` means the plugin
+        /// does not support string-to-parameter conversion.
+        parse: Option<fn(&str) -> Option<f32>>,
     }
 
     struct FakeParams {
@@ -443,6 +520,16 @@ mod tests {
         fn automatable(&self, index: i32) -> bool {
             self.params[index as usize].automatable
         }
+        fn set_from_string(&self, index: i32, text: &str) -> bool {
+            let p = &self.params[index as usize];
+            match p.parse.and_then(|f| f(text)) {
+                Some(v) => {
+                    *p.value.borrow_mut() = v.clamp(0.0, 1.0);
+                    true
+                }
+                None => false,
+            }
+        }
     }
 
     fn sample() -> FakeParams {
@@ -455,6 +542,8 @@ mod tests {
                     automatable: true,
                     format: |v| format!("{:.1}", v * 24.0 - 12.0),
                     label: "dB".into(),
+                    // Inverse of the dB mapping above (-12..+12 dB → 0..1).
+                    parse: Some(|s| s.trim().parse::<f32>().ok().map(|db| (db + 12.0) / 24.0)),
                 },
                 // Discrete 4-state, text changes only at quarter boundaries.
                 FakeParam {
@@ -466,6 +555,7 @@ mod tests {
                             .to_string()
                     },
                     label: String::new(),
+                    parse: None,
                 },
                 // Unnamed / non-automatable.
                 FakeParam {
@@ -474,6 +564,7 @@ mod tests {
                     automatable: true,
                     format: |_| String::new(),
                     label: String::new(),
+                    parse: None,
                 },
                 FakeParam {
                     name: "Hidden".into(),
@@ -481,6 +572,7 @@ mod tests {
                     automatable: false,
                     format: |_| String::new(),
                     label: String::new(),
+                    parse: None,
                 },
             ],
         }
@@ -492,6 +584,20 @@ mod tests {
         assert_eq!(formatted_value(&p, 0), "0.0 dB");
         // Param 2 has no display text → percentage fallback.
         assert_eq!(formatted_value(&p, 2), "0%");
+    }
+
+    #[test]
+    fn apply_typed_value_uses_conversion_or_reports_unsupported() {
+        let p = sample();
+        // Gain supports conversion: "-6" dB → 0.25 normalized, and re-displays.
+        let applied = apply_typed_value(&p, 0, "-6");
+        assert_eq!(applied, Some(0.25));
+        assert_eq!(formatted_value(&p, 0), "-6.0 dB");
+        // Blank input is ignored.
+        assert_eq!(apply_typed_value(&p, 0, "   "), None);
+        // Mode does not support conversion → None, value unchanged.
+        assert_eq!(apply_typed_value(&p, 1, "High"), None);
+        assert_eq!(*p.params[1].value.borrow(), 0.0);
     }
 
     #[test]

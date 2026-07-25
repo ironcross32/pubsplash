@@ -4,6 +4,8 @@
 
 ### Additions
 
+- Release tooling: `tools/release-changelog.ps1` rolls the changelog's `## Unreleased` entries into a new `## <version>` section (version read from `Cargo.toml`, or `-Version` to override), leaving Unreleased's sub-headings in place but empty. Run it before committing and tagging a release; use `-DryRun` to preview. It only rewrites the changelog — committing and tagging are left to you.
+- Context-sensitive help: press **F1** on any control to have its purpose spoken by your screen reader (the announcement interrupts current speech). The messages are hand-written per control in `help.toml` at the project root; a control with no message yet falls back to a generic "No help available for this control." The `gen-help` dev tool (`cargo run --bin gen-help`) round-trips that file from the source — it adds newly added controls with a blank message to fill in, refreshes each control's label, preserves everything already written, and moves removed controls to a `[[stale]]` section rather than deleting your text.
 - Packaging via cargo-packager (`[package.metadata.packager]`): builds a Windows NSIS installer that lets the user choose a per-user (`AppData\Local`) or per-machine (`Program Files`) install, using `assets/icon/pubsplash.ico` for installer and shortcut icons. A `build.rs` embeds the same icon (and version metadata) into the executable via `winresource`, so Explorer, the taskbar, and Alt+Tab show it.
 - Initial project scaffolding: wxDragon window with Home, Chat, and Scenes and Sources tabs plus a status bar.
 - JSON configuration in `%LOCALAPPDATA%\pubsplash\` with automatic generation, and corrupt-file recovery via `.bak` backup.
@@ -60,4 +62,6 @@
 
 ### Changes
 
+- The plugin parameter dialog's value field is now an editable type-in box instead of a read-only display. It still shows the selected parameter's current value in the plugin's own units (e.g. "-6.0 dB") and updates as you adjust the slider; now you can also type a value and press Enter or Tab away to set it. This uses the plugin's optional string-to-value conversion — for plugins that don't support it, the typed text can't be applied and the field simply reverts to the actual value (the slider and arrow keys still work as before).
+- Mute and Bypass controls are now checkboxes instead of buttons, so their on/off state is directly announced by screen readers: each mixer strip's Mute checkbox (Home tab) is checked when muted, the Buses tab's Bypass checkbox reflects the selected plugin (and updates as you move through the chain), and the plugin interface window's Bypass checkbox reflects that plugin.
 - The stream title is no longer remembered between sessions; it is part of the per-session stream info instead.

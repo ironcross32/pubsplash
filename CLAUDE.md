@@ -40,7 +40,7 @@ TTS (`src/tts/sapi.rs`) runs on its own COM STA thread owning `ISpVoice`: reques
 ## wxDragon notes
 
 - Widget handles are `Copy`-like and cheap to clone into event closures; state lives in `Rc<App>` captured by clone.
-- Screen readers do not announce adjacent `StaticText` labels or even some controls' own labels. Use `ui/mod.rs::set_accessible_name` (a name-only MSAA `AccessibleImpl`) on any new slider, checkbox, list, or text input — and re-set it when the meaning changes (see the mute-button toggle in `home.rs`). The crate's `set_accessibility_label` is macOS-only; don't use it.
+- Screen readers do not announce adjacent `StaticText` labels or even some controls' own labels. Use `ui/mod.rs::set_accessible_name` (a name-only MSAA `AccessibleImpl`) on any new slider, checkbox, list, or text input — and re-set it when the meaning changes (see the send-level slider re-label in `sends.rs`). The crate's `set_accessibility_label` is macOS-only; don't use it.
 - Keyboard shortcuts are mostly mnemonics in labels (`"S&witch to scene"` = ALT+W). The context-aware stream button relies on this: `&Start streaming` (ALT+S) vs `S&top streaming` (ALT+T).
 - Key events: match through `ui/mod.rs::key_of` (returns `(key_code, ctrl_down)`); call `event.skip(true)` on unhandled keys or the control goes dead.
 - Dialog outcome constants are `ID_OK`/`ID_YES`/`ID_CANCEL`; modal dialogs need explicit `.destroy()` after `show_modal()`.

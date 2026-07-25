@@ -1163,6 +1163,7 @@ dependencies = [
  "sysinfo",
  "thiserror",
  "tokio",
+ "toml",
  "wasapi",
  "windows 0.62.2",
  "windows-core 0.62.2",

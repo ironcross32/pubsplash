@@ -134,12 +134,24 @@ pub fn open_editor(app: &Rc<App>, target: ChainTarget, slot: usize, plugin: std:
     // Toolbar (Tab-reachable, always an escape from the plugin's own UI).
     let toolbar = BoxSizer::builder(Orientation::Horizontal).build();
     let params = Button::builder(&panel).with_label("&Parameters...").build();
-    let bypass = Button::builder(&panel).with_label("&Bypass").build();
+    let bypass = CheckBox::builder(&panel).with_label("&Bypass").build();
+    bypass.set_value(
+        fx::slots_for(app, target)
+            .get(slot)
+            .map(|s| s.bypass)
+            .unwrap_or(false),
+    );
+    super::set_accessible_name(&bypass, "Bypass this plugin");
     let focus_plugin = Button::builder(&panel).with_label("Plugin &interface").build();
     let close = Button::builder(&panel).with_label("&Close").build();
-    for b in [&params, &bypass, &focus_plugin, &close] {
-        toolbar.add(b, 0, SizerFlag::All, 4);
-    }
+    super::help::tag(&params, "dialog.fxEditor.parameters", "Open accessible parameters dialog button");
+    super::help::tag(&bypass, "dialog.fxEditor.bypass", "Bypass this plugin checkbox");
+    super::help::tag(&focus_plugin, "dialog.fxEditor.focusPlugin", "Move focus into the plugin's own interface button");
+    super::help::tag(&close, "dialog.fxEditor.close", "Close plugin interface button");
+    toolbar.add(&params, 0, SizerFlag::All, 4);
+    toolbar.add(&bypass, 0, SizerFlag::AlignCenterVertical | SizerFlag::All, 4);
+    toolbar.add(&focus_plugin, 0, SizerFlag::All, 4);
+    toolbar.add(&close, 0, SizerFlag::All, 4);
 
     // The plugin draws into this panel.
     let host = Panel::builder(&panel)
@@ -169,12 +181,9 @@ pub fn open_editor(app: &Rc<App>, target: ChainTarget, slot: usize, plugin: std:
     }
     {
         let app = app.clone();
-        bypass.on_click(move |_| {
-            let now = {
-                let slots = fx::slots_for(&app, target);
-                !slots.get(slot).map(|s| s.bypass).unwrap_or(false)
-            };
-            fx::set_bypass(&app, target, slot, now);
+        let bypass = bypass.clone();
+        bypass.clone().on_toggled(move |_| {
+            fx::set_bypass(&app, target, slot, bypass.get_value());
             super::buses::refresh_fx_list(&app);
         });
     }

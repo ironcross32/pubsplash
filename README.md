@@ -37,6 +37,7 @@ To record locally without going live, use **Start recording** (`ALT+R`) next to 
 
 | Shortcut | Action |
 | --- | --- |
+| `F1` | Speak context-sensitive help for the focused control |
 | `ALT+S` / `ALT+T` | Start / stop streaming (Home tab) |
 | `ALT+R` / `ALT+C` | Start / stop recording without streaming (Home tab) |
 | `ALT+W` | Switch to the selected scene (Home tab) |

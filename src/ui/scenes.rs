@@ -15,11 +15,16 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     let scenes_label = StaticText::builder(panel).with_label("Scenes").build();
     let scenes_list = ListBox::builder(panel).build();
     super::set_accessible_name(&scenes_list, "Scenes");
+    super::help::tag(&scenes_list, "tab.scenes.sceneList", "Scenes list");
     let scenes_buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let scene_up = Button::builder(panel).with_label("Move &up").build();
     let scene_down = Button::builder(panel).with_label("Move &down").build();
     let scene_add = Button::builder(panel).with_label("Add &scene").build();
     let scene_rename = Button::builder(panel).with_label("&Rename scene").build();
+    super::help::tag(&scene_up, "tab.scenes.sceneUp", "Move scene up button");
+    super::help::tag(&scene_down, "tab.scenes.sceneDown", "Move scene down button");
+    super::help::tag(&scene_add, "tab.scenes.sceneAdd", "Add scene button");
+    super::help::tag(&scene_rename, "tab.scenes.sceneRename", "Rename scene button");
     for b in [&scene_up, &scene_down, &scene_add, &scene_rename] {
         scenes_buttons.add(b, 0, SizerFlag::All, 4);
     }
@@ -34,6 +39,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
         .build();
     let sources_list = ListBox::builder(panel).build();
     super::set_accessible_name(&sources_list, "Sources in selected scene");
+    super::help::tag(&sources_list, "tab.scenes.sourceList", "Sources list for the selected scene");
     let sources_buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let source_add = Button::builder(panel).with_label("&Add source").build();
     let source_edit = Button::builder(panel).with_label("&Edit").build();
@@ -41,6 +47,12 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     let source_remove = Button::builder(panel).with_label("Re&move source").build();
     let source_up = Button::builder(panel).with_label("Move u&p").build();
     let source_down = Button::builder(panel).with_label("Move do&wn").build();
+    super::help::tag(&source_add, "tab.scenes.sourceAdd", "Add source button");
+    super::help::tag(&source_edit, "tab.scenes.sourceEdit", "Edit source button");
+    super::help::tag(&source_sends, "tab.scenes.sourceSends", "Source sends button");
+    super::help::tag(&source_remove, "tab.scenes.sourceRemove", "Remove source button");
+    super::help::tag(&source_up, "tab.scenes.sourceUp", "Move source up button");
+    super::help::tag(&source_down, "tab.scenes.sourceDown", "Move source down button");
     for b in [
         &source_add,
         &source_edit,
@@ -598,6 +610,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     let engines = crate::tts::engine_names();
     let engine_choice = Choice::builder(&panel).build();
     super::set_accessible_name(&engine_choice, "Engine");
+    super::help::tag(&engine_choice, "dialog.ttsSource.engine", "TTS engine choice");
     for name in &engines {
         engine_choice.append(name);
     }
@@ -610,6 +623,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     let voice_label = StaticText::builder(&panel).with_label("Voice").build();
     let voice_choice = Choice::builder(&panel).build();
     super::set_accessible_name(&voice_choice, "Voice");
+    super::help::tag(&voice_choice, "dialog.ttsSource.voice", "TTS voice choice");
     let voices = crate::tts::voices_for(&current.engine);
     voice_choice.append("Default voice");
     for voice in &voices {
@@ -629,6 +643,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         .with_max_value(100)
         .build();
     super::set_accessible_name(&volume_slider, "Voice volume");
+    super::help::tag(&volume_slider, "dialog.ttsSource.volume", "TTS voice volume slider");
 
     let rate_label = StaticText::builder(&panel)
         .with_label("Speech rate (-10 to 10)")
@@ -639,6 +654,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         .with_max_value(10)
         .build();
     super::set_accessible_name(&rate_slider, "Speech rate");
+    super::help::tag(&rate_slider, "dialog.ttsSource.rate", "TTS speech rate slider");
 
     let output_check = CheckBox::builder(&panel)
         .with_label("Send speech to the stream")
@@ -646,6 +662,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     // The visual label alone is not announced by screen readers here; give
     // the control an explicit accessible name.
     super::set_accessible_name(&output_check, "Send speech to the stream");
+    super::help::tag(&output_check, "dialog.ttsSource.toStream", "Send speech to the stream checkbox");
     output_check.set_value(current.output_to_stream);
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();

@@ -54,15 +54,19 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
         .with_label("Send directly to &master")
         .build();
     super::set_accessible_name(&master_check, "Send directly to master");
+    super::help::tag(&master_check, "dialog.sends.toMaster", "Send this source directly to master checkbox");
     master_check.set_value(to_master);
 
     let list_label = StaticText::builder(&panel).with_label("Sends").build();
     let send_list = ListBox::builder(&panel).build();
     super::set_accessible_name(&send_list, "Sends");
+    super::help::tag(&send_list, "dialog.sends.sendList", "Bus sends for this source list");
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let add = Button::builder(&panel).with_label("&Add send").build();
     let remove = Button::builder(&panel).with_label("&Remove send").build();
+    super::help::tag(&add, "dialog.sends.add", "Add a send to a bus button");
+    super::help::tag(&remove, "dialog.sends.remove", "Remove selected send button");
     buttons.add(&add, 0, SizerFlag::All, 4);
     buttons.add(&remove, 0, SizerFlag::All, 4);
 
@@ -75,6 +79,7 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
         .with_max_value(100)
         .build();
     super::set_accessible_name(&level_slider, "Send level");
+    super::help::tag(&level_slider, "dialog.sends.level", "Send level slider for the selected bus");
 
     let ok_cancel = BoxSizer::builder(Orientation::Horizontal).build();
     let ok = Button::builder(&panel).with_label("OK").build();

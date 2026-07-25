@@ -47,6 +47,7 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         .with_label("Archive streams by default")
         .build();
     super::set_accessible_name(&archive_default, "Archive streams by default");
+    super::help::tag(&archive_default, "dialog.preferences.archive.archiveDefault", "Archive streams by default checkbox");
     archive_default.set_value(app.config.borrow().archiving.archive_streams_by_default);
     stream_group.add(&archive_default, 0, SizerFlag::All, 4);
     {
@@ -67,6 +68,7 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         .with_label("Record streams by default")
         .build();
     super::set_accessible_name(&record_default, "Record streams by default");
+    super::help::tag(&record_default, "dialog.preferences.archive.recordDefault", "Record streams by default checkbox");
     record_default.set_value(app.config.borrow().archiving.record_streams_by_default);
     recording_group.add(&record_default, 0, SizerFlag::All, 4);
     {
@@ -86,6 +88,7 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         .with_value(&app.config.borrow().archiving.recording_folder)
         .build();
     super::set_accessible_name(&folder_input, "Recording folder");
+    super::help::tag(&folder_input, "dialog.preferences.archive.recordingFolder", "Recording folder path input");
     recording_group.add(&folder_label, 0, SizerFlag::All, 4);
     recording_group.add(&folder_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
     {
@@ -99,6 +102,7 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     }
 
     let browse = Button::builder(panel).with_label("&Browse...").build();
+    super::help::tag(&browse, "dialog.preferences.archive.browse", "Browse for recording folder button");
     recording_group.add(&browse, 0, SizerFlag::All, 4);
     {
         let app = app.clone();
@@ -142,10 +146,13 @@ fn build_vst_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         .build();
     let folders_list = ListBox::builder(panel).build();
     super::set_accessible_name(&folders_list, "Plugin folders");
+    super::help::tag(&folders_list, "dialog.preferences.vst.folderList", "VST plugin folders list");
 
     let folder_buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let add_folder = Button::builder(panel).with_label("&Add folder...").build();
     let remove_folder = Button::builder(panel).with_label("Re&move folder").build();
+    super::help::tag(&add_folder, "dialog.preferences.vst.addFolder", "Add plugin folder button");
+    super::help::tag(&remove_folder, "dialog.preferences.vst.removeFolder", "Remove plugin folder button");
     folder_buttons.add(&add_folder, 0, SizerFlag::All, 4);
     folder_buttons.add(&remove_folder, 0, SizerFlag::All, 4);
 
@@ -156,6 +163,8 @@ fn build_vst_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     let rescan_all = Button::builder(panel)
         .with_label("&Rescan all plugins")
         .build();
+    super::help::tag(&scan_new, "dialog.preferences.vst.scanNew", "Scan for new plugins button");
+    super::help::tag(&rescan_all, "dialog.preferences.vst.rescanAll", "Rescan all plugins button");
     scan_buttons.add(&scan_new, 0, SizerFlag::All, 4);
     scan_buttons.add(&rescan_all, 0, SizerFlag::All, 4);
 
