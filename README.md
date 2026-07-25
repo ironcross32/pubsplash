@@ -10,12 +10,12 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - MP3 encoding with configurable bitrate
 - Scenes: group any number of audio sources and switch between them
 - Source types: microphone, desktop audio, per-application audio, text-to-speech, and sound events
-- Applications are picked from a list of what is running — by default just the ones that have actually played sound — rather than typed from memory
-- Sources name themselves after what they capture — the microphone device, the running application's real name, the chosen speech voice — so the mixer's sliders say exactly what you are adjusting even with several of the same type in a scene
+- Applications are picked from a list of what is running â€” by default just the ones that have actually played sound â€” rather than typed from memory
+- Sources name themselves after what they capture â€” the microphone device, the running application's real name, the chosen speech voice â€” so the mixer's sliders say exactly what you are adjusting even with several of the same type in a scene
 - Sources reconnect on their own if their device is unplugged, resets, or is not ready yet when Pubsplash starts. A source that is retrying reads "(reconnecting)" on its mixer strip, and a source set to a particular microphone is never silently switched to a different one
 - Chat: read incoming messages in an accessible list, send outbound messages, and have chat read aloud automatically with text-to-speech (optionally spoken into the stream as well)
 - Loop-safe by design: Desktop Audio capture excludes Pubsplash's own audio, so text-to-speech and sound cues can never echo into your stream
-- Audio cues for stream events (listener changes, incoming and outgoing messages), with custom sound pack support planned for the future
+- Audio cues for stream events (listener changes, incoming and outgoing messages), backed by encrypted custom sound packs
 - A fully keyboard-accessible mixer with per-source volume and mute, plus an optional per-strip volume boost for sources that are too quiet at 100%
 - Mixing buses with per-source sends, so sources can be routed through shared processing (see below)
 - VST2 effect chains on buses and the master output, with a screen-reader-friendly Osara-like parameter editor and shareable effect chains
@@ -29,9 +29,9 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 ## Getting started
 
 1. Launch Pubsplash.
-2. Open **File → Configure Audio Pub**, select the site, enter your email and password, and press **Connect**.
-3. Optionally open **File → Set stream info** to set the stream's title, description, streaming quality (MP3 bitrate), whether the stream should be archived on the server, and whether to **record this stream** to a file on your computer. The title, description, archive, and record choices reset every time Pubsplash starts; the quality setting is saved and persists across sessions. To have archiving or recording pre-selected each launch, enable **Archive streams by default** or **Record streams by default** on the Archiving tab of **File → Preferences** (`CTRL+,`). Recordings are an exact copy of the streamed MP3, saved as `recording_<yyyy-mm-dd>_<HH-MM-SS>.mp3` in the recording folder set on that same tab (your Music library by default).
-4. On the **Home** tab, press **Start streaming** (`ALT+S`). If you haven't set the stream info yet, the dialog opens first — press **OK** to start with what's filled in (tabbing into a text field selects its contents so you can just type over the defaults), or **Cancel** to not start streaming.
+2. Open **File â†’ Configure Audio Pub**, select the site, enter your email and password, and press **Connect**.
+3. Optionally open **File â†’ Set stream info** to set the stream's title, description, streaming quality (MP3 bitrate), whether the stream should be archived on the server, and whether to **record this stream** to a file on your computer. The title, description, archive, and record choices reset every time Pubsplash starts; the quality setting is saved and persists across sessions. To have archiving or recording pre-selected each launch, enable **Archive streams by default** or **Record streams by default** on the Archiving tab of **File â†’ Preferences** (`CTRL+,`). Recordings are an exact copy of the streamed MP3, saved as `recording_<yyyy-mm-dd>_<HH-MM-SS>.mp3` in the recording folder set on that same tab (your Music library by default).
+4. On the **Home** tab, press **Start streaming** (`ALT+S`). If you haven't set the stream info yet, the dialog opens first â€” press **OK** to start with what's filled in (tabbing into a text field selects its contents so you can just type over the defaults), or **Cancel** to not start streaming.
 5. Press **Stop streaming** (`ALT+T`) when you're done.
 
 To record locally without going live, use **Start recording** (`ALT+R`) next to the streaming button; press **Stop recording** (`ALT+C`) to finish. It saves the same MP3 to your recording folder without connecting to the server. Recording and streaming can't run at the same time.
@@ -57,17 +57,17 @@ In the mixer, sliders respond to arrow keys for 1% steps, `Page Up` / `Page Down
 
 ### Volume boost
 
-Mixer volume sliders normally stop at 100%, which is unity gain — the source's own level, unchanged. If a source is still too quiet there (a microphone or a capture device that is simply low at the Windows level), open the slider's context menu with `SHIFT+F10`, the `Applications` key, or a right click, and choose **Enable volume boost**. The item shows a check mark while boost is on, and that slider then runs from 0% to 500%, amplifying the signal by up to five times.
+Mixer volume sliders normally stop at 100%, which is unity gain â€” the source's own level, unchanged. If a source is still too quiet there (a microphone or a capture device that is simply low at the Windows level), open the slider's context menu with `SHIFT+F10`, the `Applications` key, or a right click, and choose **Enable volume boost**. The item shows a check mark while boost is on, and that slider then runs from 0% to 500%, amplifying the signal by up to five times.
 
-Boost is remembered per strip — Master, each source, and each bus have their own setting, saved with your configuration. Turning it back off snaps the slider down to 100% if it was higher. Note that the boost is a plain gain stage with no limiter, so amplifying an already-loud source will distort it; back the slider off until it sounds clean.
+Boost is remembered per strip â€” Master, each source, and each bus have their own setting, saved with your configuration. Turning it back off snaps the slider down to 100% if it was higher. Note that the boost is a plain gain stage with no limiter, so amplifying an already-loud source will distort it; back the slider off until it sounds clean.
 
 ## Capturing an application
 
 Add an **Application** source on the **Scenes and Sources** tab (**Add source**, then pick "Application") to stream one program's audio while leaving the rest of your system out of the mix.
 
-The picker that opens lists the applications you can capture, each read as its real name followed by its program file — "Firefox (firefox.exe)". By default it offers only the applications that have played sound since they started, which is usually a handful; that is the **Only show apps that have played sound** checkbox, and unchecking it widens the list to every open application, including ones that have not made a sound yet. Windows' own components never appear in either view, and Pubsplash never offers itself. Press **Refresh** after starting an application, or after playing something in one, to look again.
+The picker that opens lists the applications you can capture, each read as its real name followed by its program file â€” "Firefox (firefox.exe)". By default it offers only the applications that have played sound since they started, which is usually a handful; that is the **Only show apps that have played sound** checkbox, and unchecking it widens the list to every open application, including ones that have not made a sound yet. Windows' own components never appear in either view, and Pubsplash never offers itself. Press **Refresh** after starting an application, or after playing something in one, to look again.
 
-**Type a name...** enters a program name by hand, for an application that is not running yet — the source stays silent until that program starts and then picks it up on its own, without any further editing. Editing an Application source later reopens the picker with its application already highlighted; if that application has since closed, it appears as a "(not running)" entry at the top, so cancelling never loses the setting.
+**Type a name...** enters a program name by hand, for an application that is not running yet â€” the source stays silent until that program starts and then picks it up on its own, without any further editing. Editing an Application source later reopens the picker with its application already highlighted; if that application has since closed, it appears as a "(not running)" entry at the top, so cancelling never loses the setting.
 
 ## Buses and sends
 
@@ -79,7 +79,7 @@ To route a source into a bus, select the source on the **Scenes and Sources** ta
 
 ## Effects (VST plugins on buses)
 
-Each bus — and the master output — can run a chain of VST2 effects. On the **Buses** tab, select a bus (or the pinned **Master output** row) and use the effects list below it:
+Each bus â€” and the master output â€” can run a chain of VST2 effects. On the **Buses** tab, select a bus (or the pinned **Master output** row) and use the effects list below it:
 
 - **Add plugin** inserts a scanned VST2 plugin at the end of the chain.
 - **Move plugin up** / **down** (or `CTRL+Up` / `CTRL+Down`) reorder the chain; effects are applied top to bottom.
@@ -109,7 +109,7 @@ When a chain you load or import uses plugins that aren't installed on this machi
 
 ## VST plugins
 
-Open **File → Preferences** (`CTRL+,`) and choose the **VST plugins** tab to tell Pubsplash where your plugins live. The folder list starts out with the standard Windows VST locations that exist on most machines ; add or remove folders as needed (`Delete` removes the focused folder).
+Open **File â†’ Preferences** (`CTRL+,`) and choose the **VST plugins** tab to tell Pubsplash where your plugins live. The folder list starts out with the standard Windows VST locations that exist on most machines ; add or remove folders as needed (`Delete` removes the focused folder).
 
 Press **Scan for new plugins** to scan only files that haven't been scanned before, or **Rescan all plugins** to start over. Scans are able to be canceled at any time. If a plugin is taking too long and you suspect it's not going to scan, you can skip it. If a scan runs to completion, a cache will be written alongside Pubsplash's configuration file and these plugins will become available to use immediately.
 
@@ -140,3 +140,13 @@ The first build downloads prebuilt wxWidgets libraries automatically.
 ## License
 
 See the repository for license details.
+
+## Sound packs
+
+A Sound Events source can play encrypted `.pspack` files into its scene. It can react to listener increases, listener decreases, listener-peak increases, incoming chat, and successfully sent chat messages. A stream begins with a silent listener baseline, so connecting does not play a count-change cue.
+
+Open **Tools > Sound Pack Manager** to create or edit a sound pack project. The manager has separate tabs for interface sounds and stream events. Project editing and compiling controls stay disabled until you create a project with **New** or load one with **Open**. Interface packs currently support `ui_startup` and `ui_shutdown`; stream packs support `se_listener_increase`, `se_listener_decrease`, `se_listener_peak_increase`, `se_incoming_chat`, and `se_outgoing_chat`.
+
+Development projects contain `sound-pack.toml` plus a `sounds/` directory. WAV files must be 48 kHz stereo. Variants use a trailing number before `.wav`, such as `se_incoming_chat_01.wav` through `se_incoming_chat_05.wav`; variants must be contiguous because the highest number defines the random playback range.
+
+Compiling creates a distributable `.pspack` and bumps the project revision after a successful build. You can also run `cargo run --bin soundpack -- <project-directory> <output.pspack>`. `.pspack` encrypts assets at rest and authenticates their contents. Because Pubsplash must decrypt audio to play it, it is a deterrent against casual extraction rather than DRM.

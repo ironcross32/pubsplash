@@ -10,7 +10,10 @@ use std::path::Path;
 /// - `Some(Ok)`: identified without loading.
 /// - `Some(Err)`: present and valid, but the module has no audio classes.
 pub fn scan_bundle(bundle: &Path) -> Option<Result<ScanOutput, String>> {
-    let path = bundle.join("Contents").join("Resources").join("moduleinfo.json");
+    let path = bundle
+        .join("Contents")
+        .join("Resources")
+        .join("moduleinfo.json");
     let text = std::fs::read_to_string(&path).ok()?;
     let value: serde_json::Value = match serde_json::from_str(&text) {
         Ok(v) => v,

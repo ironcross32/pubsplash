@@ -17,28 +17,48 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     let sites_label = StaticText::builder(&panel).with_label("Sites").build();
     let sites_list = ListBox::builder(&panel).build();
     super::set_accessible_name(&sites_list, "Sites");
-    super::help::tag(&sites_list, "dialog.connect.siteList", "Configured Audio Pub sites list");
+    super::help::tag(
+        &sites_list,
+        "dialog.connect.siteList",
+        "Configured Audio Pub sites list",
+    );
     let site_buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let add_site = Button::builder(&panel).with_label("&Add site").build();
     let remove_site = Button::builder(&panel).with_label("&Remove site").build();
     super::help::tag(&add_site, "dialog.connect.addSite", "Add site button");
-    super::help::tag(&remove_site, "dialog.connect.removeSite", "Remove site button");
+    super::help::tag(
+        &remove_site,
+        "dialog.connect.removeSite",
+        "Remove site button",
+    );
     site_buttons.add(&add_site, 0, SizerFlag::All, 4);
     site_buttons.add(&remove_site, 0, SizerFlag::All, 4);
 
     let email_label = StaticText::builder(&panel).with_label("Email").build();
     let email_input = TextCtrl::builder(&panel).build();
     super::set_accessible_name(&email_input, "Email");
-    super::help::tag(&email_input, "dialog.connect.email", "Email address for the selected site");
+    super::help::tag(
+        &email_input,
+        "dialog.connect.email",
+        "Email address for the selected site",
+    );
     let password_label = StaticText::builder(&panel).with_label("Password").build();
     let password_input = TextCtrl::builder(&panel)
         .with_style(TextCtrlStyle::Password)
         .build();
     super::set_accessible_name(&password_input, "Password");
-    super::help::tag(&password_input, "dialog.connect.password", "Password for the selected site");
+    super::help::tag(
+        &password_input,
+        "dialog.connect.password",
+        "Password for the selected site",
+    );
 
     let connect_button = Button::builder(&panel).with_label("&Connect").build();
-    super::help::tag(&connect_button, "dialog.connect.connectButton", "Connect or disconnect button");
+    super::help::tag(
+        &connect_button,
+        "dialog.connect.connectButton",
+        "Connect or disconnect button",
+    );
     let close_button = Button::builder(&panel).with_label("C&lose").build();
 
     sizer.add(&sites_label, 0, SizerFlag::All, 4);
@@ -63,7 +83,8 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
             sites_list.clear();
             let mut select_index = 0u32;
             for (i, site) in config.connection.sites.iter().enumerate() {
-                let connected = app.run.borrow().connected_site.as_deref() == Some(site.url.as_str());
+                let connected =
+                    app.run.borrow().connected_site.as_deref() == Some(site.url.as_str());
                 let mut label = site.url.clone();
                 if site.url == MAIN_SITE_URL {
                     label.push_str(" (main)");
@@ -125,7 +146,9 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     // Selection change loads that site's credentials.
     {
         let load_credentials = load_credentials.clone();
-        sites_list.clone().on_selection_changed(move |_| load_credentials());
+        sites_list
+            .clone()
+            .on_selection_changed(move |_| load_credentials());
     }
 
     // Save typed credentials into the selected site as the user types is
@@ -167,7 +190,11 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
                 if let Some(url) = entry.get_value() {
                     let url = url.trim().to_string();
                     if url.is_empty() || !url.starts_with("http") {
-                        show_error(&dialog_for_add, "Add site", "Enter a full URL starting with http(s)://");
+                        show_error(
+                            &dialog_for_add,
+                            "Add site",
+                            "Enter a full URL starting with http(s)://",
+                        );
                         return;
                     }
                     let mut config = app.config.borrow_mut();

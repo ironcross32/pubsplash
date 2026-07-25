@@ -76,13 +76,11 @@ const AUDIO_MASTER_END_EDIT: i32 = 44;
 const SCAN_SAMPLE_RATE: f32 = 48_000.0;
 const SCAN_BLOCK_SIZE: i32 = 480;
 
-type Dispatcher =
-    unsafe extern "C" fn(*mut AEffect, i32, i32, isize, *mut c_void, f32) -> isize;
+type Dispatcher = unsafe extern "C" fn(*mut AEffect, i32, i32, isize, *mut c_void, f32) -> isize;
 type ProcessProc = unsafe extern "C" fn(*mut AEffect, *const *mut f32, *const *mut f32, i32);
 type SetParameterProc = unsafe extern "C" fn(*mut AEffect, i32, f32);
 type GetParameterProc = unsafe extern "C" fn(*mut AEffect, i32) -> f32;
-type HostCallback =
-    extern "C" fn(*mut AEffect, i32, i32, isize, *mut c_void, f32) -> isize;
+type HostCallback = extern "C" fn(*mut AEffect, i32, i32, isize, *mut c_void, f32) -> isize;
 type EntryPoint = unsafe extern "C" fn(HostCallback) -> *mut AEffect;
 
 #[repr(C)]
@@ -216,8 +214,11 @@ extern "C" fn host_callback(
 ) -> isize {
     match opcode {
         AUDIO_MASTER_VERSION => 2400,
-        AUDIO_MASTER_AUTOMATE | AUDIO_MASTER_IDLE | AUDIO_MASTER_UPDATE_DISPLAY
-        | AUDIO_MASTER_BEGIN_EDIT | AUDIO_MASTER_END_EDIT => 0,
+        AUDIO_MASTER_AUTOMATE
+        | AUDIO_MASTER_IDLE
+        | AUDIO_MASTER_UPDATE_DISPLAY
+        | AUDIO_MASTER_BEGIN_EDIT
+        | AUDIO_MASTER_END_EDIT => 0,
         AUDIO_MASTER_GET_TIME => TIME_INFO.with(|cell| {
             let info = cell.get();
             unsafe {
@@ -330,9 +331,8 @@ impl Vst2Plugin {
             .chain([0])
             .collect();
         unsafe {
-            let module =
-                LoadLibraryExW(PCWSTR(wide.as_ptr()), None, LOAD_WITH_ALTERED_SEARCH_PATH)
-                    .map_err(|e| format!("could not load DLL: {e}"))?;
+            let module = LoadLibraryExW(PCWSTR(wide.as_ptr()), None, LOAD_WITH_ALTERED_SEARCH_PATH)
+                .map_err(|e| format!("could not load DLL: {e}"))?;
             let entry = GetProcAddress(module, s!("VSTPluginMain"))
                 .or_else(|| GetProcAddress(module, s!("main")))
                 .ok_or_else(|| {
@@ -490,8 +490,14 @@ impl Vst2Plugin {
 
     pub fn can_be_automated(&self, index: i32) -> bool {
         unsafe {
-            self.dispatcher()(self.effect, EFF_CAN_BE_AUTOMATED, index, 0, std::ptr::null_mut(), 0.0)
-                != 0
+            self.dispatcher()(
+                self.effect,
+                EFF_CAN_BE_AUTOMATED,
+                index,
+                0,
+                std::ptr::null_mut(),
+                0.0,
+            ) != 0
         }
     }
 
@@ -618,7 +624,14 @@ impl Drop for Vst2Plugin {
         self.editor_close();
         unsafe {
             let dispatcher = self.dispatcher();
-            dispatcher(self.effect, EFF_MAINS_CHANGED, 0, 0, std::ptr::null_mut(), 0.0);
+            dispatcher(
+                self.effect,
+                EFF_MAINS_CHANGED,
+                0,
+                0,
+                std::ptr::null_mut(),
+                0.0,
+            );
             dispatcher(self.effect, EFF_CLOSE, 0, 0, std::ptr::null_mut(), 0.0);
             let _ = FreeLibrary(self.module);
         }

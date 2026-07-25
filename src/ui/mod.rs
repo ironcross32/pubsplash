@@ -21,11 +21,12 @@ use crate::audio::{AudioEngine, EngineCommand, FeedKind, SourceSpec, capture::Ca
 use crate::config::{Config, SourceKindConfig};
 use crate::net::{NetCommand, NetEvent, NetHandle};
 use crate::source_name::NameContext;
+use rand::seq::SliceRandom;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use wxdragon::prelude::*;
 
 // wxWidgets key codes (not exported by wxdragon).
@@ -45,6 +46,7 @@ const ID_MENU_CONFIGURE: i32 = 2001;
 const ID_MENU_PREFERENCES: i32 = 2002;
 const ID_MENU_EXIT: i32 = 2003;
 const ID_MENU_STREAM_INFO: i32 = 2004;
+const ID_MENU_SOUND_PACK_MANAGER: i32 = 2005;
 const ID_MENU_ABOUT: i32 = 2101;
 const ID_MENU_README: i32 = 2102;
 /// Command id of the "Enable volume boost" item in a mixer slider's context
@@ -100,6 +102,7 @@ pub struct Runtime {
     pub connecting: bool,
     pub listeners: u32,
     pub listener_peak: u32,
+    pub listener_baseline: bool,
     pub chat: Vec<ChatEntry>,
     pub stream_info: StreamInfo,
     /// Whether the user has confirmed the stream info dialog this session.
@@ -157,6 +160,7 @@ impl Default for Runtime {
             connecting: false,
             listeners: 0,
             listener_peak: 0,
+            listener_baseline: false,
             chat: Vec::new(),
             stream_info: StreamInfo::default(),
             stream_info_set: false,
@@ -175,7 +179,7 @@ struct NameOnlyAccessible(String);
 impl wxdragon::accessible::AccessibleImpl for NameOnlyAccessible {
     fn get_name(&self, child_id: i32) -> (wxdragon::accessible::AccStatus, Option<String>) {
         // Child id 0 is the control itself (MSAA CHILDID_SELF). Ids 1..n are
-        // the control's children (e.g. list box items) — those must fall
+        // the control's children (e.g. list box items) â€” those must fall
         // through to the default accessible or every item announces as the
         // control's name.
         if child_id == 0 {
@@ -219,7 +223,7 @@ pub struct Widgets {
     /// The replaceable panel holding the current mixer strips.
     pub mixer_inner: RefCell<Option<Panel>>,
     /// The current mixer strips, in creation (and so Tab) order. Holding the
-    /// widgets lets a strip be re-labelled in place — a full rebuild would move
+    /// widgets lets a strip be re-labelled in place â€” a full rebuild would move
     /// focus, and the app-detection tick re-labels exactly when the user is
     /// most likely reaching for that slider. Each strip's UIA provider must be
     /// uninstalled while its window still exists, so `rebuild_mixer` drains
@@ -303,6 +307,75 @@ pub struct FxRuntime {
     pub retiring: Vec<Arc<crate::vst::host2::Vst2Plugin>>,
 }
 
+/// Plays an event through each enabled Sound Events source in the active scene.
+fn play_sound_event(app: &Rc<App>, event: crate::soundpack::StreamEvent) {
+    let targets: Vec<(String, String)> = {
+        let config = app.config.borrow();
+        let Some(scene) = config.scenes.active_scene() else {
+            return;
+        };
+        scene
+            .sources
+            .iter()
+            .filter_map(|source| {
+                let SourceKindConfig::SoundEvents(settings) = &source.kind else {
+                    return None;
+                };
+                if source.muted
+                    || settings.pack_path.trim().is_empty()
+                    || !sound_event_enabled(settings, event)
+                {
+                    return None;
+                }
+                Some((source.name.clone(), settings.pack_path.clone()))
+            })
+            .collect()
+    };
+    for (source_name, path) in targets {
+        let Ok(pack) = crate::soundpack::load(std::path::Path::new(&path)) else {
+            log::warn!("Could not load sound pack {path:?}");
+            continue;
+        };
+        let sound = crate::soundpack::SoundKind::from_stream_event(event);
+        let Some(bytes) = pack
+            .variants(sound)
+            .and_then(|v| v.choose(&mut rand::thread_rng()))
+            .cloned()
+        else {
+            continue;
+        };
+        let feeds = app.engine.external_feeds.clone();
+        std::thread::spawn(move || {
+            let Ok(samples) = crate::soundpack::decode_wav(&bytes) else {
+                return;
+            };
+            let mut offset = 0;
+            while offset < samples.len() {
+                match feeds.push(&source_name, &samples[offset..]) {
+                    crate::audio::FeedResult::Done => break,
+                    crate::audio::FeedResult::Full { accepted } => {
+                        offset += accepted;
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    crate::audio::FeedResult::Gone => break,
+                }
+            }
+        });
+    }
+}
+
+fn sound_event_enabled(
+    settings: &crate::config::SoundEventsSourceConfig,
+    event: crate::soundpack::StreamEvent,
+) -> bool {
+    match event {
+        crate::soundpack::StreamEvent::ListenerIncrease => settings.listener_increase,
+        crate::soundpack::StreamEvent::ListenerDecrease => settings.listener_decrease,
+        crate::soundpack::StreamEvent::ListenerPeakIncrease => settings.listener_peak_increase,
+        crate::soundpack::StreamEvent::IncomingChat => settings.incoming_chat,
+        crate::soundpack::StreamEvent::OutgoingChat => settings.outgoing_chat,
+    }
+}
 /// Reads an incoming chat message through every unmuted TTS source in the
 /// active scene.
 fn speak_chat(app: &Rc<App>, user: &str, content: &str) {
@@ -348,7 +421,7 @@ impl App {
         NameContext::build(sources, run.apps.clone(), run.failing.clone())
     }
 
-    /// Re-enumerates the processes behind every scene's Application sources —
+    /// Re-enumerates the processes behind every scene's Application sources â€”
     /// every scene, because the Sources list shows whichever scene is selected,
     /// not the active one.
     ///
@@ -356,7 +429,7 @@ impl App {
     /// displayed application name would differ, the second when a source in the
     /// *active* scene would now capture a different process (including starting
     /// or stopping capture entirely), which is what makes a re-sync worth its
-    /// cost — `SetSources` respawns every capture thread.
+    /// cost â€” `SetSources` respawns every capture thread.
     pub fn refresh_app_processes(&self) -> (bool, bool) {
         let app_names = |sources: &[crate::config::SourceConfig]| -> Vec<String> {
             sources
@@ -468,14 +541,15 @@ impl App {
                             }
                         }
                     }
-                    SourceKindConfig::Tts(_) | SourceKindConfig::SoundEvents => FeedKind::External,
+                    SourceKindConfig::Tts(_) | SourceKindConfig::SoundEvents(_) => {
+                        FeedKind::External
+                    }
                 },
             })
             .collect();
         self.engine.send(EngineCommand::SetSources(specs));
-        self.engine.send(EngineCommand::SetMasterVolume(
-            config.audio.master_volume,
-        ));
+        self.engine
+            .send(EngineCommand::SetMasterVolume(config.audio.master_volume));
         self.engine
             .send(EngineCommand::SetMasterMute(config.audio.master_muted));
     }
@@ -845,7 +919,7 @@ pub fn build(app: Rc<App>) {
             // Destroy explicitly (deferred, wx-managed) rather than skipping to
             // the platform default. On the native ALT+F4 path, skipping hands the
             // WM_CLOSE to DefWindowProc, which destroys the window *synchronously*
-            // and joins the engine/net threads from inside the window procedure —
+            // and joins the engine/net threads from inside the window procedure â€”
             // a shutdown access violation. This routes ALT+F4 through the same
             // deferred teardown that File > Exit already uses.
             frame_for_close.destroy();
@@ -940,6 +1014,13 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
         .append_separator()
         .append_item(ID_MENU_EXIT, "E&xit\tAlt+F4", "Exit Pubsplash")
         .build();
+    let tools_menu = Menu::builder()
+        .append_item(
+            ID_MENU_SOUND_PACK_MANAGER,
+            "Sound Pack &Manager...",
+            "Create and compile Pubsplash sound packs",
+        )
+        .build();
     let help_menu = Menu::builder()
         .append_item(ID_MENU_ABOUT, "&About Pubsplash", "Version information")
         .append_item(
@@ -950,14 +1031,16 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
         .build();
     let menu_bar = MenuBar::builder()
         .append(file_menu, "&File")
+        .append(tools_menu, "&Tools")
         .append(help_menu, "&Help")
         .build();
     frame.set_menu_bar(menu_bar);
 
     let app = app.clone();
     let frame = frame.clone();
-    frame.clone().on_menu_selected(move |event| {
-        match event.get_id() {
+    frame
+        .clone()
+        .on_menu_selected(move |event| match event.get_id() {
             ID_MENU_CONFIGURE => connect_dialog::show(&app, &frame),
             ID_MENU_STREAM_INFO => {
                 stream_info_dialog::show(&app, &frame);
@@ -965,6 +1048,15 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
             ID_MENU_PREFERENCES => preferences::show(&app, &frame),
             ID_MENU_EXIT => {
                 frame.close(false);
+            }
+            ID_MENU_SOUND_PACK_MANAGER => {
+                if let Err(e) = launch_sound_pack_manager() {
+                    show_error(
+                        &frame,
+                        "Sound Pack Manager",
+                        &format!("Could not launch manager: {e}"),
+                    );
+                }
             }
             ID_MENU_ABOUT => {
                 show_info(
@@ -978,12 +1070,37 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
             }
             ID_MENU_README => {
                 if let Err(e) = open_in_browser(README_URL) {
-                    show_error(&frame, "Open Readme", &format!("Could not open browser: {e}"));
+                    show_error(
+                        &frame,
+                        "Open Readme",
+                        &format!("Could not open browser: {e}"),
+                    );
                 }
             }
             _ => {}
-        }
-    });
+        });
+}
+
+fn launch_sound_pack_manager() -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    let sibling = exe
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(if cfg!(windows) {
+            "pubsplash-soundpack.exe"
+        } else {
+            "pubsplash-soundpack"
+        });
+    let executable = if sibling.exists() {
+        sibling
+    } else {
+        std::path::PathBuf::from(if cfg!(windows) {
+            "pubsplash-soundpack.exe"
+        } else {
+            "pubsplash-soundpack"
+        })
+    };
+    std::process::Command::new(executable).spawn().map(|_| ())
 }
 
 fn open_in_browser(url: &str) -> std::io::Result<()> {
@@ -997,6 +1114,7 @@ fn open_in_browser(url: &str) -> std::io::Result<()> {
 fn pump_events(app: &Rc<App>) {
     let mut stream_ui_dirty = false;
     let mut chat_dirty = false;
+    let mut sound_events = Vec::new();
 
     while let Ok(event) = app.net.events.try_recv() {
         match event {
@@ -1053,6 +1171,7 @@ fn pump_events(app: &Rc<App>) {
                 run.stream_started = Some(Instant::now());
                 run.listeners = 0;
                 run.listener_peak = 0;
+                run.listener_baseline = false;
                 drop(run);
                 stream_ui_dirty = true;
             }
@@ -1076,6 +1195,7 @@ fn pump_events(app: &Rc<App>) {
                 app.widgets(|w| show_error(&w.frame, "Streaming problem", &message));
             }
             NetEvent::Chat(message) => {
+                play_sound_event(app, crate::soundpack::StreamEvent::IncomingChat);
                 let user = message.user.display().to_string();
                 speak_chat(app, &user, &message.content);
                 app.run.borrow_mut().chat.push(ChatEntry {
@@ -1087,10 +1207,25 @@ fn pump_events(app: &Rc<App>) {
             }
             NetEvent::Listeners { active, peak } => {
                 let mut run = app.run.borrow_mut();
+                if run.listener_baseline {
+                    if active > run.listeners {
+                        sound_events.push(crate::soundpack::StreamEvent::ListenerIncrease);
+                    }
+                    if active < run.listeners {
+                        sound_events.push(crate::soundpack::StreamEvent::ListenerDecrease);
+                    }
+                    if peak > run.listener_peak {
+                        sound_events.push(crate::soundpack::StreamEvent::ListenerPeakIncrease);
+                    }
+                }
                 run.listeners = active;
                 run.listener_peak = peak.max(run.listener_peak);
+                run.listener_baseline = true;
                 drop(run);
                 stream_ui_dirty = true;
+            }
+            NetEvent::ChatSent => {
+                play_sound_event(app, crate::soundpack::StreamEvent::OutgoingChat)
             }
             NetEvent::ChatSendFailed { message } => {
                 app.widgets(|w| {
@@ -1098,6 +1233,10 @@ fn pump_events(app: &Rc<App>) {
                 });
             }
         }
+    }
+
+    for event in sound_events {
+        play_sound_event(app, event);
     }
 
     // Sources whose capture threads changed state. The capture thread has
@@ -1144,7 +1283,7 @@ fn pump_events(app: &Rc<App>) {
 
 /// Drives a running VST scan: relays progress into the progress dialog,
 /// forwards its Cancel button to the worker, and finishes or abandons the
-/// scan. Events are collected under a short borrow first — handlers below
+/// scan. Events are collected under a short borrow first â€” handlers below
 /// open modal dialogs, which must not happen while `app.scan` is borrowed.
 fn pump_scan_events(app: &Rc<App>) {
     use crate::vst::scan::ScanEvent;
@@ -1283,7 +1422,10 @@ mod token_tests {
             ),
             "Now live: Tuesday hangout - listen at https://audiopub.site/live/abc123"
         );
-        assert_eq!(super::expand_stream_tokens("no tokens", "t", "u"), "no tokens");
+        assert_eq!(
+            super::expand_stream_tokens("no tokens", "t", "u"),
+            "no tokens"
+        );
     }
 
     #[test]

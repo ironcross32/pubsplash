@@ -101,7 +101,9 @@ impl IcecastConnection {
                 break;
             }
             if buf.len() > 16 * 1024 {
-                return Err(IcecastError::Rejected("oversized handshake response".into()));
+                return Err(IcecastError::Rejected(
+                    "oversized handshake response".into(),
+                ));
             }
         }
         let response = String::from_utf8_lossy(&buf);
@@ -110,7 +112,11 @@ impl IcecastConnection {
         if !ok {
             return Err(IcecastError::Rejected(status_line.to_string()));
         }
-        log::info!("Icecast source connected to {}/{}", target.host, target.mount);
+        log::info!(
+            "Icecast source connected to {}/{}",
+            target.host,
+            target.mount
+        );
         Ok(Self { stream })
     }
 
@@ -149,7 +155,9 @@ mod tests {
             let mut buf = vec![0u8; 4096];
             let n = sock.read(&mut buf).await.unwrap();
             let req = String::from_utf8_lossy(&buf[..n]).to_string();
-            sock.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await.unwrap();
+            sock.write_all(b"HTTP/1.1 100 Continue\r\n\r\n")
+                .await
+                .unwrap();
             let mut audio = vec![0u8; 4];
             sock.read_exact(&mut audio).await.unwrap();
             (req, audio)

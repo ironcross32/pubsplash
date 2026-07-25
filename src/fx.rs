@@ -163,9 +163,7 @@ impl PluginRef {
             .iter()
             .filter(|p| p.format == self.format)
             .filter(|p| match self.format {
-                PluginFormat::Vst2 => {
-                    self.unique_id.is_some() && p.unique_id == self.unique_id
-                }
+                PluginFormat::Vst2 => self.unique_id.is_some() && p.unique_id == self.unique_id,
                 PluginFormat::Vst3 => match &self.class_id {
                     Some(id) => p.class_ids.iter().any(|c| c == id),
                     None => false,
@@ -187,10 +185,9 @@ impl PluginRef {
             .filter(|p| p.format == self.format && p.name == self.name)
             .find(|p| p.path.eq_ignore_ascii_case(&self.path))
             .or_else(|| {
-                cache
-                    .plugins
-                    .iter()
-                    .find(|p| p.format == self.format && !self.name.is_empty() && p.name == self.name)
+                cache.plugins.iter().find(|p| {
+                    p.format == self.format && !self.name.is_empty() && p.name == self.name
+                })
             })
     }
 

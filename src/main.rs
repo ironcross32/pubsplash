@@ -5,6 +5,7 @@ mod config;
 mod fx;
 mod logging;
 mod net;
+mod soundpack;
 mod source_name;
 mod state;
 mod tts;
@@ -13,7 +14,6 @@ mod vst;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use wxdragon::prelude::*;
 
 fn main() {
     // Logging must come up before config so config recovery can log.
@@ -35,8 +35,6 @@ fn main() {
     let net = net::NetHandle::start();
     let speaker = tts::sapi::Speaker::start(engine.external_feeds.clone());
     tts::prewarm_voices();
-
-    SystemOptions::set_option_by_int("msw.no-manifest-check", 1);
     let _ = wxdragon::main(move |_| {
         let app = Rc::new(ui::App {
             config: RefCell::new(config.clone()),

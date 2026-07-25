@@ -23,7 +23,11 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
     let label = StaticText::builder(panel).with_label("Buses").build();
     let bus_list = ListBox::builder(panel).build();
     super::set_accessible_name(&bus_list, "Buses");
-    super::help::tag(&bus_list, "tab.buses.busList", "Buses list (row 0 is the master output)");
+    super::help::tag(
+        &bus_list,
+        "tab.buses.busList",
+        "Buses list (row 0 is the master output)",
+    );
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let add = Button::builder(panel).with_label("&Add bus").build();
     let rename = Button::builder(panel).with_label("&Rename bus").build();
@@ -49,27 +53,60 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
         .build();
     let fx_list = ListBox::builder(panel).build();
     super::set_accessible_name(&fx_list, "Effects on selected bus");
-    super::help::tag(&fx_list, "tab.buses.fxList", "Effects chain on the selected bus");
+    super::help::tag(
+        &fx_list,
+        "tab.buses.fxList",
+        "Effects chain on the selected bus",
+    );
     let fx_buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let fx_add = Button::builder(panel).with_label("Add &plugin").build();
     let fx_remove = Button::builder(panel).with_label("Remove plugi&n").build();
     let fx_up = Button::builder(panel).with_label("Move plugin u&p").build();
-    let fx_down = Button::builder(panel).with_label("Move plugin do&wn").build();
+    let fx_down = Button::builder(panel)
+        .with_label("Move plugin do&wn")
+        .build();
     let fx_bypass = CheckBox::builder(panel).with_label("&Bypass").build();
     super::set_accessible_name(&fx_bypass, "Bypass selected plugin");
-    let fx_edit = Button::builder(panel).with_label("&Edit parameters").build();
+    let fx_edit = Button::builder(panel)
+        .with_label("&Edit parameters")
+        .build();
     let fx_open = Button::builder(panel).with_label("Open &interface").build();
     super::help::tag(&fx_add, "tab.buses.fxAdd", "Add plugin to chain button");
-    super::help::tag(&fx_remove, "tab.buses.fxRemove", "Remove plugin from chain button");
+    super::help::tag(
+        &fx_remove,
+        "tab.buses.fxRemove",
+        "Remove plugin from chain button",
+    );
     super::help::tag(&fx_up, "tab.buses.fxUp", "Move plugin up in chain button");
-    super::help::tag(&fx_down, "tab.buses.fxDown", "Move plugin down in chain button");
-    super::help::tag(&fx_bypass, "tab.buses.fxBypass", "Bypass selected plugin checkbox");
-    super::help::tag(&fx_edit, "tab.buses.fxEditParams", "Edit plugin parameters button");
-    super::help::tag(&fx_open, "tab.buses.fxOpenInterface", "Open plugin interface button");
+    super::help::tag(
+        &fx_down,
+        "tab.buses.fxDown",
+        "Move plugin down in chain button",
+    );
+    super::help::tag(
+        &fx_bypass,
+        "tab.buses.fxBypass",
+        "Bypass selected plugin checkbox",
+    );
+    super::help::tag(
+        &fx_edit,
+        "tab.buses.fxEditParams",
+        "Edit plugin parameters button",
+    );
+    super::help::tag(
+        &fx_open,
+        "tab.buses.fxOpenInterface",
+        "Open plugin interface button",
+    );
     for b in [&fx_add, &fx_remove, &fx_up, &fx_down] {
         fx_buttons.add(b, 0, SizerFlag::All, 4);
     }
-    fx_buttons.add(&fx_bypass, 0, SizerFlag::AlignCenterVertical | SizerFlag::All, 4);
+    fx_buttons.add(
+        &fx_bypass,
+        0,
+        SizerFlag::AlignCenterVertical | SizerFlag::All,
+        4,
+    );
     for b in [&fx_edit, &fx_open] {
         fx_buttons.add(b, 0, SizerFlag::All, 4);
     }
@@ -78,12 +115,32 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
     let lib_buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let save_chain = Button::builder(panel).with_label("&Save chain...").build();
     let load_chain = Button::builder(panel).with_label("&Load chain...").build();
-    let import_chain = Button::builder(panel).with_label("&Import chain...").build();
-    let export_chain = Button::builder(panel).with_label("E&xport chain...").build();
-    super::help::tag(&save_chain, "tab.buses.chainSave", "Save FX chain to library button");
-    super::help::tag(&load_chain, "tab.buses.chainLoad", "Load FX chain from library button");
-    super::help::tag(&import_chain, "tab.buses.chainImport", "Import FX chain file button");
-    super::help::tag(&export_chain, "tab.buses.chainExport", "Export FX chain file button");
+    let import_chain = Button::builder(panel)
+        .with_label("&Import chain...")
+        .build();
+    let export_chain = Button::builder(panel)
+        .with_label("E&xport chain...")
+        .build();
+    super::help::tag(
+        &save_chain,
+        "tab.buses.chainSave",
+        "Save FX chain to library button",
+    );
+    super::help::tag(
+        &load_chain,
+        "tab.buses.chainLoad",
+        "Load FX chain from library button",
+    );
+    super::help::tag(
+        &import_chain,
+        "tab.buses.chainImport",
+        "Import FX chain file button",
+    );
+    super::help::tag(
+        &export_chain,
+        "tab.buses.chainExport",
+        "Export FX chain file button",
+    );
     for b in [&save_chain, &load_chain, &import_chain, &export_chain] {
         lib_buttons.add(b, 0, SizerFlag::All, 4);
     }
@@ -369,10 +426,7 @@ fn move_bus(app: &Rc<App>, list: &ListBox, towards_start: bool) {
         let other = if towards_start { index - 1 } else { index + 1 };
         fx::on_bus_moved(app, index, other);
         after_bus_edit(app);
-        app.widgets(|w| {
-            w.bus_list
-                .set_selection((other as u32) + MASTER_ROWS, true)
-        });
+        app.widgets(|w| w.bus_list.set_selection((other as u32) + MASTER_ROWS, true));
         refresh_fx_list(app);
     }
 }
@@ -414,7 +468,9 @@ fn add_plugin(app: &Rc<App>) {
                 show_error(
                     &frame,
                     "Add plugin",
-                    &format!("{name} was added but could not be loaded, so it will not process audio."),
+                    &format!(
+                        "{name} was added but could not be loaded, so it will not process audio."
+                    ),
                 );
             }
         }
@@ -533,7 +589,11 @@ fn save_chain_to_library(app: &Rc<App>) {
     fx::snapshot_chain(app, target);
     let slots = fx::slots_for(app, target);
     if slots.is_empty() {
-        show_info(&frame, "Save chain", "This chain is empty; there is nothing to save.");
+        show_info(
+            &frame,
+            "Save chain",
+            "This chain is empty; there is nothing to save.",
+        );
         return;
     }
     let default_name = target_name(app, target);
@@ -592,7 +652,9 @@ fn pick_chain(app: &Rc<App>, frame: &Frame, names: &[String]) -> Option<usize> {
         .build();
     let panel = Panel::builder(&dialog).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
-    let label = StaticText::builder(&panel).with_label("Saved chains").build();
+    let label = StaticText::builder(&panel)
+        .with_label("Saved chains")
+        .build();
     let list = ListBox::builder(&panel).build();
     super::set_accessible_name(&list, "Saved chains");
     super::help::tag(&list, "dialog.loadChain.list", "Saved FX chains list");
@@ -607,7 +669,11 @@ fn pick_chain(app: &Rc<App>, frame: &Frame, names: &[String]) -> Option<usize> {
     let delete = Button::builder(&panel).with_label("&Delete").build();
     let cancel = Button::builder(&panel).with_label("&Cancel").build();
     super::help::tag(&load, "dialog.loadChain.load", "Load selected chain button");
-    super::help::tag(&delete, "dialog.loadChain.delete", "Delete selected chain button");
+    super::help::tag(
+        &delete,
+        "dialog.loadChain.delete",
+        "Delete selected chain button",
+    );
     for b in [&load, &delete, &cancel] {
         buttons.add(b, 0, SizerFlag::All, 4);
     }
@@ -712,7 +778,11 @@ fn export_chain_file(app: &Rc<App>) {
     fx::snapshot_chain(app, target);
     let slots = fx::slots_for(app, target);
     if slots.is_empty() {
-        show_info(&frame, "Export chain", "This chain is empty; there is nothing to export.");
+        show_info(
+            &frame,
+            "Export chain",
+            "This chain is empty; there is nothing to export.",
+        );
         return;
     }
     let name = target_name(app, target);
@@ -795,7 +865,11 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
             ))
             .build();
         let cancel = Button::builder(&panel).with_label("&Cancel").build();
-        super::help::tag(&apply, "dialog.missingPlugins.apply", "Apply chain with available plugins button");
+        super::help::tag(
+            &apply,
+            "dialog.missingPlugins.apply",
+            "Apply chain with available plugins button",
+        );
         buttons.add(&apply, 0, SizerFlag::All, 4);
         buttons.add(&cancel, 0, SizerFlag::All, 4);
         {

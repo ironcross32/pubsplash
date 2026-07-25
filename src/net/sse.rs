@@ -194,8 +194,7 @@ mod tests {
 
     #[test]
     fn chat_user_falls_back_to_plain_name() {
-        let user: ChatUser =
-            serde_json::from_str(r#"{"id":"u1","name":"alice"}"#).unwrap();
+        let user: ChatUser = serde_json::from_str(r#"{"id":"u1","name":"alice"}"#).unwrap();
         assert_eq!(user.display(), "alice");
     }
 

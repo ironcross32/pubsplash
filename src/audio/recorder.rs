@@ -153,7 +153,10 @@ mod tests {
 
         let p1 = dir.join("clip__001.mp3");
         let p2 = dir.join("clip__002.mp3");
-        assert!(!base.exists(), "original name should have been renamed away");
+        assert!(
+            !base.exists(),
+            "original name should have been renamed away"
+        );
         assert_eq!(std::fs::read(&p1).unwrap(), b"part-one");
         assert_eq!(std::fs::read(&p2).unwrap(), b"part-two");
 

@@ -43,6 +43,7 @@ pub enum NetEvent {
     StreamError { message: String },
     Chat(sse::ChatMessage),
     Listeners { active: u32, peak: u32 },
+    ChatSent,
     ChatSendFailed { message: String },
 }
 
@@ -227,10 +228,15 @@ async fn net_loop(
                     });
                     continue;
                 };
-                if let Err(e) = conn.client.send_chat(&active.stream_id, &content).await {
-                    let _ = events.send(NetEvent::ChatSendFailed {
-                        message: e.to_string(),
-                    });
+                match conn.client.send_chat(&active.stream_id, &content).await {
+                    Ok(_) => {
+                        let _ = events.send(NetEvent::ChatSent);
+                    }
+                    Err(e) => {
+                        let _ = events.send(NetEvent::ChatSendFailed {
+                            message: e.to_string(),
+                        });
+                    }
                 }
             }
             NetCommand::Shutdown => {
@@ -342,4 +348,3 @@ mod host_tests {
         );
     }
 }
-

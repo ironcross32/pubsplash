@@ -23,7 +23,10 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
             return;
         };
         (
-            crate::source_name::strip_label(source, &app.name_context(std::slice::from_ref(source))),
+            crate::source_name::strip_label(
+                source,
+                &app.name_context(std::slice::from_ref(source)),
+            ),
             source.to_master,
             source.sends.clone(),
             config
@@ -54,32 +57,46 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
         .with_label("Send directly to &master")
         .build();
     super::set_accessible_name(&master_check, "Send directly to master");
-    super::help::tag(&master_check, "dialog.sends.toMaster", "Send this source directly to master checkbox");
+    super::help::tag(
+        &master_check,
+        "dialog.sends.toMaster",
+        "Send this source directly to master checkbox",
+    );
     master_check.set_value(to_master);
 
     let list_label = StaticText::builder(&panel).with_label("Sends").build();
     let send_list = ListBox::builder(&panel).build();
     super::set_accessible_name(&send_list, "Sends");
-    super::help::tag(&send_list, "dialog.sends.sendList", "Bus sends for this source list");
+    super::help::tag(
+        &send_list,
+        "dialog.sends.sendList",
+        "Bus sends for this source list",
+    );
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let add = Button::builder(&panel).with_label("&Add send").build();
     let remove = Button::builder(&panel).with_label("&Remove send").build();
     super::help::tag(&add, "dialog.sends.add", "Add a send to a bus button");
-    super::help::tag(&remove, "dialog.sends.remove", "Remove selected send button");
+    super::help::tag(
+        &remove,
+        "dialog.sends.remove",
+        "Remove selected send button",
+    );
     buttons.add(&add, 0, SizerFlag::All, 4);
     buttons.add(&remove, 0, SizerFlag::All, 4);
 
-    let level_label = StaticText::builder(&panel)
-        .with_label("Send level")
-        .build();
+    let level_label = StaticText::builder(&panel).with_label("Send level").build();
     let level_slider = Slider::builder(&panel)
         .with_value(100)
         .with_min_value(0)
         .with_max_value(100)
         .build();
     super::set_accessible_name(&level_slider, "Send level");
-    super::help::tag(&level_slider, "dialog.sends.level", "Send level slider for the selected bus");
+    super::help::tag(
+        &level_slider,
+        "dialog.sends.level",
+        "Send level slider for the selected bus",
+    );
 
     let ok_cancel = BoxSizer::builder(Orientation::Horizontal).build();
     let ok = Button::builder(&panel).with_label("OK").build();
@@ -134,17 +151,16 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
             };
             if let Some(send) = working.borrow().get(index as usize) {
                 level_slider.set_value(send.level as i32);
-                super::set_accessible_name(
-                    &level_slider,
-                    &format!("Send level for {}", send.bus),
-                );
+                super::set_accessible_name(&level_slider, &format!("Send level for {}", send.bus));
             }
         }
     };
     load_selected();
     {
         let load_selected = load_selected.clone();
-        send_list.clone().on_selection_changed(move |_| load_selected());
+        send_list
+            .clone()
+            .on_selection_changed(move |_| load_selected());
     }
 
     // Slider edits the selected send's level.
@@ -182,7 +198,11 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
                     .collect()
             };
             if available.is_empty() {
-                show_error(&dialog, "Add send", "This source already sends to every bus.");
+                show_error(
+                    &dialog,
+                    "Add send",
+                    "This source already sends to every bus.",
+                );
                 return;
             }
             let refs: Vec<&str> = available.iter().map(|s| s.as_str()).collect();

@@ -3,7 +3,7 @@
 
 use super::home::on_sources_changed;
 use super::{App, WXK_DELETE, WXK_DOWN, WXK_UP, show_error};
-use crate::config::{SourceConfig, SourceKindConfig, TtsSourceConfig};
+use crate::config::{SoundEventsSourceConfig, SourceConfig, SourceKindConfig, TtsSourceConfig};
 use crate::state::{ListEdit, move_down, move_up};
 use std::rc::Rc;
 use wxdragon::prelude::*;
@@ -22,9 +22,17 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     let scene_add = Button::builder(panel).with_label("Add &scene").build();
     let scene_rename = Button::builder(panel).with_label("&Rename scene").build();
     super::help::tag(&scene_up, "tab.scenes.sceneUp", "Move scene up button");
-    super::help::tag(&scene_down, "tab.scenes.sceneDown", "Move scene down button");
+    super::help::tag(
+        &scene_down,
+        "tab.scenes.sceneDown",
+        "Move scene down button",
+    );
     super::help::tag(&scene_add, "tab.scenes.sceneAdd", "Add scene button");
-    super::help::tag(&scene_rename, "tab.scenes.sceneRename", "Rename scene button");
+    super::help::tag(
+        &scene_rename,
+        "tab.scenes.sceneRename",
+        "Rename scene button",
+    );
     for b in [&scene_up, &scene_down, &scene_add, &scene_rename] {
         scenes_buttons.add(b, 0, SizerFlag::All, 4);
     }
@@ -39,7 +47,11 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
         .build();
     let sources_list = ListBox::builder(panel).build();
     super::set_accessible_name(&sources_list, "Sources in selected scene");
-    super::help::tag(&sources_list, "tab.scenes.sourceList", "Sources list for the selected scene");
+    super::help::tag(
+        &sources_list,
+        "tab.scenes.sourceList",
+        "Sources list for the selected scene",
+    );
     let sources_buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let source_add = Button::builder(panel).with_label("&Add source").build();
     let source_edit = Button::builder(panel).with_label("&Edit").build();
@@ -49,10 +61,22 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     let source_down = Button::builder(panel).with_label("Move do&wn").build();
     super::help::tag(&source_add, "tab.scenes.sourceAdd", "Add source button");
     super::help::tag(&source_edit, "tab.scenes.sourceEdit", "Edit source button");
-    super::help::tag(&source_sends, "tab.scenes.sourceSends", "Source sends button");
-    super::help::tag(&source_remove, "tab.scenes.sourceRemove", "Remove source button");
+    super::help::tag(
+        &source_sends,
+        "tab.scenes.sourceSends",
+        "Source sends button",
+    );
+    super::help::tag(
+        &source_remove,
+        "tab.scenes.sourceRemove",
+        "Remove source button",
+    );
     super::help::tag(&source_up, "tab.scenes.sourceUp", "Move source up button");
-    super::help::tag(&source_down, "tab.scenes.sourceDown", "Move source down button");
+    super::help::tag(
+        &source_down,
+        "tab.scenes.sourceDown",
+        "Move source down button",
+    );
     for b in [
         &source_add,
         &source_edit,
@@ -72,7 +96,9 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     // Scene list selection drives the sources list.
     {
         let app = app.clone();
-        scenes_list.clone().on_selection_changed(move |_| refresh_sources_list(&app));
+        scenes_list
+            .clone()
+            .on_selection_changed(move |_| refresh_sources_list(&app));
     }
 
     // Scene buttons.
@@ -100,12 +126,14 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     {
         let app = app.clone();
         let list = scenes_list.clone();
-        scenes_list.clone().on_key_down(move |event| match super::key_of(&event) {
-            Some((WXK_UP, true)) => move_scene(&app, &list, true),
-            Some((WXK_DOWN, true)) => move_scene(&app, &list, false),
-            Some((WXK_DELETE, _)) => delete_scene(&app, &list),
-            _ => event.skip(true),
-        });
+        scenes_list
+            .clone()
+            .on_key_down(move |event| match super::key_of(&event) {
+                Some((WXK_UP, true)) => move_scene(&app, &list, true),
+                Some((WXK_DOWN, true)) => move_scene(&app, &list, false),
+                Some((WXK_DELETE, _)) => delete_scene(&app, &list),
+                _ => event.skip(true),
+            });
     }
 
     // Source buttons.
@@ -148,12 +176,14 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     {
         let app = app.clone();
         let list = sources_list.clone();
-        sources_list.clone().on_key_down(move |event| match super::key_of(&event) {
-            Some((WXK_UP, true)) => move_source(&app, &list, true),
-            Some((WXK_DOWN, true)) => move_source(&app, &list, false),
-            Some((WXK_DELETE, _)) => remove_source(&app, &list),
-            _ => event.skip(true),
-        });
+        sources_list
+            .clone()
+            .on_key_down(move |event| match super::key_of(&event) {
+                Some((WXK_UP, true)) => move_source(&app, &list, true),
+                Some((WXK_DOWN, true)) => move_source(&app, &list, false),
+                Some((WXK_DELETE, _)) => remove_source(&app, &list),
+                _ => event.skip(true),
+            });
     }
 
     (scenes_list, sources_list)
@@ -267,7 +297,11 @@ fn add_scene(app: &Rc<App>) {
             if changed == ListEdit::Changed {
                 after_scene_edit(app);
             } else if !name.trim().is_empty() {
-                show_error(&frame, "Add scene", "A scene with that name already exists.");
+                show_error(
+                    &frame,
+                    "Add scene",
+                    "A scene with that name already exists.",
+                );
             }
         }
     }
@@ -378,7 +412,7 @@ fn add_source(app: &Rc<App>) {
             process_name: String::new(),
         },
         3 => SourceKindConfig::Tts(TtsSourceConfig::default()),
-        4 => SourceKindConfig::SoundEvents,
+        4 => SourceKindConfig::SoundEvents(SoundEventsSourceConfig::default()),
         _ => return,
     };
 
@@ -439,14 +473,8 @@ fn edit_source(app: &Rc<App>, list: &ListBox) {
                 )
             });
         }
-        SourceKindConfig::SoundEvents => {
-            app.widgets(|w| {
-                super::show_info(
-                    &w.frame,
-                    "Sound Events",
-                    "Sound event configuration is coming in a future version.",
-                )
-            });
+        SourceKindConfig::SoundEvents(settings) => {
+            edit_sound_events(app, scene_index, index, settings)
         }
     }
 }
@@ -568,7 +596,11 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     let engines = crate::tts::engine_names();
     let engine_choice = Choice::builder(&panel).build();
     super::set_accessible_name(&engine_choice, "Engine");
-    super::help::tag(&engine_choice, "dialog.ttsSource.engine", "TTS engine choice");
+    super::help::tag(
+        &engine_choice,
+        "dialog.ttsSource.engine",
+        "TTS engine choice",
+    );
     for name in &engines {
         engine_choice.append(name);
     }
@@ -594,14 +626,20 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         .unwrap_or(0);
     voice_choice.set_selection(voice_index as u32);
 
-    let volume_label = StaticText::builder(&panel).with_label("Voice volume").build();
+    let volume_label = StaticText::builder(&panel)
+        .with_label("Voice volume")
+        .build();
     let volume_slider = Slider::builder(&panel)
         .with_value(current.volume as i32)
         .with_min_value(0)
         .with_max_value(100)
         .build();
     super::set_accessible_name(&volume_slider, "Voice volume");
-    super::help::tag(&volume_slider, "dialog.ttsSource.volume", "TTS voice volume slider");
+    super::help::tag(
+        &volume_slider,
+        "dialog.ttsSource.volume",
+        "TTS voice volume slider",
+    );
 
     let rate_label = StaticText::builder(&panel)
         .with_label("Speech rate (-10 to 10)")
@@ -612,7 +650,11 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         .with_max_value(10)
         .build();
     super::set_accessible_name(&rate_slider, "Speech rate");
-    super::help::tag(&rate_slider, "dialog.ttsSource.rate", "TTS speech rate slider");
+    super::help::tag(
+        &rate_slider,
+        "dialog.ttsSource.rate",
+        "TTS speech rate slider",
+    );
 
     let output_check = CheckBox::builder(&panel)
         .with_label("Send speech to the stream")
@@ -620,7 +662,11 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     // The visual label alone is not announced by screen readers here; give
     // the control an explicit accessible name.
     super::set_accessible_name(&output_check, "Send speech to the stream");
-    super::help::tag(&output_check, "dialog.ttsSource.toStream", "Send speech to the stream checkbox");
+    super::help::tag(
+        &output_check,
+        "dialog.ttsSource.toStream",
+        "Send speech to the stream checkbox",
+    );
     output_check.set_value(current.output_to_stream);
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
@@ -655,17 +701,22 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
 
     if dialog.show_modal() == ID_OK {
         let engine = engines
-            .get(engine_choice.get_selection().map(|i| i as usize).unwrap_or(0))
+            .get(
+                engine_choice
+                    .get_selection()
+                    .map(|i| i as usize)
+                    .unwrap_or(0),
+            )
             .map(|s| s.to_string())
             .unwrap_or_else(|| "sapi".into());
-        let voice_selection = voice_choice.get_selection().map(|i| i as usize).unwrap_or(0);
+        let voice_selection = voice_choice
+            .get_selection()
+            .map(|i| i as usize)
+            .unwrap_or(0);
         let voice = if voice_selection == 0 {
             String::new()
         } else {
-            voices
-                .get(voice_selection - 1)
-                .cloned()
-                .unwrap_or_default()
+            voices.get(voice_selection - 1).cloned().unwrap_or_default()
         };
         set_source_kind(
             app,
@@ -677,6 +728,115 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
                 volume: volume_slider.value().clamp(0, 100) as u32,
                 rate: rate_slider.value().clamp(-10, 10),
                 output_to_stream: output_check.get_value(),
+            }),
+        );
+    }
+    dialog.destroy();
+}
+fn edit_sound_events(
+    app: &Rc<App>,
+    scene_index: usize,
+    source_index: usize,
+    current: SoundEventsSourceConfig,
+) {
+    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+        return;
+    };
+    let dialog = Dialog::builder(&frame, "Sound Events source")
+        .with_style(DialogStyle::DefaultDialogStyle)
+        .with_size(520, 380)
+        .build();
+    let panel = Panel::builder(&dialog).build();
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+
+    let path_label = StaticText::builder(&panel)
+        .with_label("Sound pack path")
+        .build();
+    let path_row = BoxSizer::builder(Orientation::Horizontal).build();
+    let pack_path = TextCtrl::builder(&panel).build();
+    pack_path.set_value(&current.pack_path);
+    super::set_accessible_name(&pack_path, "Sound pack path");
+    let browse = Button::builder(&panel).with_label("&Browse...").build();
+    path_row.add(&pack_path, 1, SizerFlag::Expand | SizerFlag::All, 4);
+    path_row.add(&browse, 0, SizerFlag::All, 4);
+
+    let listener_increase = CheckBox::builder(&panel)
+        .with_label("Listener count increased")
+        .build();
+    let listener_decrease = CheckBox::builder(&panel)
+        .with_label("Listener count decreased")
+        .build();
+    let listener_peak_increase = CheckBox::builder(&panel)
+        .with_label("Listener peak increased")
+        .build();
+    let incoming_chat = CheckBox::builder(&panel)
+        .with_label("Incoming chat message")
+        .build();
+    let outgoing_chat = CheckBox::builder(&panel)
+        .with_label("Outgoing chat message")
+        .build();
+    listener_increase.set_value(current.listener_increase);
+    listener_decrease.set_value(current.listener_decrease);
+    listener_peak_increase.set_value(current.listener_peak_increase);
+    incoming_chat.set_value(current.incoming_chat);
+    outgoing_chat.set_value(current.outgoing_chat);
+
+    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
+    let ok = Button::builder(&panel).with_label("OK").build();
+    let cancel = Button::builder(&panel).with_label("Cancel").build();
+    buttons.add(&ok, 0, SizerFlag::All, 4);
+    buttons.add(&cancel, 0, SizerFlag::All, 4);
+
+    sizer.add(&path_label, 0, SizerFlag::All, 4);
+    sizer.add_sizer(&path_row, 0, SizerFlag::Expand, 0);
+    sizer.add(&listener_increase, 0, SizerFlag::All, 4);
+    sizer.add(&listener_decrease, 0, SizerFlag::All, 4);
+    sizer.add(&listener_peak_increase, 0, SizerFlag::All, 4);
+    sizer.add(&incoming_chat, 0, SizerFlag::All, 4);
+    sizer.add(&outgoing_chat, 0, SizerFlag::All, 4);
+    sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight, 0);
+    panel.set_sizer(sizer, true);
+    let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
+    dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
+    dialog.set_sizer(dialog_sizer, true);
+
+    {
+        let panel = panel.clone();
+        let pack_path = pack_path.clone();
+        browse.on_click(move |_| {
+            let dialog = FileDialog::builder(&panel)
+                .with_message("Select a compiled sound pack")
+                .with_wildcard("Pubsplash sound packs (*.pspack)|*.pspack|All files (*.*)|*.*")
+                .with_style(FileDialogStyle::Open)
+                .build();
+            if dialog.show_modal() == ID_OK {
+                if let Some(path) = dialog.get_path() {
+                    pack_path.set_value(&path);
+                }
+            }
+        });
+    }
+    {
+        let dialog = dialog.clone();
+        ok.on_click(move |_| dialog.end_modal(ID_OK));
+    }
+    {
+        let dialog = dialog.clone();
+        cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    }
+
+    if dialog.show_modal() == ID_OK {
+        set_source_kind(
+            app,
+            scene_index,
+            source_index,
+            SourceKindConfig::SoundEvents(SoundEventsSourceConfig {
+                pack_path: pack_path.get_value().trim().to_string(),
+                listener_increase: listener_increase.get_value(),
+                listener_decrease: listener_decrease.get_value(),
+                listener_peak_increase: listener_peak_increase.get_value(),
+                incoming_chat: incoming_chat.get_value(),
+                outgoing_chat: outgoing_chat.get_value(),
             }),
         );
     }

@@ -8,8 +8,8 @@
 //! (Close button). Everything else the plugin receives normally, and the
 //! toolbar's own buttons are ordinary Tab-reachable wx controls.
 
-use super::fx::{self, ChainTarget};
 use super::App;
+use super::fx::{self, ChainTarget};
 use crate::vst::host2::Vst2Plugin;
 use std::rc::Rc;
 use std::sync::Mutex;
@@ -41,7 +41,8 @@ pub struct EditorWindow {
 }
 
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code == HC_ACTION as i32 && (wparam.0 as u32 == WM_KEYDOWN || wparam.0 as u32 == WM_SYSKEYDOWN)
+    if code == HC_ACTION as i32
+        && (wparam.0 as u32 == WM_KEYDOWN || wparam.0 as u32 == WM_SYSKEYDOWN)
     {
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         if kb.vkCode == VK_F6.0 as u32 {
@@ -88,7 +89,12 @@ fn hwnd_of(widget: &dyn WxWidget) -> HWND {
 }
 
 /// Opens (or re-focuses) the native editor for a plugin slot.
-pub fn open_editor(app: &Rc<App>, target: ChainTarget, slot: usize, plugin: std::sync::Arc<Vst2Plugin>) {
+pub fn open_editor(
+    app: &Rc<App>,
+    target: ChainTarget,
+    slot: usize,
+    plugin: std::sync::Arc<Vst2Plugin>,
+) {
     let Some(parent) = app.widgets(|w| w.frame.clone()) else {
         return;
     };
@@ -142,14 +148,37 @@ pub fn open_editor(app: &Rc<App>, target: ChainTarget, slot: usize, plugin: std:
             .unwrap_or(false),
     );
     super::set_accessible_name(&bypass, "Bypass this plugin");
-    let focus_plugin = Button::builder(&panel).with_label("Plugin &interface").build();
+    let focus_plugin = Button::builder(&panel)
+        .with_label("Plugin &interface")
+        .build();
     let close = Button::builder(&panel).with_label("&Close").build();
-    super::help::tag(&params, "dialog.fxEditor.parameters", "Open accessible parameters dialog button");
-    super::help::tag(&bypass, "dialog.fxEditor.bypass", "Bypass this plugin checkbox");
-    super::help::tag(&focus_plugin, "dialog.fxEditor.focusPlugin", "Move focus into the plugin's own interface button");
-    super::help::tag(&close, "dialog.fxEditor.close", "Close plugin interface button");
+    super::help::tag(
+        &params,
+        "dialog.fxEditor.parameters",
+        "Open accessible parameters dialog button",
+    );
+    super::help::tag(
+        &bypass,
+        "dialog.fxEditor.bypass",
+        "Bypass this plugin checkbox",
+    );
+    super::help::tag(
+        &focus_plugin,
+        "dialog.fxEditor.focusPlugin",
+        "Move focus into the plugin's own interface button",
+    );
+    super::help::tag(
+        &close,
+        "dialog.fxEditor.close",
+        "Close plugin interface button",
+    );
     toolbar.add(&params, 0, SizerFlag::All, 4);
-    toolbar.add(&bypass, 0, SizerFlag::AlignCenterVertical | SizerFlag::All, 4);
+    toolbar.add(
+        &bypass,
+        0,
+        SizerFlag::AlignCenterVertical | SizerFlag::All,
+        4,
+    );
     toolbar.add(&focus_plugin, 0, SizerFlag::All, 4);
     toolbar.add(&close, 0, SizerFlag::All, 4);
 

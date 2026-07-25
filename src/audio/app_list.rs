@@ -157,11 +157,11 @@ fn candidates(
 /// and speakers has apps on both, and an app missing from the picker because it
 /// happens to be playing to the other endpoint would look like a bug.
 fn session_pids() -> HashSet<u32> {
+    use windows::Win32::Foundation::S_OK;
     use windows::Win32::Media::Audio::{
         DEVICE_STATE_ACTIVE, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator,
         MMDeviceEnumerator, eRender,
     };
-    use windows::Win32::Foundation::S_OK;
     use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance};
     use windows_core::Interface;
 
@@ -183,7 +183,9 @@ fn session_pids() -> HashSet<u32> {
         };
         let count = devices.GetCount().unwrap_or(0);
         for i in 0..count {
-            let Ok(device) = devices.Item(i) else { continue };
+            let Ok(device) = devices.Item(i) else {
+                continue;
+            };
             let manager: IAudioSessionManager2 = match device.Activate(CLSCTX_ALL, None) {
                 Ok(m) => m,
                 Err(e) => {
@@ -226,10 +228,10 @@ fn session_pids() -> HashSet<u32> {
 /// the wider view short enough to arrow through.
 fn windowed_pids() -> HashSet<u32> {
     use windows::Win32::Foundation::{HWND, LPARAM, TRUE};
-    use windows_core::BOOL;
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowTextLengthW, GetWindowThreadProcessId, IsWindowVisible,
     };
+    use windows_core::BOOL;
 
     unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> BOOL {
         // SAFETY: `param` is the `&mut HashSet` handed to `EnumWindows` below,
@@ -375,7 +377,11 @@ mod tests {
         for app in &apps {
             assert!(!app.exe.trim().is_empty());
             assert!(!app.display_name.trim().is_empty());
-            assert!(!is_system_process(&app.exe), "{:?} is a system process", app.exe);
+            assert!(
+                !is_system_process(&app.exe),
+                "{:?} is a system process",
+                app.exe
+            );
         }
         assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
     }

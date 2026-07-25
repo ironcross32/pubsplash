@@ -167,12 +167,7 @@ pub fn set_param(src: &dyn ParamSource, index: i32, value: f32) -> f32 {
 
 /// Opens the parameter dialog for a plugin instance. On close, the slot's
 /// state is snapshotted back into config.
-pub fn edit_parameters(
-    app: &Rc<App>,
-    target: ChainTarget,
-    slot: usize,
-    plugin: Arc<Vst2Plugin>,
-) {
+pub fn edit_parameters(app: &Rc<App>, target: ChainTarget, slot: usize, plugin: Arc<Vst2Plugin>) {
     let Some(frame) = app.widgets(|w| w.frame.clone()) else {
         return;
     };
@@ -196,12 +191,20 @@ pub fn edit_parameters(
     let filter_label = StaticText::builder(&panel).with_label("Filter").build();
     let filter_box = TextCtrl::builder(&panel).build();
     super::set_accessible_name(&filter_box, "Filter parameters");
-    super::help::tag(&filter_box, "dialog.fxParams.filter", "Filter parameters by name box");
+    super::help::tag(
+        &filter_box,
+        "dialog.fxParams.filter",
+        "Filter parameters by name box",
+    );
 
     let param_label = StaticText::builder(&panel).with_label("Parameter").build();
     let param_choice = Choice::builder(&panel).build();
     super::set_accessible_name(&param_choice, "Parameter");
-    super::help::tag(&param_choice, "dialog.fxParams.parameter", "Plugin parameter chooser");
+    super::help::tag(
+        &param_choice,
+        "dialog.fxParams.parameter",
+        "Plugin parameter chooser",
+    );
 
     let value_label = StaticText::builder(&panel).with_label("Value").build();
     let value_slider = Slider::builder(&panel)
@@ -210,7 +213,11 @@ pub fn edit_parameters(
         .with_max_value(1000)
         .build();
     super::set_accessible_name(&value_slider, "Value");
-    super::help::tag(&value_slider, "dialog.fxParams.value", "Selected parameter value slider");
+    super::help::tag(
+        &value_slider,
+        "dialog.fxParams.value",
+        "Selected parameter value slider",
+    );
     // Give the slider a UIA provider so keyboard steps announce the plugin's
     // formatted value (see `slider_uia`). Kept alive until the dialog closes.
     let announcer = Rc::new(slider_uia::install(&value_slider));
@@ -219,13 +226,21 @@ pub fn edit_parameters(
         .with_style(TextCtrlStyle::ProcessEnter)
         .build();
     super::set_accessible_name(&value_text, "Value entry");
-    super::help::tag(&value_text, "dialog.fxParams.valueText", "Type-in value entry for the selected parameter");
+    super::help::tag(
+        &value_text,
+        "dialog.fxParams.valueText",
+        "Type-in value entry for the selected parameter",
+    );
 
     let unnamed_check = CheckBox::builder(&panel)
         .with_label("Show &unnamed parameters")
         .build();
     super::set_accessible_name(&unnamed_check, "Show unnamed parameters");
-    super::help::tag(&unnamed_check, "dialog.fxParams.showUnnamed", "Show unnamed parameters checkbox");
+    super::help::tag(
+        &unnamed_check,
+        "dialog.fxParams.showUnnamed",
+        "Show unnamed parameters checkbox",
+    );
 
     let close = Button::builder(&panel).with_label("&Close").build();
 
@@ -264,7 +279,14 @@ pub fn edit_parameters(
             };
             let value = src.get(index);
             let text = formatted_value(src.as_ref(), index);
-            announce_value(&announcer, &value_slider, &value_text, &src.name(index), value, &text);
+            announce_value(
+                &announcer,
+                &value_slider,
+                &value_text,
+                &src.name(index),
+                value,
+                &text,
+            );
         }
     };
 
@@ -382,7 +404,14 @@ pub fn edit_parameters(
             };
             event.skip(false);
             let text = formatted_value(src.as_ref(), index);
-            announce_value(&announcer, &value_slider, &value_text, &src.name(index), new_value, &text);
+            announce_value(
+                &announcer,
+                &value_slider,
+                &value_text,
+                &src.name(index),
+                new_value,
+                &text,
+            );
         });
     }
 

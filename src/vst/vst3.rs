@@ -67,12 +67,8 @@ pub fn scan(path: &Path) -> Result<ScanOutput, String> {
     unsafe {
         // LOAD_WITH_ALTERED_SEARCH_PATH: dependency DLLs shipped next to the
         // plugin must resolve from the plugin's folder, not the helper's.
-        let module = LoadLibraryExW(
-            PCWSTR(wide.as_ptr()),
-            None,
-            LOAD_WITH_ALTERED_SEARCH_PATH,
-        )
-        .map_err(|e| format!("could not load module: {e}"))?;
+        let module = LoadLibraryExW(PCWSTR(wide.as_ptr()), None, LOAD_WITH_ALTERED_SEARCH_PATH)
+            .map_err(|e| format!("could not load module: {e}"))?;
 
         if let Some(init) = GetProcAddress(module, s!("InitDll")) {
             let init: InitDllFn = std::mem::transmute(init);

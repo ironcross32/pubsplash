@@ -14,7 +14,11 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl) {
     super::set_accessible_name(&chat_list, "Messages");
     super::help::tag(&chat_list, "tab.chat.messageList", "Chat message list");
     let view_button = Button::builder(panel).with_label("&View message").build();
-    super::help::tag(&view_button, "tab.chat.viewButton", "View selected message button");
+    super::help::tag(
+        &view_button,
+        "tab.chat.viewButton",
+        "View selected message button",
+    );
 
     let input_label = StaticText::builder(panel)
         .with_label("Send a message")
@@ -25,7 +29,11 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl) {
     super::set_accessible_name(&chat_input, "Send a message");
     super::help::tag(&chat_input, "tab.chat.input", "Chat message input box");
     let send_button = Button::builder(panel).with_label("Se&nd").build();
-    super::help::tag(&send_button, "tab.chat.sendButton", "Send chat message button");
+    super::help::tag(
+        &send_button,
+        "tab.chat.sendButton",
+        "Send chat message button",
+    );
 
     sizer.add(&list_label, 0, SizerFlag::All, 4);
     sizer.add(&chat_list, 1, SizerFlag::Expand | SizerFlag::All, 4);
@@ -44,14 +52,18 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl) {
     {
         let app = app.clone();
         let list = chat_list.clone();
-        chat_list.clone().on_item_double_clicked(move |_| view_selected(&app, &list));
+        chat_list
+            .clone()
+            .on_item_double_clicked(move |_| view_selected(&app, &list));
     }
 
     // Sending: Enter in the box or the Send button.
     {
         let app = app.clone();
         let input = chat_input.clone();
-        chat_input.clone().on_text_enter(move |_| send_message(&app, &input));
+        chat_input
+            .clone()
+            .on_text_enter(move |_| send_message(&app, &input));
     }
     {
         let app = app.clone();
@@ -80,10 +92,7 @@ fn send_message(app: &Rc<App>, input: &TextCtrl) {
     if content.is_empty() {
         return;
     }
-    if !matches!(
-        app.run.borrow().stream,
-        super::StreamState::Live { .. }
-    ) {
+    if !matches!(app.run.borrow().stream, super::StreamState::Live { .. }) {
         super::show_error(
             input,
             "Chat",
@@ -99,9 +108,13 @@ fn view_selected(app: &Rc<App>, list: &ListBox) {
     let Some(index) = list.get_selection() else {
         return;
     };
-    let Some((user, content)) = app.run.borrow().chat.get(index as usize).map(|entry| {
-        (entry.user.clone(), entry.content.clone())
-    }) else {
+    let Some((user, content)) = app
+        .run
+        .borrow()
+        .chat
+        .get(index as usize)
+        .map(|entry| (entry.user.clone(), entry.content.clone()))
+    else {
         return;
     };
 

@@ -419,11 +419,15 @@ impl Default for SourceConfig {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SourceKindConfig {
     /// `device_id: None` means the system default capture device.
-    Microphone { device_id: Option<String> },
+    Microphone {
+        device_id: Option<String>,
+    },
     DesktopAudio,
-    Application { process_name: String },
+    Application {
+        process_name: String,
+    },
     Tts(TtsSourceConfig),
-    SoundEvents,
+    SoundEvents(SoundEventsSourceConfig),
 }
 
 impl SourceKindConfig {
@@ -433,7 +437,7 @@ impl SourceKindConfig {
             SourceKindConfig::DesktopAudio => "Desktop Audio",
             SourceKindConfig::Application { .. } => "Application",
             SourceKindConfig::Tts(_) => "Text-to-Speech",
-            SourceKindConfig::SoundEvents => "Sound Events",
+            SourceKindConfig::SoundEvents(_) => "Sound Events",
         }
     }
 }
@@ -659,7 +663,10 @@ mod tests {
         std::fs::write(&path, json).unwrap();
         let config = load_from(&path);
         let sources = &config.scenes.scenes[0].sources;
-        assert_eq!(sources[0].volume, 100, "un-boosted volume must clamp to 100");
+        assert_eq!(
+            sources[0].volume, 100,
+            "un-boosted volume must clamp to 100"
+        );
         assert_eq!(sources[1].volume, 350, "boosted volume must survive");
         assert_eq!(config.audio.master_volume, 100);
     }
@@ -705,6 +712,40 @@ mod tests {
         config.connection.sites.clear();
         save_to(&config, &path);
         let loaded = load_from(&path);
-        assert!(loaded.connection.sites.iter().any(|s| s.url == MAIN_SITE_URL));
+        assert!(
+            loaded
+                .connection
+                .sites
+                .iter()
+                .any(|s| s.url == MAIN_SITE_URL)
+        );
+    }
+}
+
+/// Settings for one Sound Events source. A source is deliberately independent:
+/// two scenes may use different packs or react to different events.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SoundEventsSourceConfig {
+    /// A `.pspack` file or a development pack directory containing
+    /// `sound-pack.toml` and `sounds/`.
+    pub pack_path: String,
+    pub listener_increase: bool,
+    pub listener_decrease: bool,
+    pub listener_peak_increase: bool,
+    pub incoming_chat: bool,
+    pub outgoing_chat: bool,
+}
+
+impl Default for SoundEventsSourceConfig {
+    fn default() -> Self {
+        Self {
+            pack_path: String::new(),
+            listener_increase: true,
+            listener_decrease: true,
+            listener_peak_increase: true,
+            incoming_chat: true,
+            outgoing_chat: true,
+        }
     }
 }

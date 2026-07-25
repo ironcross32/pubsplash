@@ -65,15 +65,29 @@ pub fn pick_application(frame: &Frame, current: &str) -> Pick {
         .with_label("&Select")
         .build();
     let refresh = Button::builder(&panel).with_label("&Refresh").build();
-    let type_name = Button::builder(&panel).with_label("&Type a name...").build();
+    let type_name = Button::builder(&panel)
+        .with_label("&Type a name...")
+        .build();
     let cancel = Button::builder(&panel)
         .with_id(ID_CANCEL)
         .with_label("&Cancel")
         .build();
     select.set_default();
-    super::help::tag(&select, "dialog.appPicker.select", "Select highlighted application button");
-    super::help::tag(&refresh, "dialog.appPicker.refresh", "Refresh the application list button");
-    super::help::tag(&type_name, "dialog.appPicker.typeName", "Type an application name button");
+    super::help::tag(
+        &select,
+        "dialog.appPicker.select",
+        "Select highlighted application button",
+    );
+    super::help::tag(
+        &refresh,
+        "dialog.appPicker.refresh",
+        "Refresh the application list button",
+    );
+    super::help::tag(
+        &type_name,
+        "dialog.appPicker.typeName",
+        "Type an application name button",
+    );
     for b in [&select, &refresh, &type_name, &cancel] {
         buttons.add(b, 0, SizerFlag::All, 4);
     }
@@ -126,7 +140,10 @@ pub fn pick_application(frame: &Frame, current: &str) -> Pick {
                 if only_sounding && !app.has_audio {
                     continue;
                 }
-                rows.push((app.exe.clone(), format!("{} ({})", app.display_name, app.exe)));
+                rows.push((
+                    app.exe.clone(),
+                    format!("{} ({})", app.display_name, app.exe),
+                ));
             }
 
             list.clear();

@@ -38,14 +38,9 @@ impl NameContext {
         apps: HashMap<String, AppProcess>,
         failing: HashSet<String>,
     ) -> Self {
-        let needs_devices = sources.iter().any(|s| {
-            matches!(
-                s.kind,
-                SourceKindConfig::Microphone {
-                    device_id: Some(_)
-                }
-            )
-        });
+        let needs_devices = sources
+            .iter()
+            .any(|s| matches!(s.kind, SourceKindConfig::Microphone { device_id: Some(_) }));
         Self {
             devices: if needs_devices {
                 crate::audio::device::capture_devices()
@@ -126,7 +121,7 @@ fn base_strip_label(source: &SourceConfig, ctx: &NameContext) -> String {
                 format!("Text-to-Speech ({})", tts.voice)
             }
         }
-        SourceKindConfig::SoundEvents => "Sound Events".to_string(),
+        SourceKindConfig::SoundEvents(_) => "Sound Events".to_string(),
     }
 }
 
@@ -136,7 +131,9 @@ fn list_label(source: &SourceConfig, ctx: &NameContext) -> String {
 
 fn base_list_label(source: &SourceConfig, ctx: &NameContext) -> String {
     match &source.kind {
-        SourceKindConfig::Microphone { device_id: None } => "Microphone (default device)".to_string(),
+        SourceKindConfig::Microphone { device_id: None } => {
+            "Microphone (default device)".to_string()
+        }
         SourceKindConfig::Microphone { device_id: Some(_) } => base_strip_label(source, ctx),
         SourceKindConfig::DesktopAudio => "Desktop Audio".to_string(),
         SourceKindConfig::Application { process_name } => {
@@ -160,7 +157,7 @@ fn base_list_label(source: &SourceConfig, ctx: &NameContext) -> String {
                 format!("Text-to-Speech: {engine}, {}", tts.voice)
             }
         }
-        SourceKindConfig::SoundEvents => "Sound Events".to_string(),
+        SourceKindConfig::SoundEvents(_) => "Sound Events".to_string(),
     }
 }
 
@@ -290,7 +287,12 @@ mod tests {
             "Desktop Audio"
         );
         assert_eq!(
-            list_label(&source(SourceKindConfig::SoundEvents), &ctx()),
+            list_label(
+                &source(SourceKindConfig::SoundEvents(
+                    crate::config::SoundEventsSourceConfig::default()
+                )),
+                &ctx()
+            ),
             "Sound Events"
         );
     }

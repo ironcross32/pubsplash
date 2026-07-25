@@ -162,8 +162,10 @@ fn run(
             AudioClient::new_application_loopback_client(std::process::id(), false)
                 .map_err(|e| format!("opening the desktop audio loopback client: {e}"))?
         }
-        CaptureKind::Application { pid } => AudioClient::new_application_loopback_client(*pid, true)
-            .map_err(|e| format!("opening the loopback client for process {pid}: {e}"))?,
+        CaptureKind::Application { pid } => {
+            AudioClient::new_application_loopback_client(*pid, true)
+                .map_err(|e| format!("opening the loopback client for process {pid}: {e}"))?
+        }
     };
 
     let mode = StreamMode::EventsShared {
@@ -293,7 +295,10 @@ mod tests {
         // alive and trying rather than gone.
         assert!(!handle.is_finished());
         std::thread::sleep(Duration::from_millis(400));
-        assert!(!handle.is_finished(), "the source gave up instead of retrying");
+        assert!(
+            !handle.is_finished(),
+            "the source gave up instead of retrying"
+        );
 
         stop.store(true, Ordering::Relaxed);
         let deadline = std::time::Instant::now() + Duration::from_secs(2);

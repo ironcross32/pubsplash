@@ -143,7 +143,10 @@ mod tests {
             strip.process(&mut b);
             block = b;
         }
-        assert!(block.iter().all(|&s| s == 0.0), "silent after fade completes");
+        assert!(
+            block.iter().all(|&s| s == 0.0),
+            "silent after fade completes"
+        );
     }
 
     #[test]

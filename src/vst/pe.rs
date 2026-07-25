@@ -38,7 +38,8 @@ pub fn inspect(path: &Path) -> Result<PeInfo, String> {
     let read_at = |file: &mut File, offset: u64, buf: &mut [u8]| -> Result<(), String> {
         file.seek(SeekFrom::Start(offset))
             .map_err(|e| format!("seek failed: {e}"))?;
-        file.read_exact(buf).map_err(|e| format!("read failed: {e}"))
+        file.read_exact(buf)
+            .map_err(|e| format!("read failed: {e}"))
     };
 
     let mut dos = [0u8; 64];
@@ -89,7 +90,12 @@ pub fn inspect(path: &Path) -> Result<PeInfo, String> {
         let virtual_address = u32::from_le_bytes(s[12..16].try_into().unwrap());
         let raw_size = u32::from_le_bytes(s[16..20].try_into().unwrap());
         let raw_ptr = u32::from_le_bytes(s[20..24].try_into().unwrap());
-        sections.push((virtual_address, virtual_size.max(raw_size), raw_ptr, raw_size));
+        sections.push((
+            virtual_address,
+            virtual_size.max(raw_size),
+            raw_ptr,
+            raw_size,
+        ));
     }
     let rva_to_offset = |rva: u32| -> Option<u64> {
         sections
@@ -119,7 +125,10 @@ pub fn inspect(path: &Path) -> Result<PeInfo, String> {
                         continue;
                     }
                     let read = file.read(&mut name_buf).unwrap_or(0);
-                    let end = name_buf[..read].iter().position(|&b| b == 0).unwrap_or(read);
+                    let end = name_buf[..read]
+                        .iter()
+                        .position(|&b| b == 0)
+                        .unwrap_or(read);
                     if let Ok(name) = std::str::from_utf8(&name_buf[..end]) {
                         exports.push(name.to_string());
                     }

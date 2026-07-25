@@ -47,8 +47,9 @@ impl Mp3Encoder {
     /// (possibly empty while LAME buffers).
     pub fn encode(&mut self, pcm: &[i16]) -> Result<&[u8], String> {
         self.out.clear();
-        self.out
-            .reserve(mp3lame_encoder::max_required_buffer_size(pcm.len() / CHANNELS));
+        self.out.reserve(mp3lame_encoder::max_required_buffer_size(
+            pcm.len() / CHANNELS,
+        ));
         let written = self
             .encoder
             .encode(InterleavedPcm(pcm), self.out.spare_capacity_mut())
@@ -95,7 +96,10 @@ mod tests {
             produced.extend_from_slice(enc.encode(&block).unwrap());
         }
         produced.extend(enc.finish().unwrap());
-        assert!(produced.len() > 4000, "should produce a meaningful bitstream");
+        assert!(
+            produced.len() > 4000,
+            "should produce a meaningful bitstream"
+        );
         // MP3 frame sync: 11 set bits.
         let sync = produced
             .windows(2)

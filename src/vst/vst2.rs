@@ -40,10 +40,8 @@ const AUDIO_MASTER_GET_PRODUCT_STRING: i32 = 33;
 const AUDIO_MASTER_GET_VENDOR_VERSION: i32 = 34;
 const AUDIO_MASTER_GET_LANGUAGE: i32 = 35;
 
-type Dispatcher =
-    unsafe extern "C" fn(*mut AEffect, i32, i32, isize, *mut c_void, f32) -> isize;
-type HostCallback =
-    extern "C" fn(*mut AEffect, i32, i32, isize, *mut c_void, f32) -> isize;
+type Dispatcher = unsafe extern "C" fn(*mut AEffect, i32, i32, isize, *mut c_void, f32) -> isize;
+type HostCallback = extern "C" fn(*mut AEffect, i32, i32, isize, *mut c_void, f32) -> isize;
 type EntryPoint = unsafe extern "C" fn(HostCallback) -> *mut AEffect;
 
 #[repr(C)]
@@ -170,12 +168,8 @@ pub fn scan(path: &Path) -> Result<ScanOutput, String> {
     unsafe {
         // LOAD_WITH_ALTERED_SEARCH_PATH: dependency DLLs shipped next to the
         // plugin must resolve from the plugin's folder, not the helper's.
-        let module = LoadLibraryExW(
-            PCWSTR(wide.as_ptr()),
-            None,
-            LOAD_WITH_ALTERED_SEARCH_PATH,
-        )
-        .map_err(|e| format!("could not load DLL: {e}"))?;
+        let module = LoadLibraryExW(PCWSTR(wide.as_ptr()), None, LOAD_WITH_ALTERED_SEARCH_PATH)
+            .map_err(|e| format!("could not load DLL: {e}"))?;
         let entry = GetProcAddress(module, s!("VSTPluginMain"))
             .or_else(|| GetProcAddress(module, s!("main")))
             .ok_or("no VST2 entry point (VSTPluginMain or main)")?;
@@ -217,8 +211,14 @@ pub fn scan(path: &Path) -> Result<ScanOutput, String> {
                 .unwrap_or_default();
         }
         let vendor = effect_string(effect, dispatcher, EFF_GET_VENDOR_STRING);
-        let vendor_version =
-            dispatcher(effect, EFF_GET_VENDOR_VERSION, 0, 0, std::ptr::null_mut(), 0.0) as i32;
+        let vendor_version = dispatcher(
+            effect,
+            EFF_GET_VENDOR_VERSION,
+            0,
+            0,
+            std::ptr::null_mut(),
+            0.0,
+        ) as i32;
         let version = if vendor_version != 0 {
             vendor_version.to_string()
         } else {

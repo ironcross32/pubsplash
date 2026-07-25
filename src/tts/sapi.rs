@@ -9,8 +9,8 @@
 //! capture excludes Pubsplash's own process, so local playback can never
 //! loop back into the stream.
 
-use crate::audio::{ExternalFeeds, FeedResult};
 use crate::audio::mixer::{CHANNELS, SAMPLE_RATE};
+use crate::audio::{ExternalFeeds, FeedResult};
 use crossbeam_channel::{Receiver, Sender};
 use windows::Win32::Foundation::HGLOBAL;
 use windows::Win32::Media::Audio::WAVEFORMATEX;
@@ -19,8 +19,8 @@ use windows::Win32::Media::Speech::{
     SpStream, SpVoice,
 };
 use windows::Win32::System::Com::{
-    CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
-    IStream, STREAM_SEEK_SET, StructuredStorage::CreateStreamOnHGlobal,
+    CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, IStream,
+    STREAM_SEEK_SET, StructuredStorage::CreateStreamOnHGlobal,
 };
 use windows::core::{GUID, PCWSTR};
 

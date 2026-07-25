@@ -27,20 +27,34 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
     let title_label = StaticText::builder(&panel).with_label("Title").build();
     let title_input = TextCtrl::builder(&panel).with_value(&current.title).build();
     super::set_accessible_name(&title_input, "Title");
-    super::help::tag(&title_input, "dialog.streamInfo.title", "Stream title input");
+    super::help::tag(
+        &title_input,
+        "dialog.streamInfo.title",
+        "Stream title input",
+    );
 
-    let description_label = StaticText::builder(&panel).with_label("Description").build();
+    let description_label = StaticText::builder(&panel)
+        .with_label("Description")
+        .build();
     let description_input = TextCtrl::builder(&panel)
         .with_style(TextCtrlStyle::MultiLine)
         .with_value(&current.description)
         .build();
     super::set_accessible_name(&description_input, "Description");
-    super::help::tag(&description_input, "dialog.streamInfo.description", "Stream description input");
+    super::help::tag(
+        &description_input,
+        "dialog.streamInfo.description",
+        "Stream description input",
+    );
 
     let quality_label = StaticText::builder(&panel).with_label("Quality").build();
     let quality_choice = Choice::builder(&panel).build();
     super::set_accessible_name(&quality_choice, "Quality");
-    super::help::tag(&quality_choice, "dialog.streamInfo.quality", "Stream audio quality (bitrate) choice");
+    super::help::tag(
+        &quality_choice,
+        "dialog.streamInfo.quality",
+        "Stream audio quality (bitrate) choice",
+    );
     for kbps in QUALITY_KBPS {
         quality_choice.append(&format!("{kbps} kbps"));
     }
@@ -56,7 +70,11 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
         .with_label("Archive the stream")
         .build();
     super::set_accessible_name(&archive_check, "Archive the stream");
-    super::help::tag(&archive_check, "dialog.streamInfo.archive", "Archive the stream checkbox");
+    super::help::tag(
+        &archive_check,
+        "dialog.streamInfo.archive",
+        "Archive the stream checkbox",
+    );
     // Before the user confirms the dialog this session, the "Archive streams by
     // default" preference supplies the initial state; afterwards their explicit
     // choice (in `current.archive`) wins.
@@ -69,7 +87,11 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
         .with_label("Record this stream")
         .build();
     super::set_accessible_name(&record_check, "Record this stream");
-    super::help::tag(&record_check, "dialog.streamInfo.record", "Record this stream locally checkbox");
+    super::help::tag(
+        &record_check,
+        "dialog.streamInfo.record",
+        "Record this stream locally checkbox",
+    );
     // Same rule as archiving: the "Record streams by default" preference seeds
     // the box until the user confirms the dialog this session.
     let default_record = current.record

@@ -157,7 +157,10 @@ impl AudioPubClient {
 /// redirect flow and the JSON envelope flow.
 enum ActionResult {
     Redirect(String),
-    Failure { status: u16, message: Option<String> },
+    Failure {
+        status: u16,
+        message: Option<String>,
+    },
 }
 
 /// Interprets a form-action response. Native flow: 3xx with a Location
@@ -337,7 +340,10 @@ mod tests {
                 .unwrap();
         match parse_action_envelope(&body).unwrap() {
             ActionResult::Redirect(location) => {
-                assert_eq!(stream_id_from_location(&location).as_deref(), Some("abc-123"));
+                assert_eq!(
+                    stream_id_from_location(&location).as_deref(),
+                    Some("abc-123")
+                );
             }
             _ => panic!("expected redirect"),
         }

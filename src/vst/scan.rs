@@ -5,7 +5,7 @@
 //! nothing.
 
 use super::types::{PluginCache, PluginInfo, RejectedEntry, ScanOutput};
-use super::{discover, moduleinfo, PluginFormat};
+use super::{PluginFormat, discover, moduleinfo};
 use crossbeam_channel::{Receiver, Sender};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -22,7 +22,9 @@ pub enum ScanMode {
 
 pub enum ScanEvent {
     /// Sent once, after enumeration: how many plugins will be scanned.
-    Started { total: usize },
+    Started {
+        total: usize,
+    },
     Progress {
         done: usize,
         total: usize,
