@@ -1,8 +1,15 @@
 //! Home tab: stream overview, mixer, scene switching, start/stop button.
 
-use super::{App, WXK_END, WXK_HOME};
+use super::slider_uia;
+use super::{
+    App, ID_MIXER_BOOST, WXK_DOWN, WXK_END, WXK_HOME, WXK_LEFT, WXK_PAGEDOWN, WXK_PAGEUP,
+    WXK_RIGHT, WXK_UP,
+};
 use crate::audio::EngineCommand;
+use crate::config::max_volume;
+use std::cell::Cell;
 use std::rc::Rc;
+use wxdragon::event::{EventType, WxEvtHandler};
 use wxdragon::prelude::*;
 
 /// Builds the tab; returns (overview box, stream button, record button, scene
@@ -138,6 +145,12 @@ pub fn refresh_scene_list(app: &Rc<App>) {
     });
 }
 
+/// Volume change per arrow key press, in percentage points.
+const STEP: i32 = 1;
+/// Volume change per Page Up / Page Down press, in percentage points. Kept the
+/// same whether or not the strip is boosted, so a page always means "10%".
+const PAGE_STEP: i32 = 10;
+
 /// What a mixer strip controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StripTarget {
@@ -160,24 +173,29 @@ pub fn rebuild_mixer(app: &Rc<App>) {
         return;
     };
 
+    // The old sliders' UIA providers must go before their windows do.
+    drop_mixer_announcers(app);
     if let Some(old) = old_inner {
         old.destroy();
     }
     let inner = Panel::builder(&mixer_panel).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
-    let (master_volume, master_muted, sources, buses) = {
+    let ((master_volume, master_muted, master_boost), sources, buses) = {
         let config = app.config.borrow();
         (
-            config.audio.master_volume,
-            config.audio.master_muted,
+            (
+                config.audio.master_volume,
+                config.audio.master_muted,
+                config.audio.master_boost,
+            ),
             config
                 .scenes
                 .active_scene()
                 .map(|s| {
                     s.sources
                         .iter()
-                        .map(|src| (src.name.clone(), src.volume, src.muted))
+                        .map(|src| (src.name.clone(), src.volume, src.muted, src.boost))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default(),
@@ -185,7 +203,7 @@ pub fn rebuild_mixer(app: &Rc<App>) {
                 .buses
                 .buses
                 .iter()
-                .map(|b| (b.name.clone(), b.volume, b.muted))
+                .map(|b| (b.name.clone(), b.volume, b.muted, b.boost))
                 .collect::<Vec<_>>(),
         )
     };
@@ -198,10 +216,11 @@ pub fn rebuild_mixer(app: &Rc<App>) {
         "Master",
         master_volume,
         master_muted,
+        master_boost,
         StripTarget::Master,
     );
 
-    for (index, (name, volume, muted)) in sources.iter().enumerate() {
+    for (index, (name, volume, muted, boost)) in sources.iter().enumerate() {
         add_strip(
             app,
             &inner,
@@ -209,10 +228,11 @@ pub fn rebuild_mixer(app: &Rc<App>) {
             name,
             *volume,
             *muted,
+            *boost,
             StripTarget::Source(index),
         );
     }
-    for (index, (name, volume, muted)) in buses.iter().enumerate() {
+    for (index, (name, volume, muted, boost)) in buses.iter().enumerate() {
         add_strip(
             app,
             &inner,
@@ -220,6 +240,7 @@ pub fn rebuild_mixer(app: &Rc<App>) {
             &format!("{name} bus"),
             *volume,
             *muted,
+            *boost,
             StripTarget::Bus(index),
         );
     }
@@ -232,6 +253,27 @@ pub fn rebuild_mixer(app: &Rc<App>) {
     home_panel.layout();
 }
 
+/// Removes the UIA providers installed on the current mixer sliders. Must run
+/// while those sliders' windows still exist — i.e. before `rebuild_mixer`
+/// destroys the inner panel, and before the frame is torn down.
+pub fn drop_mixer_announcers(app: &Rc<App>) {
+    app.widgets(|w| {
+        for announcer in w.mixer_announcers.borrow_mut().drain(..) {
+            announcer.uninstall();
+        }
+    });
+}
+
+/// The slider's announced name. Boost is part of the name so a screen reader
+/// says which strips are amplified when tabbing through the mixer.
+fn strip_label(name: &str, boost: bool) -> String {
+    if boost {
+        format!("{name} volume, boost")
+    } else {
+        format!("{name} volume")
+    }
+}
+
 /// One mixer strip.
 fn add_strip(
     app: &Rc<App>,
@@ -240,19 +282,29 @@ fn add_strip(
     name: &str,
     volume: u32,
     muted: bool,
+    boost: bool,
     target: StripTarget,
 ) {
     let row = BoxSizer::builder(Orientation::Horizontal).build();
     let label = StaticText::builder(parent)
         .with_label(&format!("{name} volume"))
         .build();
+    // The strip's current ceiling, shared with the handlers so the boost toggle
+    // can widen or narrow the range without rebuilding (and re-focusing) it.
+    let max = Rc::new(Cell::new(max_volume(boost) as i32));
     let slider = Slider::builder(parent)
         .with_value(volume as i32)
         .with_min_value(0)
-        .with_max_value(100)
+        .with_max_value(max.get())
         .build();
-    super::set_accessible_name(&slider, &format!("{name} volume"));
+    super::set_accessible_name(&slider, &strip_label(name, boost));
     super::help::tag(&slider, "tab.home.mixer.strip.volume", "Mixer strip volume slider");
+    // A native trackbar announces its position as a percentage of its *range*,
+    // which is wrong once the range is 0-500 (100 would be read as "20%"). Our
+    // own UIA provider speaks the literal value instead.
+    let announcer = Rc::new(slider_uia::install(&slider));
+    announcer.update(&strip_label(name, boost), &format!("{volume}%"));
+    app.widgets(|w| w.mixer_announcers.borrow_mut().push(announcer.clone()));
     let mute_check = CheckBox::builder(parent).with_label("Mute").build();
     mute_check.set_value(muted);
     super::set_accessible_name(&mute_check, &format!("Mute {name}"));
@@ -267,30 +319,107 @@ fn add_strip(
     {
         let app = app.clone();
         let slider_for_handler = slider.clone();
+        let announcer = announcer.clone();
+        let max = max.clone();
+        let name = name.to_string();
         slider.on_slider(move |_| {
-            let value = slider_for_handler.value().max(0).min(100) as u32;
+            let value = slider_for_handler.value().clamp(0, max.get()) as u32;
             apply_volume(&app, target, value);
+            announcer.update(&strip_label(&name, max.get() > 100), &format!("{value}%"));
         });
     }
 
-    // Home = maximum, End = minimum (the reverse of the native slider keys).
+    // Every movement key is handled here rather than by the native trackbar,
+    // whose directions are the opposite of what people expect: natively Up and
+    // Page Up move *down*, Down and Page Down move *up*, Home jumps to the
+    // minimum and End to the maximum. Owning the whole mapping keeps it
+    // consistent across strips and at any range (0-100 or 0-500).
+    //
+    // wxDragon re-arms `Skip(true)` before calling every closure, so a handled
+    // key must be consumed with an explicit `skip(false)`. Without it the
+    // trackbar's default proc also gets the key, applies its opposite mapping,
+    // and the resulting `wxEVT_SLIDER` overwrites what we just saved.
     {
         let app = app.clone();
         let slider_for_keys = slider.clone();
+        let announcer = announcer.clone();
+        let max = max.clone();
+        let name = name.to_string();
         slider.on_key_down(move |event| {
-            match super::key_of(&event).map(|(code, _)| code) {
-                Some(WXK_HOME) => {
-                    slider_for_keys.set_value(100);
-                    apply_volume(&app, target, 100);
-                }
-                Some(WXK_END) => {
-                    slider_for_keys.set_value(0);
-                    apply_volume(&app, target, 0);
-                }
+            let Some((code, _)) = super::key_of(&event) else {
+                event.skip(true);
+                return;
+            };
+            let ceiling = max.get();
+            let current = slider_for_keys.value();
+            let value = match code {
+                WXK_UP | WXK_RIGHT => current + STEP,
+                WXK_DOWN | WXK_LEFT => current - STEP,
+                WXK_PAGEUP => current + PAGE_STEP,
+                WXK_PAGEDOWN => current - PAGE_STEP,
+                WXK_HOME => ceiling,
+                WXK_END => 0,
                 _ => {
                     event.skip(true);
+                    return;
                 }
             }
+            .clamp(0, ceiling);
+            event.skip(false);
+            if value != current {
+                slider_for_keys.set_value(value);
+                apply_volume(&app, target, value as u32);
+            }
+            // Announced even when already at the end of the range, so the key
+            // always produces spoken feedback.
+            announcer.update(&strip_label(&name, ceiling > 100), &format!("{value}%"));
+        });
+    }
+
+    // Context menu (right-click, SHIFT+F10, or the applications key — Windows
+    // raises WM_CONTEXTMENU for all three, which wx turns into this event).
+    // `Slider` doesn't implement wxdragon's `MenuEvents` trait and the orphan
+    // rule blocks adding it, so bind the raw event types instead.
+    {
+        let app = app.clone();
+        let slider_for_menu = slider.clone();
+        slider.bind_internal(EventType::CONTEXT_MENU, move |_| {
+            let boost = boost_of(&app, target);
+            let mut menu = Menu::builder()
+                .append_check_item(
+                    ID_MIXER_BOOST,
+                    "Enable volume boost",
+                    "Allow this strip's volume to go above 100%, up to 500%",
+                )
+                .build();
+            menu.check_item(ID_MIXER_BOOST, boost);
+            // Anchor to the slider rather than the mouse so the keyboard paths
+            // put the menu next to the control they came from.
+            let at = slider_for_menu.client_to_screen(Point { x: 8, y: 8 });
+            slider_for_menu.popup_menu(&mut menu, Some(at));
+        });
+    }
+
+    // The popup is shown on the slider, so its command comes back here.
+    {
+        let app = app.clone();
+        let slider_for_boost = slider.clone();
+        let announcer = announcer.clone();
+        let max = max.clone();
+        let name = name.to_string();
+        slider.bind_with_id_internal(EventType::MENU, ID_MIXER_BOOST, move |_| {
+            let boost = !boost_of(&app, target);
+            set_boost(&app, target, boost);
+            let ceiling = max_volume(boost) as i32;
+            max.set(ceiling);
+            // Dropping boost snaps an amplified strip back to 100%.
+            let value = slider_for_boost.value().clamp(0, ceiling);
+            slider_for_boost.set_range(0, ceiling);
+            slider_for_boost.set_value(value);
+            apply_volume(&app, target, value as u32);
+            let label = strip_label(&name, boost);
+            super::set_accessible_name(&slider_for_boost, &label);
+            announcer.update(&label, &format!("{value}%"));
         });
     }
 
@@ -332,6 +461,42 @@ fn add_strip(
             }
             app.save_config();
         });
+    }
+}
+
+/// Whether `target`'s volume boost is currently on.
+fn boost_of(app: &Rc<App>, target: StripTarget) -> bool {
+    let config = app.config.borrow();
+    match target {
+        StripTarget::Master => config.audio.master_boost,
+        StripTarget::Source(i) => config
+            .scenes
+            .active_scene()
+            .and_then(|s| s.sources.get(i))
+            .is_some_and(|s| s.boost),
+        StripTarget::Bus(i) => config.buses.buses.get(i).is_some_and(|b| b.boost),
+    }
+}
+
+/// Sets `target`'s volume boost. The caller saves (via `apply_volume`).
+fn set_boost(app: &Rc<App>, target: StripTarget, boost: bool) {
+    let mut config = app.config.borrow_mut();
+    match target {
+        StripTarget::Master => config.audio.master_boost = boost,
+        StripTarget::Source(i) => {
+            if let Some(source) = config
+                .scenes
+                .active_scene_mut()
+                .and_then(|s| s.sources.get_mut(i))
+            {
+                source.boost = boost;
+            }
+        }
+        StripTarget::Bus(i) => {
+            if let Some(bus) = config.buses.buses.get_mut(i) {
+                bus.boost = boost;
+            }
+        }
     }
 }
 

@@ -12,11 +12,18 @@ pub const BLOCK_SAMPLES: usize = BLOCK_FRAMES * CHANNELS;
 /// Duration of the mute/unmute fade, in seconds.
 const FADE_SECONDS: f32 = 0.05;
 
+/// Absolute ceiling for a strip's volume. 100 is unity gain; anything above it
+/// is make-up gain for a source that is simply too quiet at the OS level, and
+/// is only reachable when the strip's "volume boost" is enabled in the UI (the
+/// UI holds un-boosted strips at 100). The strip itself only enforces the
+/// absolute ceiling.
+pub const MAX_VOLUME: u32 = 500;
+
 /// A volume/mute stage for one source (or the master bus). Gain changes are
 /// ramped over [`FADE_SECONDS`] so mutes fade out and unmutes fade in.
 #[derive(Debug, Clone)]
 pub struct ChannelStrip {
-    /// Slider volume 0-100, remembered across mute.
+    /// Slider volume 0-[`MAX_VOLUME`] (100 = unity), remembered across mute.
     volume: u32,
     muted: bool,
     /// The gain currently being applied (moves toward `target_gain`).
@@ -38,12 +45,12 @@ impl ChannelStrip {
         if self.muted {
             0.0
         } else {
-            (self.volume.min(100) as f32) / 100.0
+            (self.volume.min(MAX_VOLUME) as f32) / 100.0
         }
     }
 
     pub fn set_volume(&mut self, volume: u32) {
-        self.volume = volume.min(100);
+        self.volume = volume.min(MAX_VOLUME);
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -156,6 +163,39 @@ mod tests {
         assert!(
             block.iter().all(|&s| (s - 0.6).abs() < 1e-3),
             "gain should settle at volume 60 => 0.6"
+        );
+    }
+
+    /// Runs enough blocks for the gain ramp to reach its target.
+    fn settle(strip: &mut ChannelStrip) {
+        for _ in 0..60 {
+            strip.process(&mut vec![0.0f32; BLOCK_SAMPLES]);
+        }
+    }
+
+    #[test]
+    fn boosted_volume_amplifies() {
+        let mut strip = ChannelStrip::new(200, false);
+        settle(&mut strip);
+        let mut block = vec![0.25f32; BLOCK_SAMPLES];
+        strip.process(&mut block);
+        assert!(
+            block.iter().all(|&s| (s - 0.5).abs() < 1e-3),
+            "volume 200 should double the signal"
+        );
+    }
+
+    #[test]
+    fn volume_is_capped_at_max() {
+        let mut strip = ChannelStrip::new(100, false);
+        strip.set_volume(9_999);
+        assert_eq!(strip.volume(), MAX_VOLUME);
+        settle(&mut strip);
+        let mut block = vec![0.1f32; BLOCK_SAMPLES];
+        strip.process(&mut block);
+        assert!(
+            block.iter().all(|&s| (s - 0.5).abs() < 1e-3),
+            "gain should cap at MAX_VOLUME / 100 = 5.0"
         );
     }
 

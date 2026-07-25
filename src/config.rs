@@ -37,8 +37,9 @@ impl Default for Config {
 
 impl Config {
     /// Repairs routing after load or import: removes buses with duplicate or
-    /// blank names (first occurrence wins) and drops sends that reference a
-    /// bus that no longer exists.
+    /// blank names (first occurrence wins), drops sends that reference a bus
+    /// that no longer exists, and holds every un-boosted strip at 100 so a
+    /// hand-edited (or downgraded) file can't leave a strip silently amplified.
     pub fn fix_up_routing(&mut self) {
         let mut seen = std::collections::HashSet::new();
         self.buses
@@ -49,9 +50,28 @@ impl Config {
         for scene in &mut self.scenes.scenes {
             for source in &mut scene.sources {
                 source.sends.retain(|s| names.contains(&s.bus));
+                source.volume = clamp_volume(source.volume, source.boost);
             }
         }
+        for bus in &mut self.buses.buses {
+            bus.volume = clamp_volume(bus.volume, bus.boost);
+        }
+        self.audio.master_volume = clamp_volume(self.audio.master_volume, self.audio.master_boost);
     }
+}
+
+/// The ceiling for a strip's volume: 100 (unity) normally, or
+/// [`crate::audio::mixer::MAX_VOLUME`] when the strip's boost is enabled.
+pub fn max_volume(boost: bool) -> u32 {
+    if boost {
+        crate::audio::mixer::MAX_VOLUME
+    } else {
+        100
+    }
+}
+
+fn clamp_volume(volume: u32, boost: bool) -> u32 {
+    volume.min(max_volume(boost))
 }
 
 /// Mixing buses are global: sources in any scene can send to them, and every
@@ -68,8 +88,10 @@ pub struct BusesConfig {
 #[serde(default)]
 pub struct BusConfig {
     pub name: String,
-    /// 0-100.
+    /// 0-100, or 0-500 when `boost` is set.
     pub volume: u32,
+    /// Whether this strip's volume may exceed 100 (up to 500) for make-up gain.
+    pub boost: bool,
     pub muted: bool,
     /// The FX chain; list order is processing order.
     pub chain: Vec<FxSlotConfig>,
@@ -80,6 +102,7 @@ impl Default for BusConfig {
         Self {
             name: String::new(),
             volume: 100,
+            boost: false,
             muted: false,
             chain: Vec::new(),
         }
@@ -276,8 +299,10 @@ pub struct AudioConfig {
     pub format: StreamFormat,
     /// Encoder bitrate in kbps.
     pub bitrate_kbps: u32,
-    /// Master output volume, 0-100.
+    /// Master output volume, 0-100, or 0-500 when `master_boost` is set.
     pub master_volume: u32,
+    /// Whether the master volume may exceed 100 (up to 500) for make-up gain.
+    pub master_boost: bool,
     pub master_muted: bool,
 }
 
@@ -287,6 +312,7 @@ impl Default for AudioConfig {
             format: StreamFormat::Mp3,
             bitrate_kbps: 128,
             master_volume: 100,
+            master_boost: false,
             master_muted: false,
         }
     }
@@ -363,8 +389,10 @@ impl SceneConfig {
 #[serde(default)]
 pub struct SourceConfig {
     pub name: String,
-    /// 0-100.
+    /// 0-100, or 0-500 when `boost` is set.
     pub volume: u32,
+    /// Whether this strip's volume may exceed 100 (up to 500) for make-up gain.
+    pub boost: bool,
     pub muted: bool,
     pub kind: SourceKindConfig,
     /// Whether the source's signal goes directly to master. Off means it is
@@ -378,6 +406,7 @@ impl Default for SourceConfig {
         Self {
             name: String::new(),
             volume: 100,
+            boost: false,
             muted: false,
             kind: SourceKindConfig::Microphone { device_id: None },
             to_master: true,
@@ -602,7 +631,37 @@ mod tests {
         let source = &config.scenes.scenes[0].sources[0];
         assert!(source.to_master, "to_master must default on");
         assert!(source.sends.is_empty());
+        assert!(!source.boost, "volume boost must default off");
+        assert!(!config.audio.master_boost, "master boost must default off");
         assert_eq!(config.audio.bitrate_kbps, 192);
+    }
+
+    #[test]
+    fn un_boosted_volumes_are_clamped_on_load() {
+        // A file that claims a boosted volume without the boost flag (hand
+        // edited, or written by a newer build and opened by an older one).
+        let path = temp_path("stale_boost.json");
+        let json = r#"{
+            "audio": { "master_volume": 400 },
+            "scenes": {
+                "scenes": [{
+                    "name": "Default",
+                    "is_default": true,
+                    "sources": [
+                        { "name": "Loud", "volume": 350, "kind": { "type": "desktop_audio" } },
+                        { "name": "Boosted", "volume": 350, "boost": true,
+                          "kind": { "type": "desktop_audio" } }
+                    ]
+                }],
+                "active_scene": "Default"
+            }
+        }"#;
+        std::fs::write(&path, json).unwrap();
+        let config = load_from(&path);
+        let sources = &config.scenes.scenes[0].sources;
+        assert_eq!(sources[0].volume, 100, "un-boosted volume must clamp to 100");
+        assert_eq!(sources[1].volume, 350, "boosted volume must survive");
+        assert_eq!(config.audio.master_volume, 100);
     }
 
     #[test]
@@ -612,6 +671,7 @@ mod tests {
         config.buses.buses.push(BusConfig {
             name: "Voice FX".into(),
             volume: 90,
+            boost: false,
             muted: false,
             chain: vec![FxSlotConfig {
                 plugin: PluginRef {

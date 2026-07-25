@@ -342,12 +342,18 @@ pub fn edit_parameters(
                 event.skip(true);
                 return;
             };
+            // wxDragon re-arms `Skip(true)` before calling every closure, so
+            // every key we act on needs an explicit `skip(false)`; otherwise the
+            // native trackbar also handles it and drags the thumb away from the
+            // value we just announced.
             if code == WXK_ESCAPE {
+                event.skip(false);
                 dialog.end_modal(ID_OK);
                 return;
             }
             if code == WXK_TAB {
                 if ctrl {
+                    event.skip(false);
                     cycle_param(!event_shift(&event));
                 } else {
                     event.skip(true);
@@ -374,6 +380,7 @@ pub fn edit_parameters(
                     return;
                 }
             };
+            event.skip(false);
             let text = formatted_value(src.as_ref(), index);
             announce_value(&announcer, &value_slider, &value_text, &src.name(index), new_value, &text);
         });

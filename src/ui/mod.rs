@@ -33,7 +33,9 @@ pub const WXK_PAGEUP: i32 = 366;
 pub const WXK_PAGEDOWN: i32 = 367;
 pub const WXK_END: i32 = 312;
 pub const WXK_HOME: i32 = 313;
+pub const WXK_LEFT: i32 = 314;
 pub const WXK_UP: i32 = 315;
+pub const WXK_RIGHT: i32 = 316;
 pub const WXK_DOWN: i32 = 317;
 
 const ID_MENU_CONFIGURE: i32 = 2001;
@@ -42,6 +44,10 @@ const ID_MENU_EXIT: i32 = 2003;
 const ID_MENU_STREAM_INFO: i32 = 2004;
 const ID_MENU_ABOUT: i32 = 2101;
 const ID_MENU_README: i32 = 2102;
+/// Command id of the "Enable volume boost" item in a mixer slider's context
+/// menu. One id serves every strip: the menu is popped up on the slider, so
+/// the command comes back to that slider's own handler.
+pub const ID_MIXER_BOOST: i32 = 2201;
 
 const README_URL: &str = "https://github.com/ironcross32/pubsplash#readme";
 
@@ -164,6 +170,10 @@ pub struct Widgets {
     pub mixer_panel: Panel,
     /// The replaceable panel holding the current mixer strips.
     pub mixer_inner: RefCell<Option<Panel>>,
+    /// UIA providers for the current mixer sliders, one per strip. They must be
+    /// uninstalled while their windows still exist, so `rebuild_mixer` drains
+    /// this before destroying `mixer_inner` (and so does the close handler).
+    pub mixer_announcers: RefCell<Vec<Rc<slider_uia::SliderAnnouncer>>>,
     pub home_panel: Panel,
     pub chat_list: ListBox,
     #[allow(dead_code)]
@@ -640,6 +650,7 @@ pub fn build(app: Rc<App>) {
         home_scene_list,
         mixer_panel,
         mixer_inner: RefCell::new(None),
+        mixer_announcers: RefCell::new(Vec::new()),
         home_panel: home_panel.clone(),
         chat_list,
         chat_input,
@@ -711,6 +722,8 @@ pub fn build(app: Rc<App>) {
             // Remove the F1 hook and drop the help announcer provider.
             help::uninstall_hook();
             help::uninstall_announcer();
+            // Same for the mixer sliders' providers, while their windows live.
+            home::drop_mixer_announcers(&app);
             app.save_config();
             // Destroy explicitly (deferred, wx-managed) rather than skipping to
             // the platform default. On the native ALT+F4 path, skipping hands the

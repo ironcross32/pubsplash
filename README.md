@@ -13,7 +13,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - Chat: read incoming messages in an accessible list, send outbound messages, and have chat read aloud automatically with text-to-speech (optionally spoken into the stream as well)
 - Loop-safe by design: Desktop Audio capture excludes Pubsplash's own audio, so text-to-speech and sound cues can never echo into your stream
 - Audio cues for stream events (listener changes, incoming and outgoing messages), with custom sound pack support planned for the future
-- A fully keyboard-accessible mixer with per-source volume and mute
+- A fully keyboard-accessible mixer with per-source volume and mute, plus an optional per-strip volume boost for sources that are too quiet at 100%
 - Mixing buses with per-source sends, so sources can be routed through shared processing (see below)
 - VST2 effect chains on buses and the master output, with a screen-reader-friendly Osara-like parameter editor and shareable effect chains
 - Status bar shows your stream status, quality, and duration
@@ -48,8 +48,15 @@ To record locally without going live, use **Start recording** (`ALT+R`) next to 
 | `Delete` | Remove the focused scene, source, bus, send, or plugin |
 | `CTRL+Tab` / `CTRL+Shift+Tab` | Next / previous parameter (plugin parameter dialog) |
 | `F6` | Move focus out of a plugin's own interface back to the toolbar |
+| `SHIFT+F10` / `Applications` | Open the context menu for the focused control (mixer volume sliders) |
 
-In the mixer, sliders respond to arrow keys for small steps, `Page Up` / `Page Down` for large steps, and `Home` / `End` for maximum / minimum volume.
+In the mixer, sliders respond to arrow keys for 1% steps, `Page Up` / `Page Down` for 10% steps, and `Home` / `End` for maximum / minimum volume. `Up`, `Right`, and `Page Up` always raise the volume; `Down`, `Left`, and `Page Down` always lower it.
+
+### Volume boost
+
+Mixer volume sliders normally stop at 100%, which is unity gain — the source's own level, unchanged. If a source is still too quiet there (a microphone or a capture device that is simply low at the Windows level), open the slider's context menu with `SHIFT+F10`, the `Applications` key, or a right click, and choose **Enable volume boost**. The item shows a check mark while boost is on, and that slider then runs from 0% to 500%, amplifying the signal by up to five times.
+
+Boost is remembered per strip — Master, each source, and each bus have their own setting, saved with your configuration. Turning it back off snaps the slider down to 100% if it was higher. Note that the boost is a plain gain stage with no limiter, so amplifying an already-loud source will distort it; back the slider off until it sounds clean.
 
 ## Buses and sends
 
