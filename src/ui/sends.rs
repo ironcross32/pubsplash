@@ -23,7 +23,7 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
             return;
         };
         (
-            source.name.clone(),
+            crate::source_name::strip_label(source, &app.name_context(std::slice::from_ref(source))),
             source.to_master,
             source.sends.clone(),
             config

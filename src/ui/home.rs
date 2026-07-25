@@ -7,7 +7,7 @@ use super::{
 };
 use crate::audio::EngineCommand;
 use crate::config::max_volume;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use wxdragon::event::{EventType, WxEvtHandler};
 use wxdragon::prelude::*;
@@ -174,15 +174,25 @@ pub fn rebuild_mixer(app: &Rc<App>) {
     };
 
     // The old sliders' UIA providers must go before their windows do.
-    drop_mixer_announcers(app);
+    drop_mixer_strips(app);
     if let Some(old) = old_inner {
         old.destroy();
     }
     let inner = Panel::builder(&mixer_panel).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
+    // Strip names are derived from what each source points at (device, running
+    // application, voice) rather than from `SourceConfig.name`, which is only
+    // ever the kind's display name — see `crate::source_name`.
     let ((master_volume, master_muted, master_boost), sources, buses) = {
         let config = app.config.borrow();
+        let ctx = app.name_context(
+            config
+                .scenes
+                .active_scene()
+                .map(|s| s.sources.as_slice())
+                .unwrap_or_default(),
+        );
         (
             (
                 config.audio.master_volume,
@@ -193,9 +203,10 @@ pub fn rebuild_mixer(app: &Rc<App>) {
                 .scenes
                 .active_scene()
                 .map(|s| {
-                    s.sources
-                        .iter()
-                        .map(|src| (src.name.clone(), src.volume, src.muted, src.boost))
+                    crate::source_name::strip_labels(&s.sources, &ctx)
+                        .into_iter()
+                        .zip(&s.sources)
+                        .map(|(name, src)| (name, src.volume, src.muted, src.boost))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default(),
@@ -218,6 +229,7 @@ pub fn rebuild_mixer(app: &Rc<App>) {
         master_muted,
         master_boost,
         StripTarget::Master,
+        None,
     );
 
     for (index, (name, volume, muted, boost)) in sources.iter().enumerate() {
@@ -230,6 +242,7 @@ pub fn rebuild_mixer(app: &Rc<App>) {
             *muted,
             *boost,
             StripTarget::Source(index),
+            Some(index),
         );
     }
     for (index, (name, volume, muted, boost)) in buses.iter().enumerate() {
@@ -242,6 +255,7 @@ pub fn rebuild_mixer(app: &Rc<App>) {
             *muted,
             *boost,
             StripTarget::Bus(index),
+            None,
         );
     }
 
@@ -253,20 +267,65 @@ pub fn rebuild_mixer(app: &Rc<App>) {
     home_panel.layout();
 }
 
+/// One live mixer strip. Kept so a strip can be re-named without recreating it
+/// — see [`relabel_source_strips`].
+#[derive(Clone)]
+pub struct MixerStrip {
+    /// Index into the active scene's sources, or `None` for master and buses
+    /// (whose names come from config and never change behind the user's back).
+    pub source_index: Option<usize>,
+    label: StaticText,
+    slider: Slider,
+    mute: CheckBox,
+    announcer: Rc<slider_uia::SliderAnnouncer>,
+    /// The strip's current base name, shared with the strip's event handlers.
+    name: Rc<RefCell<String>>,
+    /// Shared with the boost handler, which is the other thing that can change
+    /// what the slider announces.
+    boost: Rc<Cell<bool>>,
+}
+
 /// Removes the UIA providers installed on the current mixer sliders. Must run
 /// while those sliders' windows still exist — i.e. before `rebuild_mixer`
 /// destroys the inner panel, and before the frame is torn down.
-pub fn drop_mixer_announcers(app: &Rc<App>) {
+pub fn drop_mixer_strips(app: &Rc<App>) {
     app.widgets(|w| {
-        for announcer in w.mixer_announcers.borrow_mut().drain(..) {
-            announcer.uninstall();
+        for strip in w.mixer_strips.borrow_mut().drain(..) {
+            strip.announcer.uninstall();
+        }
+    });
+}
+
+/// Re-derives the source strips' names and applies any that changed, without
+/// creating or destroying a widget — so keyboard focus survives. This runs off
+/// the pump when an application starts or exits, which is exactly when the user
+/// is likely to be on that strip.
+pub fn relabel_source_strips(app: &Rc<App>) {
+    let names = {
+        let config = app.config.borrow();
+        let Some(scene) = config.scenes.active_scene() else {
+            return;
+        };
+        let ctx = app.name_context(&scene.sources);
+        crate::source_name::strip_labels(&scene.sources, &ctx)
+    };
+    app.widgets(|w| {
+        for strip in w.mixer_strips.borrow().iter() {
+            let Some(name) = strip.source_index.and_then(|i| names.get(i)) else {
+                continue;
+            };
+            if *strip.name.borrow() == *name {
+                continue;
+            }
+            *strip.name.borrow_mut() = name.clone();
+            apply_strip_name(strip);
         }
     });
 }
 
 /// The slider's announced name. Boost is part of the name so a screen reader
 /// says which strips are amplified when tabbing through the mixer.
-fn strip_label(name: &str, boost: bool) -> String {
+fn spoken_name(name: &str, boost: bool) -> String {
     if boost {
         format!("{name} volume, boost")
     } else {
@@ -274,7 +333,22 @@ fn strip_label(name: &str, boost: bool) -> String {
     }
 }
 
+/// Pushes a strip's current name out to every place it is read from: the
+/// visible label, the slider's accessible name, the UIA announcement, and the
+/// mute checkbox.
+fn apply_strip_name(strip: &MixerStrip) {
+    let name = strip.name.borrow();
+    let spoken = spoken_name(&name, strip.boost.get());
+    strip.label.set_label(&format!("{name} volume"));
+    super::set_accessible_name(&strip.slider, &spoken);
+    strip
+        .announcer
+        .update(&spoken, &format!("{}%", strip.slider.value()));
+    super::set_accessible_name(&strip.mute, &format!("Mute {name}"));
+}
+
 /// One mixer strip.
+#[allow(clippy::too_many_arguments)]
 fn add_strip(
     app: &Rc<App>,
     parent: &Panel,
@@ -284,11 +358,10 @@ fn add_strip(
     muted: bool,
     boost: bool,
     target: StripTarget,
+    source_index: Option<usize>,
 ) {
     let row = BoxSizer::builder(Orientation::Horizontal).build();
-    let label = StaticText::builder(parent)
-        .with_label(&format!("{name} volume"))
-        .build();
+    let label = StaticText::builder(parent).build();
     // The strip's current ceiling, shared with the handlers so the boost toggle
     // can widen or narrow the range without rebuilding (and re-focusing) it.
     let max = Rc::new(Cell::new(max_volume(boost) as i32));
@@ -297,17 +370,28 @@ fn add_strip(
         .with_min_value(0)
         .with_max_value(max.get())
         .build();
-    super::set_accessible_name(&slider, &strip_label(name, boost));
     super::help::tag(&slider, "tab.home.mixer.strip.volume", "Mixer strip volume slider");
     // A native trackbar announces its position as a percentage of its *range*,
     // which is wrong once the range is 0-500 (100 would be read as "20%"). Our
     // own UIA provider speaks the literal value instead.
     let announcer = Rc::new(slider_uia::install(&slider));
-    announcer.update(&strip_label(name, boost), &format!("{volume}%"));
-    app.widgets(|w| w.mixer_announcers.borrow_mut().push(announcer.clone()));
     let mute_check = CheckBox::builder(parent).with_label("Mute").build();
     mute_check.set_value(muted);
-    super::set_accessible_name(&mute_check, &format!("Mute {name}"));
+
+    let strip = MixerStrip {
+        source_index,
+        label: label.clone(),
+        slider: slider.clone(),
+        mute: mute_check.clone(),
+        announcer: announcer.clone(),
+        name: Rc::new(RefCell::new(name.to_string())),
+        boost: Rc::new(Cell::new(boost)),
+    };
+    apply_strip_name(&strip);
+    let name = strip.name.clone();
+    let boost_now = strip.boost.clone();
+    let strip_for_boost = strip.clone();
+    app.widgets(|w| w.mixer_strips.borrow_mut().push(strip));
     super::help::tag(&mute_check, "tab.home.mixer.strip.mute", "Mixer strip mute checkbox");
 
     row.add(&label, 0, SizerFlag::AlignCenterVertical | SizerFlag::All, 4);
@@ -321,11 +405,15 @@ fn add_strip(
         let slider_for_handler = slider.clone();
         let announcer = announcer.clone();
         let max = max.clone();
-        let name = name.to_string();
+        let name = name.clone();
+        let boost_now = boost_now.clone();
         slider.on_slider(move |_| {
             let value = slider_for_handler.value().clamp(0, max.get()) as u32;
             apply_volume(&app, target, value);
-            announcer.update(&strip_label(&name, max.get() > 100), &format!("{value}%"));
+            announcer.update(
+                &spoken_name(&name.borrow(), boost_now.get()),
+                &format!("{value}%"),
+            );
         });
     }
 
@@ -344,7 +432,8 @@ fn add_strip(
         let slider_for_keys = slider.clone();
         let announcer = announcer.clone();
         let max = max.clone();
-        let name = name.to_string();
+        let name = name.clone();
+        let boost_now = boost_now.clone();
         slider.on_key_down(move |event| {
             let Some((code, _)) = super::key_of(&event) else {
                 event.skip(true);
@@ -372,7 +461,10 @@ fn add_strip(
             }
             // Announced even when already at the end of the range, so the key
             // always produces spoken feedback.
-            announcer.update(&strip_label(&name, ceiling > 100), &format!("{value}%"));
+            announcer.update(
+                &spoken_name(&name.borrow(), boost_now.get()),
+                &format!("{value}%"),
+            );
         });
     }
 
@@ -404,22 +496,21 @@ fn add_strip(
     {
         let app = app.clone();
         let slider_for_boost = slider.clone();
-        let announcer = announcer.clone();
         let max = max.clone();
-        let name = name.to_string();
+        let boost_now = boost_now.clone();
         slider.bind_with_id_internal(EventType::MENU, ID_MIXER_BOOST, move |_| {
             let boost = !boost_of(&app, target);
             set_boost(&app, target, boost);
             let ceiling = max_volume(boost) as i32;
             max.set(ceiling);
+            boost_now.set(boost);
             // Dropping boost snaps an amplified strip back to 100%.
             let value = slider_for_boost.value().clamp(0, ceiling);
             slider_for_boost.set_range(0, ceiling);
             slider_for_boost.set_value(value);
             apply_volume(&app, target, value as u32);
-            let label = strip_label(&name, boost);
-            super::set_accessible_name(&slider_for_boost, &label);
-            announcer.update(&label, &format!("{value}%"));
+            // Boost is spoken as part of the name, so re-announce the strip.
+            apply_strip_name(&strip_for_boost);
         });
     }
 
@@ -531,6 +622,9 @@ fn apply_volume(app: &Rc<App>, target: StripTarget, value: u32) {
 
 /// Used by the scenes tab after edits that affect the mixer.
 pub fn on_sources_changed(app: &Rc<App>) {
+    // Resolve applications first: both the engine's pid and the strip names
+    // come out of that cache.
+    app.refresh_app_processes();
     app.sync_engine_sources();
     rebuild_mixer(app);
     refresh_scene_list(app);

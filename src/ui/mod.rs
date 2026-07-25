@@ -19,7 +19,9 @@ mod stream_info_dialog;
 use crate::audio::{AudioEngine, EngineCommand, FeedKind, SourceSpec, capture::CaptureKind};
 use crate::config::{Config, SourceKindConfig};
 use crate::net::{NetCommand, NetEvent, NetHandle};
+use crate::source_name::NameContext;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -101,6 +103,10 @@ pub struct Runtime {
     pub stream_info_set: bool,
     /// Whether a standalone (non-streaming) local recording is in progress.
     pub recording: bool,
+    /// Running processes matched to the active scene's Application sources,
+    /// keyed by the configured process name (lowercased). Refreshed by the
+    /// pump; drives both the labels and the pid an Application source captures.
+    pub apps: HashMap<String, crate::audio::device::AppProcess>,
 }
 
 impl Default for Runtime {
@@ -116,6 +122,7 @@ impl Default for Runtime {
             stream_info: StreamInfo::default(),
             stream_info_set: false,
             recording: false,
+            apps: HashMap::new(),
         }
     }
 }
@@ -170,10 +177,13 @@ pub struct Widgets {
     pub mixer_panel: Panel,
     /// The replaceable panel holding the current mixer strips.
     pub mixer_inner: RefCell<Option<Panel>>,
-    /// UIA providers for the current mixer sliders, one per strip. They must be
-    /// uninstalled while their windows still exist, so `rebuild_mixer` drains
+    /// The current mixer strips, in creation (and so Tab) order. Holding the
+    /// widgets lets a strip be re-labelled in place — a full rebuild would move
+    /// focus, and the app-detection tick re-labels exactly when the user is
+    /// most likely reaching for that slider. Each strip's UIA provider must be
+    /// uninstalled while its window still exists, so `rebuild_mixer` drains
     /// this before destroying `mixer_inner` (and so does the close handler).
-    pub mixer_announcers: RefCell<Vec<Rc<slider_uia::SliderAnnouncer>>>,
+    pub mixer_strips: RefCell<Vec<home::MixerStrip>>,
     pub home_panel: Panel,
     pub chat_list: ListBox,
     #[allow(dead_code)]
@@ -289,10 +299,71 @@ impl App {
         crate::config::save(&self.config.borrow());
     }
 
+    /// The state the derived labels for `sources` are built from. Takes the
+    /// sources explicitly because the Sources list shows whichever scene is
+    /// selected, which is not always the active one.
+    pub fn name_context(&self, sources: &[crate::config::SourceConfig]) -> NameContext {
+        NameContext::build(sources, self.run.borrow().apps.clone())
+    }
+
+    /// Re-enumerates the processes behind every scene's Application sources —
+    /// every scene, because the Sources list shows whichever scene is selected,
+    /// not the active one.
+    ///
+    /// Returns `(labels_changed, capture_changed)`: the first when any
+    /// displayed application name would differ, the second when a source in the
+    /// *active* scene would now capture a different process (including starting
+    /// or stopping capture entirely), which is what makes a re-sync worth its
+    /// cost — `SetSources` respawns every capture thread.
+    pub fn refresh_app_processes(&self) -> (bool, bool) {
+        let app_names = |sources: &[crate::config::SourceConfig]| -> Vec<String> {
+            sources
+                .iter()
+                .filter_map(|s| match &s.kind {
+                    SourceKindConfig::Application { process_name } => Some(process_name.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (all_names, active_names) = {
+            let config = self.config.borrow();
+            (
+                config
+                    .scenes
+                    .scenes
+                    .iter()
+                    .flat_map(|scene| app_names(&scene.sources))
+                    .collect::<Vec<_>>(),
+                config
+                    .scenes
+                    .active_scene()
+                    .map(|scene| app_names(&scene.sources))
+                    .unwrap_or_default(),
+            )
+        };
+        let mut run = self.run.borrow_mut();
+        if all_names.is_empty() {
+            let had_any = !run.apps.is_empty();
+            run.apps.clear();
+            return (had_any, had_any);
+        }
+        let apps = crate::audio::device::resolve_apps(&all_names);
+        if apps == run.apps {
+            return (false, false);
+        }
+        let capture_changed = active_names.iter().any(|name| {
+            let key = name.trim().to_ascii_lowercase();
+            apps.get(&key).map(|a| a.pid) != run.apps.get(&key).map(|a| a.pid)
+        });
+        run.apps = apps;
+        (true, capture_changed)
+    }
+
     /// Sends the active scene's sources to the audio engine (mixer order).
     /// Send targets are translated from bus names to current bus indices,
     /// so call this again after any bus reorder.
     pub fn sync_engine_sources(&self) {
+        let apps = self.run.borrow().apps.clone();
         let config = self.config.borrow();
         let Some(scene) = config.scenes.active_scene() else {
             return;
@@ -324,8 +395,10 @@ impl App {
                     }
                     SourceKindConfig::DesktopAudio => FeedKind::Capture(CaptureKind::DesktopAudio),
                     SourceKindConfig::Application { process_name } => {
-                        match crate::audio::device::find_process(process_name) {
-                            Some(pid) => FeedKind::Capture(CaptureKind::Application { pid }),
+                        match apps.get(&process_name.trim().to_ascii_lowercase()) {
+                            Some(app) => {
+                                FeedKind::Capture(CaptureKind::Application { pid: app.pid })
+                            }
                             None => {
                                 log::warn!(
                                     "Process {process_name:?} not running; source will be silent"
@@ -375,8 +448,8 @@ impl App {
         self.refresh_stream_ui();
     }
 
-    /// Starts a standalone local recording (no streaming). Uses the current
-    /// stream title (default "Stream") for the file name; does not prompt.
+    /// Starts a standalone local recording (no streaming). The file name is
+    /// timestamped (see `recording_filename`); does not prompt.
     pub fn start_recording(&self) {
         {
             let run = self.run.borrow();
@@ -386,11 +459,7 @@ impl App {
         }
         let (bitrate, path) = {
             let config = self.config.borrow();
-            let title = self.run.borrow().stream_info.title.clone();
-            let desired = config
-                .archiving
-                .recording_dir()
-                .join(recording_filename(&title));
+            let desired = config.archiving.recording_dir().join(recording_filename());
             (
                 config.audio.bitrate_kbps,
                 crate::audio::recorder::unique_path(&desired),
@@ -486,29 +555,14 @@ impl App {
     }
 }
 
-/// Builds a recording file name from the stream title and the current local
-/// date/time: `<sanitized title>_<yyyy-mm-dd>_<HH-MM-SS>.mp3`. Spaces become
-/// underscores and characters illegal in Windows file names are stripped.
-fn recording_filename(title: &str) -> String {
-    let mut name = String::with_capacity(title.len());
-    for ch in title.chars() {
-        match ch {
-            c if c.is_whitespace() => name.push('_'),
-            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => name.push('_'),
-            c if c.is_control() => name.push('_'),
-            c => name.push(c),
-        }
-    }
-    let name = name.trim_matches(|c| c == '.' || c == '_' || c == ' ');
-    let mut name: String = name.chars().take(120).collect();
-    if name.is_empty() {
-        name = "Stream".to_string();
-    }
-
+/// Builds a recording file name from the current local date/time:
+/// `recording_<yyyy-mm-dd>_<HH-MM-SS>.mp3`. The prefix is always the literal
+/// word "recording" so files sort together regardless of the stream title.
+fn recording_filename() -> String {
     use windows::Win32::System::SystemInformation::GetLocalTime;
     let t = unsafe { GetLocalTime() };
     format!(
-        "{name}_{:04}-{:02}-{:02}_{:02}-{:02}-{:02}.mp3",
+        "recording_{:04}-{:02}-{:02}_{:02}-{:02}-{:02}.mp3",
         t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond
     )
 }
@@ -554,7 +608,7 @@ pub fn start_streaming(app: &Rc<App>) {
             .borrow()
             .archiving
             .recording_dir()
-            .join(recording_filename(&info.title));
+            .join(recording_filename());
         // Guard against clobbering a prior recording that resolved to the same
         // name (a stop/start within the same one-second timestamp).
         let path = crate::audio::recorder::unique_path(&desired);
@@ -650,7 +704,7 @@ pub fn build(app: Rc<App>) {
         home_scene_list,
         mixer_panel,
         mixer_inner: RefCell::new(None),
-        mixer_announcers: RefCell::new(Vec::new()),
+        mixer_strips: RefCell::new(Vec::new()),
         home_panel: home_panel.clone(),
         chat_list,
         chat_input,
@@ -665,7 +719,9 @@ pub fn build(app: Rc<App>) {
     // any plugins missing on this machine for a single summary.
     let missing = fx::instantiate_all(&app);
 
-    // Populate dynamic content now that widgets exist.
+    // Populate dynamic content now that widgets exist. Application sources are
+    // resolved first so the very first labels name the running apps.
+    app.refresh_app_processes();
     home::refresh_scene_list(&app);
     home::rebuild_mixer(&app);
     scenes::refresh_scenes_list(&app);
@@ -723,7 +779,7 @@ pub fn build(app: Rc<App>) {
             help::uninstall_hook();
             help::uninstall_announcer();
             // Same for the mixer sliders' providers, while their windows live.
-            home::drop_mixer_announcers(&app);
+            home::drop_mixer_strips(&app);
             app.save_config();
             // Destroy explicitly (deferred, wx-managed) rather than skipping to
             // the platform default. On the native ALT+F4 path, skipping hands the
@@ -761,6 +817,19 @@ pub fn build(app: Rc<App>) {
                     app.refresh_stream_ui();
                 }
                 chat::refresh_chat_times(&app);
+            }
+            if ticks % 20 == 0 {
+                // Every two seconds: notice applications starting or exiting,
+                // so their strips say which app they are and (once running)
+                // actually capture it.
+                let (labels_changed, capture_changed) = app.refresh_app_processes();
+                if capture_changed {
+                    app.sync_engine_sources();
+                }
+                if labels_changed {
+                    home::relabel_source_strips(&app);
+                    scenes::refresh_sources_list(&app);
+                }
             }
         });
         timer.start(100, false);
@@ -1142,17 +1211,12 @@ mod token_tests {
     }
 
     #[test]
-    fn recording_filename_sanitizes_and_stamps() {
-        let name = super::recording_filename("My Show: 100% Fun / <live>");
-        // Spaces -> underscores; illegal chars (:/<>) -> underscores.
-        assert!(name.starts_with("My_Show__100%_Fun____live"), "got {name}");
+    fn recording_filename_is_stamped() {
+        let name = super::recording_filename();
+        // "recording_<yyyy-mm-dd>_<HH-MM-SS>.mp3"
+        assert!(name.starts_with("recording_"), "got {name}");
         assert!(name.ends_with(".mp3"));
-        // "<sanitized>_<yyyy-mm-dd>_<HH-MM-SS>.mp3"
         let stamp = name.trim_end_matches(".mp3").rsplit('_').next().unwrap();
         assert_eq!(stamp.len(), 8, "time HH-MM-SS in {name}");
-
-        // Empty / all-illegal titles fall back to a usable name.
-        assert!(super::recording_filename("   ").starts_with("Stream_"));
-        assert!(super::recording_filename("///").starts_with("Stream_"));
     }
 }

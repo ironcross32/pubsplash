@@ -196,42 +196,6 @@ pub fn refresh_scenes_list(app: &Rc<App>) {
     });
 }
 
-/// Label for a source in the list: name plus what it is actually set to,
-/// so edits (like picking a different microphone) are visible at a glance.
-fn source_label(source: &SourceConfig, devices: &[crate::audio::device::DeviceInfo]) -> String {
-    let detail = match &source.kind {
-        SourceKindConfig::Microphone { device_id: None } => "Default microphone".to_string(),
-        SourceKindConfig::Microphone {
-            device_id: Some(id),
-        } => devices
-            .iter()
-            .find(|d| &d.id == id)
-            .map(|d| d.name.clone())
-            .unwrap_or_else(|| "Unavailable microphone".to_string()),
-        SourceKindConfig::DesktopAudio => "Desktop Audio".to_string(),
-        SourceKindConfig::Application { process_name } => {
-            if process_name.is_empty() {
-                "Application: not set".to_string()
-            } else {
-                format!("Application: {process_name}")
-            }
-        }
-        SourceKindConfig::Tts(tts) => {
-            let engine = match tts.engine.as_str() {
-                "sapi" => "SAPI",
-                other => other,
-            };
-            if tts.voice.is_empty() {
-                format!("Text-to-Speech: {engine}, default voice")
-            } else {
-                format!("Text-to-Speech: {engine}, {}", tts.voice)
-            }
-        }
-        SourceKindConfig::SoundEvents => "Sound Events".to_string(),
-    };
-    format!("{} ({detail})", source.name)
-}
-
 pub fn refresh_sources_list(app: &Rc<App>) {
     let scene_index = selected_scene_index(app);
     app.widgets(|w| {
@@ -239,18 +203,9 @@ pub fn refresh_sources_list(app: &Rc<App>) {
         let selected = w.sources_list.get_selection();
         w.sources_list.clear();
         if let Some(scene) = config.scenes.scenes.get(scene_index) {
-            // Only enumerate devices when a label will need one.
-            let devices = if scene
-                .sources
-                .iter()
-                .any(|s| matches!(s.kind, SourceKindConfig::Microphone { device_id: Some(_) }))
-            {
-                crate::audio::device::capture_devices()
-            } else {
-                Vec::new()
-            };
-            for source in &scene.sources {
-                w.sources_list.append(&source_label(source, &devices));
+            let ctx = app.name_context(&scene.sources);
+            for label in crate::source_name::list_labels(&scene.sources, &ctx) {
+                w.sources_list.append(&label);
             }
         }
         if let Some(index) = selected {
@@ -264,8 +219,11 @@ pub fn refresh_sources_list(app: &Rc<App>) {
 fn after_scene_edit(app: &Rc<App>) {
     app.save_config();
     refresh_scenes_list(app);
-    refresh_sources_list(app);
+    // The sources list is refreshed last, after `on_sources_changed` has
+    // re-resolved Application sources: an edit may have named a new
+    // application, and the labels read the resolved process out of that cache.
     on_sources_changed(app);
+    refresh_sources_list(app);
 }
 
 fn move_scene(app: &Rc<App>, list: &ListBox, up: bool) {
@@ -581,7 +539,7 @@ fn edit_application(
                     &frame,
                     "Application source",
                     &format!(
-                        "{process_name} does not appear to be running. The source will stay silent until it is."
+                        "{process_name} does not appear to be running. The source will stay silent until it starts, and will be picked up automatically when it does."
                     ),
                 );
             }

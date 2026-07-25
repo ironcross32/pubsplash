@@ -10,6 +10,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - MP3 encoding with configurable bitrate
 - Scenes: group any number of audio sources and switch between them
 - Source types: microphone, desktop audio, per-application audio, text-to-speech, and sound events
+- Sources name themselves after what they capture — the microphone device, the running application's real name, the chosen speech voice — so the mixer's sliders say exactly what you are adjusting even with several of the same type in a scene
 - Chat: read incoming messages in an accessible list, send outbound messages, and have chat read aloud automatically with text-to-speech (optionally spoken into the stream as well)
 - Loop-safe by design: Desktop Audio capture excludes Pubsplash's own audio, so text-to-speech and sound cues can never echo into your stream
 - Audio cues for stream events (listener changes, incoming and outgoing messages), with custom sound pack support planned for the future
@@ -27,7 +28,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 
 1. Launch Pubsplash.
 2. Open **File → Configure Audio Pub**, select the site, enter your email and password, and press **Connect**.
-3. Optionally open **File → Set stream info** to set the stream's title, description, streaming quality (MP3 bitrate), whether the stream should be archived on the server, and whether to **record this stream** to a file on your computer. The title, description, archive, and record choices reset every time Pubsplash starts; the quality setting is saved and persists across sessions. To have archiving or recording pre-selected each launch, enable **Archive streams by default** or **Record streams by default** on the Archiving tab of **File → Preferences** (`CTRL+,`). Recordings are an exact copy of the streamed MP3, saved as `<title>_<yyyy-mm-dd>_<HH-MM-SS>.mp3` in the recording folder set on that same tab (your Music library by default).
+3. Optionally open **File → Set stream info** to set the stream's title, description, streaming quality (MP3 bitrate), whether the stream should be archived on the server, and whether to **record this stream** to a file on your computer. The title, description, archive, and record choices reset every time Pubsplash starts; the quality setting is saved and persists across sessions. To have archiving or recording pre-selected each launch, enable **Archive streams by default** or **Record streams by default** on the Archiving tab of **File → Preferences** (`CTRL+,`). Recordings are an exact copy of the streamed MP3, saved as `recording_<yyyy-mm-dd>_<HH-MM-SS>.mp3` in the recording folder set on that same tab (your Music library by default).
 4. On the **Home** tab, press **Start streaming** (`ALT+S`). If you haven't set the stream info yet, the dialog opens first — press **OK** to start with what's filled in (tabbing into a text field selects its contents so you can just type over the defaults), or **Cancel** to not start streaming.
 5. Press **Stop streaming** (`ALT+T`) when you're done.
 

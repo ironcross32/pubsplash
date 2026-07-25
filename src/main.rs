@@ -5,6 +5,7 @@ mod config;
 mod fx;
 mod logging;
 mod net;
+mod source_name;
 mod state;
 mod tts;
 mod ui;
