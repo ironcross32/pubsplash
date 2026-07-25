@@ -1,0 +1,559 @@
+# Context-sensitive help messages, spoken when F1 is pressed on a control.
+#
+# This file is round-tripped by the `gen-help` dev tool:
+#   cargo run --bin gen-help
+# It rescans the UI source for `help::tag(..)` calls, adds any new controls
+# (with a blank `message` for you to fill in), refreshes each control's `label`
+# and `file`, and preserves everything you have already written. Controls that no
+# longer exist in the source are moved to a `[[stale]]` section rather than
+# deleted, so a rename never loses your text.
+#
+# Fill in `message` for each control. A blank message falls back to a generic
+# "No help available for this control." at runtime. `label` and `file` are
+# context for you and are ignored by the app.
+
+[[control]]
+id = "dialog.appPicker.list"
+label = "Running applications list"
+file = "src/ui/app_picker.rs"
+message = "Arrow up and down through the applications you can capture. Each entry gives the application's name followed by its program file. Press ENTER or use the Select button to capture the highlighted one."
+
+[[control]]
+id = "dialog.appPicker.refresh"
+label = "Refresh the application list button"
+file = "src/ui/app_picker.rs"
+message = "Look for applications again. Use this after starting an application, or after playing something in one, so that it shows up in the list."
+
+[[control]]
+id = "dialog.appPicker.select"
+label = "Select highlighted application button"
+file = "src/ui/app_picker.rs"
+message = "Capture the application highlighted in the list and close this dialog."
+
+[[control]]
+id = "dialog.appPicker.soundOnly"
+label = "Only show apps that have played sound checkbox"
+file = "src/ui/app_picker.rs"
+message = "When checked, the list only offers applications that have played sound since they started, which is usually a much shorter list. Uncheck it to see every open application, including ones that have not made a sound yet."
+
+[[control]]
+id = "dialog.appPicker.typeName"
+label = "Type an application name button"
+file = "src/ui/app_picker.rs"
+message = "Type a program name by hand, for an application that is not running yet. The source stays silent until that program starts, then picks it up on its own."
+
+[[control]]
+id = "dialog.chatView.text"
+label = "Full chat message text"
+file = "src/ui/chat.rs"
+message = "Arrow up and down through this list to view chats. Home jumps to the oldest message while END jumps to the most recent one."
+
+[[control]]
+id = "dialog.connect.addSite"
+label = "Add site button"
+file = "src/ui/connect_dialog.rs"
+message = "Add a new Audiopub instance which becomes an option you can connect to."
+
+[[control]]
+id = "dialog.connect.connectButton"
+label = "Connect or disconnect button"
+file = "src/ui/connect_dialog.rs"
+message = "Attempts to log you in to the selected instance. If login is successful, this button will change to Disconnect. Once logged in, Pubsplash will remember this instance and log you in when you launch it. This persists until you decide to change it."
+
+[[control]]
+id = "dialog.connect.email"
+label = "Email address for the selected site"
+file = "src/ui/connect_dialog.rs"
+message = "Type the email address you use to log in to the selected instance."
+
+[[control]]
+id = "dialog.connect.password"
+label = "Password for the selected site"
+file = "src/ui/connect_dialog.rs"
+message = "Type the password you use to log in to the selected instance."
+
+[[control]]
+id = "dialog.connect.removeSite"
+label = "Remove site button"
+file = "src/ui/connect_dialog.rs"
+message = "This deletes the selected instance. Note: You can't remove the main instance (audiopub.site)."
+
+[[control]]
+id = "dialog.connect.siteList"
+label = "Configured Audio Pub sites list"
+file = "src/ui/connect_dialog.rs"
+message = "Use the arrow keys to select an instance, then tab to the edit boxes to enter your credentials. Audiopub.site is already here for you, simply press down arrow to select it, and you may enter your email and password to log in."
+
+[[control]]
+id = "dialog.fxEditor.bypass"
+label = "Bypass this plugin checkbox"
+file = "src/ui/fx_editor.rs"
+message = "When checked, the selected plugin is bypassed, and will not output anything."
+
+[[control]]
+id = "dialog.fxEditor.close"
+label = "Close plugin interface button"
+file = "src/ui/fx_editor.rs"
+message = "This will close the native interface of the selected VST plugin."
+
+[[control]]
+id = "dialog.fxEditor.focusPlugin"
+label = "Move focus into the plugin's own interface button"
+file = "src/ui/fx_editor.rs"
+message = "This attempts to focus the plugin's native interface."
+
+[[control]]
+id = "dialog.fxEditor.parameters"
+label = "Open accessible parameters dialog button"
+file = "src/ui/fx_editor.rs"
+message = "Opens a dialog that allows editing of all the plugin's parameters it exposes to automation."
+
+[[control]]
+id = "dialog.fxParams.filter"
+label = "Filter parameters by name box"
+file = "src/ui/fx_params.rs"
+message = "Filters parameters by a given name. For instance, if you're using a voice doubler, and you can pan each of the cloned voices, typing pan into the filter box would show only parameters whose name contains pan."
+
+[[control]]
+id = "dialog.fxParams.parameter"
+label = "Plugin parameter chooser"
+file = "src/ui/fx_params.rs"
+message = "Use arrows and first-letter navigation to navigate to a parameter, then press tab to enter the slider for menipulating it."
+
+[[control]]
+id = "dialog.fxParams.showUnnamed"
+label = "Show unnamed parameters checkbox"
+file = "src/ui/fx_params.rs"
+message = "Show or hide unnamed parameters."
+
+[[control]]
+id = "dialog.fxParams.value"
+label = "Selected parameter value slider"
+file = "src/ui/fx_params.rs"
+message = "Use arrow keys as well as page up, page down, home and end to adjust the parameter. You should hear real values as reported by the plugin where possible, for instance, 300ms for a delay value."
+
+[[control]]
+id = "dialog.fxParams.valueText"
+label = "Type-in value entry for the selected parameter"
+file = "src/ui/fx_params.rs"
+message = ""
+
+[[control]]
+id = "dialog.loadChain.delete"
+label = "Delete selected chain button"
+file = "src/ui/buses.rs"
+message = "Remove the selected FX chain."
+
+[[control]]
+id = "dialog.loadChain.list"
+label = "Saved FX chains list"
+file = "src/ui/buses.rs"
+message = "A list of saved FX chains you can apply to the selected bus."
+
+[[control]]
+id = "dialog.loadChain.load"
+label = "Load selected chain button"
+file = "src/ui/buses.rs"
+message = "Load the selected FX chain and apply it to the bus you're working with."
+
+[[control]]
+id = "dialog.missingPlugins.apply"
+label = "Apply chain with available plugins button"
+file = "src/ui/buses.rs"
+message = "If Pubsplash determines that you don't have all of the plugins this chain uses, you can still apply the chain, minus those plugins."
+
+[[control]]
+id = "dialog.missingPlugins.list"
+label = "Missing plugins list"
+file = "src/ui/buses.rs"
+message = "Shows the list of plugins you lack to apply this FX chain in full."
+
+[[control]]
+id = "dialog.preferences.archive.archiveDefault"
+label = "Archive streams by default checkbox"
+file = "src/ui/preferences.rs"
+message = "When this box is checked, streams will be archived on Audiopub by default. You can still uncheck the box under file > set stream info if you don't want a particular stream archived."
+
+[[control]]
+id = "dialog.preferences.archive.browse"
+label = "Browse for recording folder button"
+file = "src/ui/preferences.rs"
+message = "This brings up a standard windows file browser that allows you to select the folder that Pubsplash will save your local recordings to."
+
+[[control]]
+id = "dialog.preferences.archive.recordDefault"
+label = "Record streams by default checkbox"
+file = "src/ui/preferences.rs"
+message = "When this box is checked, streams will automatically be recorded and saved to disk. You can still uncheck the box under file > set stream info if you don't want a particular stream to be recorded."
+
+[[control]]
+id = "dialog.preferences.archive.recordingFolder"
+label = "Recording folder path input"
+file = "src/ui/preferences.rs"
+message = "Type the path where you'd like your local recordings to be saved to, or use the browse button to pick a folder using a standard Windows folder picker."
+
+[[control]]
+id = "dialog.preferences.vst.addFolder"
+label = "Add plugin folder button"
+file = "src/ui/preferences.rs"
+message = "Allows adding a folder to the list of those that will be scanned for plugins when you press the scan or rescan buttons."
+
+[[control]]
+id = "dialog.preferences.vst.folderList"
+label = "VST plugin folders list"
+file = "src/ui/preferences.rs"
+message = "Use the arrow keys to review this list of folders. If you have plugins that live in other folders, you may use the add button to add them to this list, then initiate a scan to discover them."
+
+[[control]]
+id = "dialog.preferences.vst.removeFolder"
+label = "Remove plugin folder button"
+file = "src/ui/preferences.rs"
+message = "Removes a folder from the list of folders that will be scanned for VST plugins."
+
+[[control]]
+id = "dialog.preferences.vst.rescanAll"
+label = "Rescan all plugins button"
+file = "src/ui/preferences.rs"
+message = "Discards the plugin cache and scans every folder in the list for plugins. If successful, a cache is written and the plugins become usable on the buses tab of the main interface."
+
+[[control]]
+id = "dialog.preferences.vst.scanNew"
+label = "Scan for new plugins button"
+file = "src/ui/preferences.rs"
+message = "Scans the list of folders for plugins, adding only those that Pubsplash didn't know about before. Useful if you've recently installed plugins."
+
+[[control]]
+id = "dialog.sends.add"
+label = "Add a send to a bus button"
+file = "src/ui/sends.rs"
+message = "Add a send to the selected bus."
+
+[[control]]
+id = "dialog.sends.level"
+label = "Send level slider for the selected bus"
+file = "src/ui/sends.rs"
+message = "How much of the output of the effect would you like to send to the bus."
+
+[[control]]
+id = "dialog.sends.remove"
+label = "Remove selected send button"
+file = "src/ui/sends.rs"
+message = "Remove the selected send from the bus."
+
+[[control]]
+id = "dialog.sends.sendList"
+label = "Bus sends for this source list"
+file = "src/ui/sends.rs"
+message = "Use the arrow keys to select a bus to work with."
+
+[[control]]
+id = "dialog.sends.toMaster"
+label = "Send this source directly to master checkbox"
+file = "src/ui/sends.rs"
+message = "When checked, the source's output is sent to master as well as to the selected bus. This lets you, for instance, set up a reverb so that you still hear the dry signal, but can lower the send level and give the reverb effect the full wet signal."
+
+[[control]]
+id = "dialog.streamInfo.archive"
+label = "Archive the stream checkbox"
+file = "src/ui/stream_info_dialog.rs"
+message = "When this is checked, your stream will be archived to Audiopub and posted after it ends. If you'd like to control whether this happens automatically for new streams, visit the archive tab under preferences."
+
+[[control]]
+id = "dialog.streamInfo.description"
+label = "Stream description input"
+file = "src/ui/stream_info_dialog.rs"
+message = "Type a description for your live stream which appears under the title on Audiopub."
+
+[[control]]
+id = "dialog.streamInfo.quality"
+label = "Stream audio quality (bitrate) choice"
+file = "src/ui/stream_info_dialog.rs"
+message = "Set the audio quality of your stream, a higher number means higher quality. 128kbps is probably as low as you'd ever want to go with MP3."
+
+[[control]]
+id = "dialog.streamInfo.record"
+label = "Record this stream locally checkbox"
+file = "src/ui/stream_info_dialog.rs"
+message = "When this is checked, your stream will be recorded and saved to disk. If you'd like to control whether this happens automatically for new streams, as well as customize where these recordings are saved, visit the archive tab under preferences."
+
+[[control]]
+id = "dialog.streamInfo.title"
+label = "Stream title input"
+file = "src/ui/stream_info_dialog.rs"
+message = "Type the title of your stream here."
+
+[[control]]
+id = "dialog.ttsSource.engine"
+label = "TTS engine choice"
+file = "src/ui/scenes.rs"
+message = "use arrow keys and first letter navigation to select a TTS engine."
+
+[[control]]
+id = "dialog.ttsSource.rate"
+label = "TTS speech rate slider"
+file = "src/ui/scenes.rs"
+message = "Use arrows, page up, page down, home and end to set the rate of the speech."
+
+[[control]]
+id = "dialog.ttsSource.toStream"
+label = "Send speech to the stream checkbox"
+file = "src/ui/scenes.rs"
+message = "When this iss checked, speech is heard locally but also through the stream, otherwise, only you will hear it."
+
+[[control]]
+id = "dialog.ttsSource.voice"
+label = "TTS voice choice"
+file = "src/ui/scenes.rs"
+message = "Use arrow keys and first letter navigation to choose the tts voice for this engine."
+
+[[control]]
+id = "dialog.ttsSource.volume"
+label = "TTS voice volume slider"
+file = "src/ui/scenes.rs"
+message = "Use arrows, page up, page down, home and end to set the volume of this voice."
+
+[[control]]
+id = "tab.buses.busAdd"
+label = "Add bus button"
+file = "src/ui/buses.rs"
+message = "Create a new bus. Buses hold effects and output to master. You decide what sources send their output to which buses,, how much of their signal to send, and whether they should output to master as well as to the bus."
+
+[[control]]
+id = "tab.buses.busDown"
+label = "Move bus down button"
+file = "src/ui/buses.rs"
+message = "Move the selected bus down in the list. CTRL+Down will also work as long as focus is on the list of buses."
+
+[[control]]
+id = "tab.buses.busList"
+label = "Buses list (row 0 is the master output)"
+file = "src/ui/buses.rs"
+message = "This is the list of buses, use arrow keys, page up, page down, home, and end to select one to work with. Use CTRL+arrows to move the selected bus up or down in the list."
+
+[[control]]
+id = "tab.buses.busRemove"
+label = "Remove bus button"
+file = "src/ui/buses.rs"
+message = "Deletes the selected bus. Note that you cannot delete master."
+
+[[control]]
+id = "tab.buses.busRename"
+label = "Rename bus button"
+file = "src/ui/buses.rs"
+message = "Renames the selected bus."
+
+[[control]]
+id = "tab.buses.busUp"
+label = "Move bus up button"
+file = "src/ui/buses.rs"
+message = "Move the selected bus up in the list. CTRL+up will also work as long as focus is on the list of buses."
+
+[[control]]
+id = "tab.buses.chainExport"
+label = "Export FX chain file button"
+file = "src/ui/buses.rs"
+message = "Export the selected FX chain to a file where it can be imported for use on another machine."
+
+[[control]]
+id = "tab.buses.chainImport"
+label = "Import FX chain file button"
+file = "src/ui/buses.rs"
+message = "Select an FX chain file to add to your master list of chains. It will then become usable."
+
+[[control]]
+id = "tab.buses.chainLoad"
+label = "Load FX chain from library button"
+file = "src/ui/buses.rs"
+message = ""
+
+[[control]]
+id = "tab.buses.chainSave"
+label = "Save FX chain to library button"
+file = "src/ui/buses.rs"
+message = ""
+
+[[control]]
+id = "tab.buses.fxAdd"
+label = "Add plugin to chain button"
+file = "src/ui/buses.rs"
+message = "Add a plugin to the FX chain for the selected bus. Plugins are processed from the top down, so order matters."
+
+[[control]]
+id = "tab.buses.fxBypass"
+label = "Bypass selected plugin checkbox"
+file = "src/ui/buses.rs"
+message = ""
+
+[[control]]
+id = "tab.buses.fxDown"
+label = "Move plugin down in chain button"
+file = "src/ui/buses.rs"
+message = "Move the selected plugin down in the selected chain. CTRL+Down will also work as long as focus is on the list of plugins."
+
+[[control]]
+id = "tab.buses.fxEditParams"
+label = "Edit plugin parameters button"
+file = "src/ui/buses.rs"
+message = ""
+
+[[control]]
+id = "tab.buses.fxList"
+label = "Effects chain on the selected bus"
+file = "src/ui/buses.rs"
+message = "This is the list of effects on the selected bus. Use arrow keys, page up, page down, home, and end to select an effect. CTRL+Up and CTRL+Down move the selected effect. Since effects process from top to bottom, order matters!."
+
+[[control]]
+id = "tab.buses.fxOpenInterface"
+label = "Open plugin interface button"
+file = "src/ui/buses.rs"
+message = "If a plugin has an accessible interface, pressing this button will open it. From there, you can press F6 to try to focus the window and use standard controls to work with it. If you know the plugin doesn't have an accessible interface, it's better to use the edit parameters button instead."
+
+[[control]]
+id = "tab.buses.fxRemove"
+label = "Remove plugin from chain button"
+file = "src/ui/buses.rs"
+message = "Remove the selected plugin from the FX chain."
+
+[[control]]
+id = "tab.buses.fxUp"
+label = "Move plugin up in chain button"
+file = "src/ui/buses.rs"
+message = "Move the selected plugin up in the chain. CTRL+Up will also work as long as focus is on the list of plugins."
+
+[[control]]
+id = "tab.chat.input"
+label = "Chat message input box"
+file = "src/ui/chat.rs"
+message = "Type a message and press ENTER to chat to your stream."
+
+[[control]]
+id = "tab.chat.messageList"
+label = "Chat message list"
+file = "src/ui/chat.rs"
+message = "All chats you receive while streaming can be viewed here. Use arrows, page up, page down, home, and end to navigate this list."
+
+[[control]]
+id = "tab.chat.sendButton"
+label = "Send chat message button"
+file = "src/ui/chat.rs"
+message = "Press this button to send your message."
+
+[[control]]
+id = "tab.chat.viewButton"
+label = "View selected message button"
+file = "src/ui/chat.rs"
+message = "View the selected chat in a box that will allow for standard text navigation, selection, and copying."
+
+[[control]]
+id = "tab.home.mixer.strip.mute"
+label = "Mixer strip mute checkbox"
+file = "src/ui/home.rs"
+message = ""
+
+[[control]]
+id = "tab.home.mixer.strip.volume"
+label = "Mixer strip volume slider"
+file = "src/ui/home.rs"
+message = "Sets this strip's level, from 0 to 100 percent, where 100 is unity gain. Up, right, and page up raise the volume; down, left, and page down lower it. Arrows step by 1 percent and page keys by 10. Home jumps to the maximum and end to silence. If a source is too quiet even at 100 percent, open the context menu with shift plus F10, the applications key, or a right click, and choose Enable volume boost: the slider then goes up to 500 percent, amplifying the signal. Turning volume boost back off snaps the slider down to 100 percent."
+
+[[control]]
+id = "tab.home.overview"
+label = "Stream overview"
+file = "src/ui/home.rs"
+message = ""
+
+[[control]]
+id = "tab.home.recordButton"
+label = "Start/stop recording button"
+file = "src/ui/home.rs"
+message = "Start or stop local recording. Note: You can't use this button if you're already streaming. If you'd like to record a stream, this can be done by checking the appropriate box in File > set stream info."
+
+[[control]]
+id = "tab.home.sceneList"
+label = "Scenes list"
+file = "src/ui/home.rs"
+message = "Select a scene and press the switch button to transition to it. The order your scenes appear is the order they're set to in the scenes tab."
+
+[[control]]
+id = "tab.home.streamButton"
+label = "Start/stop streaming button"
+file = "src/ui/home.rs"
+message = "Starts or stops streaming to Audio Pub. Note: This button will be unavailable if you've started a local recording."
+
+[[control]]
+id = "tab.home.switchScene"
+label = "Switch to scene button"
+file = "src/ui/home.rs"
+message = "Transition to the selected scene."
+
+[[control]]
+id = "tab.scenes.sceneAdd"
+label = "Add scene button"
+file = "src/ui/scenes.rs"
+message = "Create a new scene which allows you to organize your sources by how you intend to use them. Scenes can be switched on the home tab. The default scene is always here and can be renamed, but not deleted."
+
+[[control]]
+id = "tab.scenes.sceneDown"
+label = "Move scene down button"
+file = "src/ui/scenes.rs"
+message = "Move the selected scene down in the list. CTRL+Down will also work as long as focus is on the list of scenes."
+
+[[control]]
+id = "tab.scenes.sceneList"
+label = "Scenes list"
+file = "src/ui/scenes.rs"
+message = "This is a list of configured scenes. Use the arrows, page up, page down, home, and end to navigate it. CTRL+Up and CTRL+Down will move the selected scene in the list. You transition between scenes via the list on the home tab. The order of the scenes on the home tab mirrors the order here, so configure them to suit your preference."
+
+[[control]]
+id = "tab.scenes.sceneRename"
+label = "Rename scene button"
+file = "src/ui/scenes.rs"
+message = "Rename the selected scene."
+
+[[control]]
+id = "tab.scenes.sceneUp"
+label = "Move scene up button"
+file = "src/ui/scenes.rs"
+message = "Move the selected scene up in the list. CTRL+Up will also work as long as focus is on the list of scenes."
+
+[[control]]
+id = "tab.scenes.sourceAdd"
+label = "Add source button"
+file = "src/ui/scenes.rs"
+message = "Add a new source to the selected scene. A source is something your stream will hear, such as your microphone, an app, a tts engine, etc."
+
+[[control]]
+id = "tab.scenes.sourceDown"
+label = "Move source down button"
+file = "src/ui/scenes.rs"
+message = "Move the selected source down in the list. CTRL+Down will also work as long as focus is on the list of sources."
+
+[[control]]
+id = "tab.scenes.sourceEdit"
+label = "Edit source button"
+file = "src/ui/scenes.rs"
+message = "Edit this source; what this does depends on the source. If it's a microphone source, it sets the mic to use, if it's a tts source, it sets the voice and parameters."
+
+[[control]]
+id = "tab.scenes.sourceList"
+label = "Sources list for the selected scene"
+file = "src/ui/scenes.rs"
+message = "Use the arrow keys, page up, page down, home, and end to select a source to work with. CTRL+Up and CTRL+Down can be used to move the selected source in the list."
+
+[[control]]
+id = "tab.scenes.sourceRemove"
+label = "Remove source button"
+file = "src/ui/scenes.rs"
+message = "Delete the selected source."
+
+[[control]]
+id = "tab.scenes.sourceSends"
+label = "Source sends button"
+file = "src/ui/scenes.rs"
+message = "Set up one or more buses you'd like to send this source's signal to. This is how you add effects. You send the source to a bus, put the effects on the bus and voila!"
+
+[[control]]
+id = "tab.scenes.sourceUp"
+label = "Move source up button"
+file = "src/ui/scenes.rs"
+message = "Move the selected source up in the list. CTRL+Up will also work as long as focus is on the list of sources."
