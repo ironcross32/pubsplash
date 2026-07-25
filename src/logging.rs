@@ -61,6 +61,33 @@ impl LogHandle {
     }
 }
 
+/// Routes panics into the log file.
+///
+/// This matters more than it looks. wxdragon wraps every event-handler callback
+/// in `catch_unwind` and discards the error, so a panic inside a UI handler does
+/// not abort, does not print, and does not reach the log — the rest of that
+/// handler simply never runs and the control appears to do nothing. For a
+/// screen-reader app that is silent in every sense of the word. Logging panics
+/// is the only way such a bug leaves a trace at all.
+pub fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        // The backtrace is forced rather than left to RUST_BACKTRACE: a panic
+        // here is rare and is exactly the moment the trace is needed.
+        log::error!(
+            "PANIC at {location}: {}\n{}",
+            info.payload_as_str().unwrap_or("<non-string payload>"),
+            std::backtrace::Backtrace::force_capture()
+        );
+        // Debug builds still print to the console as usual.
+        previous(info);
+    }));
+}
+
 /// Initializes logging. `configured_level` comes from the config file.
 pub fn init(configured_level: &str) -> Option<LogHandle> {
     let env = env_override();

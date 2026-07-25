@@ -24,6 +24,7 @@ fn main() {
         // Keep the handle alive for the lifetime of the app.
         std::mem::forget(handle);
     }
+    logging::install_panic_hook();
     log::info!("Pubsplash {} starting", env!("CARGO_PKG_VERSION"));
 
     let plugin_cache = vst::load_cache();

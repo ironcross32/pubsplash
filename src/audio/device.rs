@@ -117,10 +117,7 @@ pub fn resolve_apps(names: &[String]) -> HashMap<String, AppProcess> {
     // couple of seconds, and a fresh one would re-open every process to read
     // its exe path. Reusing it means `OnlyIfNotSet` really does skip processes
     // already seen, leaving only the enumeration itself.
-    let system = SYSTEM.get_or_init(|| Mutex::new(sysinfo::System::new()));
-    let Ok(mut system) = system.lock() else {
-        return found;
-    };
+    let mut system = lock_system();
     // Only exe paths are needed, so skip the (much costlier) default refresh.
     system.refresh_processes_specifics(
         sysinfo::ProcessesToUpdate::All,
@@ -149,6 +146,38 @@ pub fn resolve_apps(names: &[String]) -> HashMap<String, AppProcess> {
         }
     }
     found
+}
+
+/// Matches an Application source's configured name against a process name,
+/// for callers outside this module (the app picker's preselect).
+pub fn name_matches(configured: &str, process_name: &str) -> bool {
+    matches(configured, process_name)
+}
+
+/// Every running process as `(pid, exe file name, exe path)`, for the app
+/// picker. Unlike `resolve_apps` this returns the whole table, so it is the
+/// caller's job to filter it down to things a user would recognize.
+///
+/// Shares `SYSTEM` (and therefore the once-per-process exe path read) with
+/// `resolve_apps`, so opening the picker costs no more than a pump refresh.
+pub fn list_processes() -> Vec<(u32, String, Option<PathBuf>)> {
+    let mut system = lock_system();
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        true,
+        sysinfo::ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::OnlyIfNotSet),
+    );
+    system
+        .processes()
+        .iter()
+        .map(|(pid, process)| {
+            (
+                pid.as_u32(),
+                process.name().to_string_lossy().to_string(),
+                process.exe().map(Path::to_path_buf),
+            )
+        })
+        .collect()
 }
 
 /// Finds the PID of a running process by executable name (case-insensitive,
@@ -193,6 +222,32 @@ mod tests {
         assert!(each < std::time::Duration::from_millis(50), "{each:?} per poll");
     }
 
+    /// Spotify's version resource really does read `Spotify\0` followed by
+    /// stray bytes. Letting those through hands wx a string containing a NUL,
+    /// which panics `ListBox::append` inside an event handler — where wxdragon
+    /// swallows the panic, so the list simply stops halfway.
+    #[test]
+    fn a_padded_version_string_stops_at_its_first_nul() {
+        assert_eq!(
+            first_string("Spotify\0\u{38}\u{16}\u{1}FileV"),
+            Some("Spotify".to_string())
+        );
+        assert_eq!(first_string("Windows Explorer"), Some("Windows Explorer".into()));
+        assert_eq!(first_string("  NVDA \0"), Some("NVDA".to_string()));
+        assert_eq!(first_string("\0anything"), None);
+        assert_eq!(first_string("   "), None);
+    }
+
+    /// No name that reaches a wx control may contain a NUL, whatever the
+    /// executable's resource looks like.
+    #[test]
+    fn resolved_names_are_safe_to_hand_to_wx() {
+        for app in super::super::app_list::list_apps() {
+            assert!(!app.display_name.contains('\0'), "{:?}", app.display_name);
+            assert!(!app.exe.contains('\0'), "{:?}", app.exe);
+        }
+    }
+
     #[test]
     fn a_process_that_is_not_running_is_absent() {
         assert!(
@@ -204,6 +259,32 @@ mod tests {
 /// The process table, reused across refreshes so exe paths are read once per
 /// process rather than once per poll.
 static SYSTEM: OnceLock<Mutex<sysinfo::System>> = OnceLock::new();
+
+/// Locks a `static` cache, recovering from poisoning.
+///
+/// Bailing out on a poisoned lock would be the worst possible answer here: every
+/// later call would report that nothing is running, so the app picker would come
+/// up empty and every Application source would relabel itself "(not running)"
+/// for the rest of the session — with nothing said about why. The data behind
+/// these locks is a cache, so carrying on with it is safe; losing the ability to
+/// see any process is not.
+fn lock_recovering<'a, T>(mutex: &'a Mutex<T>, what: &str) -> std::sync::MutexGuard<'a, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("{what} lock was poisoned by an earlier panic; recovering");
+            mutex.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn lock_system() -> std::sync::MutexGuard<'static, sysinfo::System> {
+    lock_recovering(
+        SYSTEM.get_or_init(|| Mutex::new(sysinfo::System::new())),
+        "the process table",
+    )
+}
 
 /// Cache of version-resource lookups, keyed by executable path. Parsing the
 /// resource is comparatively expensive and the answer never changes for a
@@ -219,21 +300,35 @@ static DESCRIPTIONS: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLoc
 /// `explorer.exe` is the other way round ("Windows Explorer" against the
 /// product "Microsoft® Windows® Operating System"). This name is spoken on
 /// every visit to the strip, so take whichever is shorter.
-fn friendly_name(path: &Path) -> Option<String> {
+pub(crate) fn friendly_name(path: &Path) -> Option<String> {
     let cache = DESCRIPTIONS.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(cache) = cache.lock()
-        && let Some(cached) = cache.get(path)
-    {
+    if let Some(cached) = lock_recovering(cache, "the executable description cache").get(path) {
         return cached.clone();
     }
     let name = read_version_strings(path, &["FileDescription", "ProductName"])
         .into_iter()
         .flatten()
         .min_by_key(|s| s.chars().count());
-    if let Ok(mut cache) = cache.lock() {
-        cache.insert(path.to_path_buf(), name.clone());
-    }
+    lock_recovering(cache, "the executable description cache")
+        .insert(path.to_path_buf(), name.clone());
     name
+}
+
+/// The first NUL-terminated string in a raw version-resource value, trimmed;
+/// `None` when it is blank.
+///
+/// The length `VerQueryValueW` reports is the size of the *value*, not of the
+/// string inside it, and some executables pad theirs with whatever follows in
+/// the resource: Spotify's `ProductName` comes back as `Spotify\0` plus a few
+/// stray bytes. Keeping those bytes produces a `String` with an interior NUL,
+/// which is not merely ugly — every name here reaches a wx control, and
+/// `ListBox::append` panics on a string it cannot turn into a `CString`. That
+/// panic is then swallowed by wxdragon's event-handler `catch_unwind`, so the
+/// only visible effect is a list that stops halfway and a dialog that saves
+/// nothing. Cut at the first NUL.
+fn first_string(raw: &str) -> Option<String> {
+    let text = raw.split('\0').next().unwrap_or("").trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 /// Reads the named `\StringFileInfo\` entries from a file's version resource,
@@ -315,9 +410,7 @@ fn read_version_strings_inner(path: &Path, fields: &[&str]) -> Option<Vec<Option
                 return None;
             }
             let text = std::slice::from_raw_parts(value as *const u16, chars as usize);
-            let text = String::from_utf16_lossy(text);
-            let text = text.trim_end_matches('\0').trim().to_string();
-            (!text.is_empty()).then_some(text)
+            first_string(&String::from_utf16_lossy(text))
         };
         Some(fields.iter().map(|field| read(field)).collect())
     }

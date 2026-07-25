@@ -454,13 +454,19 @@ fn edit_source(app: &Rc<App>, list: &ListBox) {
 fn set_source_kind(app: &Rc<App>, scene_index: usize, source_index: usize, kind: SourceKindConfig) {
     {
         let mut config = app.config.borrow_mut();
-        if let Some(source) = config
+        match config
             .scenes
             .scenes
             .get_mut(scene_index)
             .and_then(|s| s.sources.get_mut(source_index))
         {
-            source.kind = kind;
+            Some(source) => source.kind = kind,
+            // The indices came from list selections taken before a dialog ran,
+            // so they can go stale. Dropping the user's edit silently is the one
+            // outcome that must not happen quietly.
+            None => log::error!(
+                "Discarding a source edit: scene {scene_index}, source {source_index} no longer exists"
+            ),
         }
     }
     after_scene_edit(app);
@@ -512,45 +518,39 @@ fn edit_microphone(
     }
 }
 
-fn edit_application(
-    app: &Rc<App>,
-    scene_index: usize,
-    source_index: usize,
-    current: String,
-) {
+fn edit_application(app: &Rc<App>, scene_index: usize, source_index: usize, current: String) {
     let Some(frame) = app.widgets(|w| w.frame.clone()) else {
         return;
     };
-    let dialog = TextEntryDialog::builder(
-        &frame,
-        "Name of the application to capture (for example: firefox):",
-        "Application source",
-    )
-    .with_default_value(&current)
-    .build();
-    if dialog.show_modal() == ID_OK {
-        if let Some(process_name) = dialog.get_value() {
-            let process_name = process_name.trim().to_string();
-            if process_name.is_empty() {
-                return;
+    let process_name = match super::app_picker::pick_application(&frame, &current) {
+        super::app_picker::Pick::App(name) => name,
+        // Opened here, after the picker has closed, so no modal is ever nested.
+        super::app_picker::Pick::TypeAName => {
+            match super::app_picker::type_a_name(&frame, &current) {
+                Some(name) => name,
+                None => return,
             }
-            if crate::audio::device::find_process(&process_name).is_none() {
-                show_error(
-                    &frame,
-                    "Application source",
-                    &format!(
-                        "{process_name} does not appear to be running. The source will stay silent until it starts, and will be picked up automatically when it does."
-                    ),
-                );
-            }
-            set_source_kind(
-                app,
-                scene_index,
-                source_index,
-                SourceKindConfig::Application { process_name },
-            );
         }
+        super::app_picker::Pick::Cancelled => return,
+    };
+    // Only reachable through the typed fallback now, but still worth saying: a
+    // name that resolves to nothing produces a source that is silent without
+    // complaining, which is the failure this dialog exists to prevent.
+    if crate::audio::device::find_process(&process_name).is_none() {
+        super::show_info(
+            &frame,
+            "Application source",
+            &format!(
+                "{process_name} does not appear to be running. The source will stay silent until it starts, and will be picked up automatically when it does."
+            ),
+        );
     }
+    set_source_kind(
+        app,
+        scene_index,
+        source_index,
+        SourceKindConfig::Application { process_name },
+    );
 }
 
 fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: TtsSourceConfig) {

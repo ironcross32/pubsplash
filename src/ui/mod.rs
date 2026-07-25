@@ -2,6 +2,7 @@
 //! timer that carries events from the audio/network threads onto the UI
 //! thread.
 
+mod app_picker;
 mod buses;
 mod chat;
 mod connect_dialog;

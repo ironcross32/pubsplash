@@ -10,6 +10,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - MP3 encoding with configurable bitrate
 - Scenes: group any number of audio sources and switch between them
 - Source types: microphone, desktop audio, per-application audio, text-to-speech, and sound events
+- Applications are picked from a list of what is running — by default just the ones that have actually played sound — rather than typed from memory
 - Sources name themselves after what they capture — the microphone device, the running application's real name, the chosen speech voice — so the mixer's sliders say exactly what you are adjusting even with several of the same type in a scene
 - Sources reconnect on their own if their device is unplugged, resets, or is not ready yet when Pubsplash starts. A source that is retrying reads "(reconnecting)" on its mixer strip, and a source set to a particular microphone is never silently switched to a different one
 - Chat: read incoming messages in an accessible list, send outbound messages, and have chat read aloud automatically with text-to-speech (optionally spoken into the stream as well)
@@ -59,6 +60,14 @@ In the mixer, sliders respond to arrow keys for 1% steps, `Page Up` / `Page Down
 Mixer volume sliders normally stop at 100%, which is unity gain — the source's own level, unchanged. If a source is still too quiet there (a microphone or a capture device that is simply low at the Windows level), open the slider's context menu with `SHIFT+F10`, the `Applications` key, or a right click, and choose **Enable volume boost**. The item shows a check mark while boost is on, and that slider then runs from 0% to 500%, amplifying the signal by up to five times.
 
 Boost is remembered per strip — Master, each source, and each bus have their own setting, saved with your configuration. Turning it back off snaps the slider down to 100% if it was higher. Note that the boost is a plain gain stage with no limiter, so amplifying an already-loud source will distort it; back the slider off until it sounds clean.
+
+## Capturing an application
+
+Add an **Application** source on the **Scenes and Sources** tab (**Add source**, then pick "Application") to stream one program's audio while leaving the rest of your system out of the mix.
+
+The picker that opens lists the applications you can capture, each read as its real name followed by its program file — "Firefox (firefox.exe)". By default it offers only the applications that have played sound since they started, which is usually a handful; that is the **Only show apps that have played sound** checkbox, and unchecking it widens the list to every open application, including ones that have not made a sound yet. Windows' own components never appear in either view, and Pubsplash never offers itself. Press **Refresh** after starting an application, or after playing something in one, to look again.
+
+**Type a name...** enters a program name by hand, for an application that is not running yet — the source stays silent until that program starts and then picks it up on its own, without any further editing. Editing an Application source later reopens the picker with its application already highlighted; if that application has since closed, it appears as a "(not running)" entry at the top, so cancelling never loses the setting.
 
 ## Buses and sends
 

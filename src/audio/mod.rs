@@ -2,6 +2,7 @@
 //! while streaming, and reacts to UI commands (volumes, mutes, scene
 //! switches) without ever blocking the UI thread.
 
+pub mod app_list;
 pub mod capture;
 pub mod device;
 pub mod encoder;
