@@ -32,12 +32,15 @@ jobs:
       - name: Install cargo-packager
         run: cargo install cargo-packager --locked
 
-      # Must run before packaging: readme.html is bundled into the installer as
-      # a packager resource (see Cargo.toml), so it has to exist on disk first.
-      - name: Convert README to HTML
+      # Must run before packaging: both HTML files are bundled into the installer
+      # as packager resources (see Cargo.toml), so they have to exist on disk
+      # first. HTML rather than Markdown because Help > Open Readme and Help >
+      # View Changelog hand these to the default browser.
+      - name: Convert docs to HTML
         run: |
           npm install -g marked
           marked README.md -o readme.html
+          marked changelog.md -o changelog.html
         shell: bash
 
       # Builds the exe via the configured before-packaging-command
@@ -49,10 +52,18 @@ jobs:
         shell: bash
         run: |
           mkdir bundle
+          # Every user-facing binary — keep this list in step with the
+          # `binaries` key in Cargo.toml. pubsplash.exe resolves its helpers as
+          # siblings of itself, so a ZIP missing one breaks Tools > Sound Pack
+          # Manager or the VST plugin scan. gen-help is a dev tool and is
+          # deliberately left out. The default sound pack is embedded in the exe
+          # at compile time, so there are no loose assets to copy.
           cp target/release/pubsplash.exe bundle/
+          cp target/release/pubsplash-scan.exe bundle/
+          cp target/release/pubsplash-soundpack.exe bundle/
+          cp target/release/soundpack.exe bundle/
           cp readme.html bundle/
-          cp changelog.md bundle/
-          if [ -d sounds ]; then cp -r sounds bundle/; fi
+          cp changelog.html bundle/
 
       - name: Zip bundle
         shell: pwsh

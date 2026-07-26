@@ -2,8 +2,8 @@
 name = "pubsplash"
 version = "0.1.1"
 edition = "2024"
-# Two binaries live here (pubsplash + the out-of-process pubsplash-scan helper),
-# so `cargo run` is ambiguous without naming the default target.
+# Several binaries live here, so `cargo run` is ambiguous without naming the
+# default target.
 default-run = "pubsplash"
 
 # Loads a single VST plugin and reports its info; kept out-of-process so a
@@ -11,6 +11,19 @@ default-run = "pubsplash"
 [[bin]]
 name = "pubsplash-scan"
 path = "src/bin/scan_helper.rs"
+
+# Standalone Sound Pack Manager, launched from Tools > Sound Pack Manager.
+# Shipped alongside pubsplash.exe, which resolves it as a sibling.
+[[bin]]
+name = "pubsplash-soundpack"
+path = "src/bin/soundpack_manager.rs"
+
+# Command-line pack compiler, the same job as the manager's Compile button.
+# Auto-discovered from src/bin anyway; spelled out here so the shipping list
+# below is checkable against this one.
+[[bin]]
+name = "soundpack"
+path = "src/bin/soundpack.rs"
 
 # Dev tool: scans the UI source for `help::tag(..)` calls and round-trips the
 # hand-authored context-help strings in help.toml. Not shipped.
@@ -52,19 +65,27 @@ windows-core = "0.62.2"
 windows = { version = "0.62", features = ["Win32_Media_Speech", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_Foundation", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Accessibility", "Win32_UI_Shell", "Win32_System_Variant", "Win32_System_Ole"] }
 
 [package.metadata.packager]
-before-packaging-command = "cargo build --release --bins"
+before-packaging-command = "cargo build --release --bin pubsplash --bin pubsplash-scan --bin pubsplash-soundpack --bin soundpack"
 identifier = "com.github.ironcross32.pubsplash"
 formats = ["nsis"]
 icons = ["assets/icon/pubsplash.ico"]
-# Extra files copied next to the exe in the install directory. readme.html is
-# generated at package time (see the release workflow / README build step) â€”
-# a local `cargo packager` run needs it produced first.
-resources = ["readme.html", "changelog.md"]
+# Extra files copied next to the exe in the install directory, which is where
+# the Help menu looks for them. Both are generated from the Markdown sources at
+# package time (see the release workflow's "Convert docs to HTML" step) â€”
+# a local `cargo packager` run needs them produced first.
+resources = ["readme.html", "changelog.html"]
+
+# Listed explicitly so the dev-only gen-help tool is not installed: with this
+# unset, cargo-packager auto-detects every [[bin]] target in the manifest.
+# Paths are binary names without `.exe`, resolved against target/release.
+binaries = [
+  { path = "pubsplash", main = true },
+  { path = "pubsplash-scan" },
+  { path = "pubsplash-soundpack" },
+  { path = "soundpack" },
+]
 
 # Let the user choose per-user (AppData\Local) or per-machine (Program Files,
 # elevation prompted) at install time, instead of forcing the per-user default.
 [package.metadata.packager.nsis]
 installer-mode = "both"
-[[bin]]
-name = "pubsplash-soundpack"
-path = "src/bin/soundpack_manager.rs"

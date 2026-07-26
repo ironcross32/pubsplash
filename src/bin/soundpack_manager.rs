@@ -1,3 +1,6 @@
+// A GUI app: without this a release build opens a console window next to the
+// frame, which is clutter on screen and a stray stop for screen-reader focus.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! Standalone Sound Pack Manager.
 #[path = "../soundpack.rs"]
 mod soundpack;
