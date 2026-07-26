@@ -143,9 +143,22 @@ fn run(consumer: &mut Consumer<f32>, stop: &AtomicBool) -> Result<(), String> {
 /// taking what the ring has and padding the rest with silence. An underrun is
 /// a gap in the monitor, never a stall in the mixer.
 fn fill(bytes: &mut VecDeque<u8>, consumer: &mut Consumer<f32>, samples: usize) {
-    for _ in 0..samples {
-        let sample = consumer.pop().unwrap_or(0.0);
-        bytes.extend(sample.to_le_bytes());
+    // Read in one chunk rather than a `pop` per sample; see
+    // `mixer::pull_block` for why that adds up.
+    let take = consumer.slots().min(samples);
+    let mut filled = 0;
+    if take > 0 {
+        if let Ok(chunk) = consumer.read_chunk(take) {
+            let (first, second) = chunk.as_slices();
+            for &sample in first.iter().chain(second.iter()) {
+                bytes.extend(sample.to_le_bytes());
+            }
+            filled = first.len() + second.len();
+            chunk.commit_all();
+        }
+    }
+    for _ in filled..samples {
+        bytes.extend(0f32.to_le_bytes());
     }
 }
 

@@ -43,6 +43,7 @@ fn main() {
         audio::cue::play_sound_kind_async(soundpack::SoundKind::Startup);
     }
     let _ = wxdragon::main(move |_| {
+        let (apps_tx, apps_rx) = crossbeam_channel::unbounded();
         let app = Rc::new(ui::App {
             config: RefCell::new(config.clone()),
             run: RefCell::new(ui::Runtime::default()),
@@ -59,6 +60,9 @@ fn main() {
             shutting_down: std::cell::Cell::new(false),
             config_dirty: std::cell::Cell::new(false),
             pumping: std::cell::Cell::new(false),
+            apps_tx,
+            apps_rx,
+            apps_pending: std::cell::Cell::new(false),
             pump_timer: RefCell::new(None),
             shutdown_cue: RefCell::new(None),
         });

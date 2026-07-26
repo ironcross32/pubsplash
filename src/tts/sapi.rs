@@ -10,7 +10,7 @@
 //! loop back into the stream.
 
 use crate::audio::mixer::{CHANNELS, SAMPLE_RATE};
-use crate::audio::{ExternalFeeds, FeedResult};
+use crate::audio::ExternalFeeds;
 use crossbeam_channel::{Receiver, Sender};
 use windows::Win32::Foundation::HGLOBAL;
 use windows::Win32::Media::Audio::WAVEFORMATEX;
@@ -146,7 +146,7 @@ fn speech_thread(receiver: Receiver<SpeakRequest>, feeds: ExternalFeeds) {
             // engine while the local speech plays.
             if request.to_stream {
                 match synth_to_pcm(&request, token.as_ref()) {
-                    Ok(samples) => feed_stream(&feeds, &request.source_name, &samples),
+                    Ok(samples) => feeds.feed_all(&request.source_name, &samples, "TTS"),
                     Err(e) => log::error!("TTS stream synthesis failed: {e}"),
                 }
             }
@@ -224,25 +224,6 @@ unsafe fn synth_to_pcm(
     }
 }
 
-/// Trickle-feeds samples into the engine ring, pacing to the mixer's drain
-/// rate. Stops if the source disappears (scene switch).
-fn feed_stream(feeds: &ExternalFeeds, source_name: &str, samples: &[f32]) {
-    let mut offset = 0;
-    while offset < samples.len() {
-        match feeds.push(source_name, &samples[offset..]) {
-            FeedResult::Done => return,
-            FeedResult::Full { accepted } => {
-                offset += accepted;
-                // The ring holds a second of audio; let the mixer drain.
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            FeedResult::Gone => {
-                log::debug!("TTS source {source_name:?} no longer active; dropping speech");
-                return;
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

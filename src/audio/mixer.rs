@@ -12,6 +12,31 @@ pub const BLOCK_SAMPLES: usize = BLOCK_FRAMES * CHANNELS;
 /// Duration of the mute/unmute fade, in seconds.
 const FADE_SECONDS: f32 = 0.05;
 
+/// Pulls up to `dest.len()` samples out of `ring`, zero-filling whatever the
+/// ring could not supply.
+///
+/// One bulk read rather than a `pop()` per sample. Popping individually costs
+/// an atomic index store per sample — 96,000 a second per source per
+/// direction — so a six-source scene was spending over a million ring
+/// operations a second on plumbing, which is headroom the FX chains compete
+/// for on the same thread.
+pub fn pull_block(ring: &mut rtrb::Consumer<f32>, dest: &mut [f32]) {
+    let take = ring.slots().min(dest.len());
+    let mut filled = 0;
+    if take > 0 {
+        if let Ok(chunk) = ring.read_chunk(take) {
+            // The requested range can straddle the end of the buffer.
+            let (first, second) = chunk.as_slices();
+            dest[..first.len()].copy_from_slice(first);
+            dest[first.len()..first.len() + second.len()].copy_from_slice(second);
+            filled = first.len() + second.len();
+            // Every sample handed out was copied, so all of it is consumed.
+            chunk.commit_all();
+        }
+    }
+    dest[filled..].fill(0.0);
+}
+
 /// Absolute ceiling for a strip's volume. 100 is unity gain; anything above it
 /// is make-up gain for a source that is simply too quiet at the OS level, and
 /// is only reachable when the strip's "volume boost" is enabled in the UI (the
@@ -121,6 +146,46 @@ pub fn to_i16(block: &[f32], out: &mut Vec<i16>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_partly_filled_ring_is_read_out_and_the_rest_zeroed() {
+        let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(64);
+        for i in 0..10 {
+            producer.push(i as f32).unwrap();
+        }
+        let mut dest = vec![9.0f32; 16];
+        pull_block(&mut consumer, &mut dest);
+        assert_eq!(&dest[..10], &[0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]);
+        assert!(dest[10..].iter().all(|&s| s == 0.0), "tail is silence");
+        assert_eq!(consumer.slots(), 0, "exactly what was read is consumed");
+    }
+
+    #[test]
+    fn a_read_that_wraps_the_ring_is_still_contiguous_in_the_block() {
+        // Push past the halfway point, drain it, then push again so the next
+        // read straddles the end of the backing buffer.
+        let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(8);
+        for i in 0..6 {
+            producer.push(i as f32).unwrap();
+        }
+        let mut drain = vec![0f32; 6];
+        pull_block(&mut consumer, &mut drain);
+        for i in 6..12 {
+            producer.push(i as f32).unwrap();
+        }
+        let mut dest = vec![9.0f32; 6];
+        pull_block(&mut consumer, &mut dest);
+        assert_eq!(dest, vec![6., 7., 8., 9., 10., 11.]);
+        assert_eq!(consumer.slots(), 0);
+    }
+
+    #[test]
+    fn an_empty_ring_yields_silence() {
+        let (_producer, mut consumer) = rtrb::RingBuffer::<f32>::new(8);
+        let mut dest = vec![9.0f32; 4];
+        pull_block(&mut consumer, &mut dest);
+        assert_eq!(dest, vec![0.0; 4]);
+    }
 
     #[test]
     fn unity_gain_passes_through() {

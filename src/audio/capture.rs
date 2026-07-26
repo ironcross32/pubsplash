@@ -219,16 +219,33 @@ fn run(
 /// Moves whole f32 samples from the byte queue into the ring, dropping
 /// samples when the ring is full (mixer stalled or source unattached).
 fn push_f32(bytes: &mut std::collections::VecDeque<u8>, producer: &mut Producer<f32>) {
-    while bytes.len() >= 4 {
-        let sample = f32::from_le_bytes([
-            bytes.pop_front().unwrap(),
-            bytes.pop_front().unwrap(),
-            bytes.pop_front().unwrap(),
-            bytes.pop_front().unwrap(),
-        ]);
-        // Full ring: discard. Capture must never block.
-        let _ = producer.push(sample);
+    let available = bytes.len() / 4;
+    if available == 0 {
+        return;
     }
+    // Written in one chunk rather than a `push` per sample: at 48 kHz stereo
+    // that was 96,000 atomic index stores a second per source, plus four
+    // `pop_front`s each.
+    let take = producer.slots().min(available);
+    if take > 0 {
+        if let Ok(mut chunk) = producer.write_chunk_uninit(take) {
+            let (first, second) = chunk.as_mut_slices();
+            for slot in first.iter_mut().chain(second.iter_mut()) {
+                // `available` was computed from the queue length, so each of
+                // these four bytes is there.
+                slot.write(f32::from_le_bytes([
+                    bytes.pop_front().unwrap(),
+                    bytes.pop_front().unwrap(),
+                    bytes.pop_front().unwrap(),
+                    bytes.pop_front().unwrap(),
+                ]));
+            }
+            // SAFETY: every slot in both slices was just written.
+            unsafe { chunk.commit_all() };
+        }
+    }
+    // Full ring: discard the remainder. Capture must never block.
+    bytes.drain(..(available - take) * 4);
 }
 
 #[cfg(test)]

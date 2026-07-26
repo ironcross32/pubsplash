@@ -168,22 +168,68 @@ pub enum FeedResult {
     Gone,
 }
 
+/// Copies `src` into an uninitialized ring slice, initializing all of it.
+fn write_uninit(dest: &mut [std::mem::MaybeUninit<f32>], src: &[f32]) {
+    for (slot, &sample) in dest.iter_mut().zip(src) {
+        slot.write(sample);
+    }
+}
+
 impl ExternalFeeds {
     /// Pushes as many samples as fit into the named source's ring. Callers
     /// stream long audio by retrying the remainder as the mixer drains.
     pub fn push(&self, name: &str, samples: &[f32]) -> FeedResult {
-        let mut map = self.0.lock().unwrap();
+        // `lock_recovering`, not `unwrap`: a feeder that panics mid-push would
+        // otherwise poison the map, and the next push — which happens on the
+        // audio thread's ring, from a TTS or cue thread — would panic too.
+        let mut map = device::lock_recovering(&self.0, "External feeds");
         let Some(producer) = map.get_mut(name) else {
             return FeedResult::Gone;
         };
-        let mut accepted = 0;
-        for &sample in samples {
-            if producer.push(sample).is_err() {
-                return FeedResult::Full { accepted };
+        // Written in one bulk chunk rather than a sample at a time: this holds
+        // a global mutex, and a few seconds of speech is a six-figure loop.
+        let take = producer.slots().min(samples.len());
+        if take > 0 {
+            if let Ok(mut chunk) = producer.write_chunk_uninit(take) {
+                let (first, second) = chunk.as_mut_slices();
+                write_uninit(first, &samples[..first.len()]);
+                write_uninit(second, &samples[first.len()..take]);
+                // SAFETY: both slices were just fully initialized above.
+                unsafe { chunk.commit_all() };
             }
-            accepted += 1;
         }
-        FeedResult::Done
+        if take == samples.len() {
+            FeedResult::Done
+        } else {
+            FeedResult::Full { accepted: take }
+        }
+    }
+
+    /// Feeds a whole buffer in, pacing to the mixer's drain rate, and stops if
+    /// the source disappears (a scene switch).
+    ///
+    /// The wait is a plain sleep on purpose. The event-driven alternative is a
+    /// condvar the *audio thread* has to signal after every block — a blocking
+    /// wait and a lock on the mix path, where a missed notify wedges speech and
+    /// a badly placed one stalls the mixer. This poll is bounded, cheap, and
+    /// already off the audio thread; it is the one place where "it's only
+    /// 20 ms" genuinely holds.
+    pub fn feed_all(&self, name: &str, samples: &[f32], what: &str) {
+        let mut offset = 0;
+        while offset < samples.len() {
+            match self.push(name, &samples[offset..]) {
+                FeedResult::Done => return,
+                FeedResult::Full { accepted } => {
+                    offset += accepted;
+                    // The ring holds a second of audio; let the mixer drain.
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                FeedResult::Gone => {
+                    log::debug!("{what} source {name:?} no longer active; dropping audio");
+                    return;
+                }
+            }
+        }
     }
 
     fn insert(&self, name: String, producer: rtrb::Producer<f32>) {
@@ -611,11 +657,17 @@ fn engine_loop(
         crate::vst::host2::advance_transport(mixer::BLOCK_FRAMES as u64);
 
         if let Some(out) = &mut monitor_out {
-            // Full ring means the render thread is behind; dropping the block
-            // is the only option that keeps the mixer on its cadence.
-            for &sample in monitor_block.iter() {
-                if out.producer.push(sample).is_err() {
-                    break;
+            // A short ring means the render thread is behind; writing what
+            // fits and dropping the rest is the only option that keeps the
+            // mixer on its cadence.
+            let take = out.producer.slots().min(monitor_block.len());
+            if take > 0 {
+                if let Ok(mut chunk) = out.producer.write_chunk_uninit(take) {
+                    let (first, second) = chunk.as_mut_slices();
+                    write_uninit(first, &monitor_block[..first.len()]);
+                    write_uninit(second, &monitor_block[first.len()..take]);
+                    // SAFETY: both slices were just fully initialized above.
+                    unsafe { chunk.commit_all() };
                 }
             }
         }
@@ -692,17 +744,7 @@ fn mix_one_block(
         bus.buffer.fill(0.0);
     }
     for source in sources.iter_mut() {
-        let available = source.consumer.slots();
-        // `take` is bounded by what the ring reports available, so every pop
-        // below succeeds and fills its slot; only the tail past `take` needs
-        // zeroing.
-        let take = available.min(BLOCK_SAMPLES);
-        for slot in source.scratch[..take].iter_mut() {
-            if let Ok(sample) = source.consumer.pop() {
-                *slot = sample;
-            }
-        }
-        source.scratch[take..].fill(0.0);
+        mixer::pull_block(&mut source.consumer, &mut source.scratch);
         source.strip.process(&mut source.scratch);
         if source.monitor {
             mixer::mix_into(monitor_block, &source.scratch);

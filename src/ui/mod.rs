@@ -350,6 +350,11 @@ pub struct App {
     /// Set while `pump_events` is running, so a modal dialog it opens cannot
     /// re-enter it from the nested event loop.
     pub pumping: std::cell::Cell<bool>,
+    /// Process snapshots from the worker started by
+    /// [`App::request_app_processes`], and whether one is outstanding.
+    pub apps_tx: crossbeam_channel::Sender<HashMap<String, crate::audio::device::AppProcess>>,
+    pub apps_rx: crossbeam_channel::Receiver<HashMap<String, crate::audio::device::AppProcess>>,
+    pub apps_pending: std::cell::Cell<bool>,
     /// The 100 ms pump timer. Owned here (not leaked) so `on_close` can stop it
     /// before the frame is destroyed: a running timer whose owner frame has been
     /// torn down keeps firing `WM_TIMER` into the freed frame handler and
@@ -436,17 +441,7 @@ fn play_sound_event(app: &Rc<App>, event: crate::soundpack::StreamEvent) {
             let Ok(samples) = crate::soundpack::decode_wav(&bytes) else {
                 return;
             };
-            let mut offset = 0;
-            while offset < samples.len() {
-                match feeds.push(&source_name, &samples[offset..]) {
-                    crate::audio::FeedResult::Done => break,
-                    crate::audio::FeedResult::Full { accepted } => {
-                        offset += accepted;
-                        std::thread::sleep(Duration::from_millis(20));
-                    }
-                    crate::audio::FeedResult::Gone => break,
-                }
-            }
+            feeds.feed_all(&source_name, &samples, "Sound events");
         });
     }
 }
@@ -534,39 +529,73 @@ impl App {
     /// *active* scene would now capture a different process (including starting
     /// or stopping capture entirely), which is what makes a re-sync worth its
     /// cost â€” `SetSources` respawns every capture thread.
-    pub fn refresh_app_processes(&self) -> (bool, bool) {
-        let app_names = |sources: &[crate::config::SourceConfig]| -> Vec<String> {
-            sources
-                .iter()
-                .filter_map(|s| match &s.kind {
-                    SourceKindConfig::Application { process_name } => Some(process_name.clone()),
-                    _ => None,
-                })
-                .collect()
-        };
-        let (all_names, active_names) = {
-            let config = self.config.borrow();
-            (
-                config
-                    .scenes
-                    .scenes
-                    .iter()
-                    .flat_map(|scene| app_names(&scene.sources))
-                    .collect::<Vec<_>>(),
-                config
-                    .scenes
-                    .active_scene()
-                    .map(|scene| app_names(&scene.sources))
-                    .unwrap_or_default(),
-            )
-        };
-        let mut run = self.run.borrow_mut();
+    /// Starts the enumeration off the UI thread. Returns `Some` only when it
+    /// could answer without enumerating at all; the result of a real
+    /// enumeration arrives via [`App::apply_app_processes`].
+    ///
+    /// Enumerating is a whole-system process snapshot, and it used to run
+    /// synchronously here. `device.rs`'s own budget for it is 50 ms — squarely
+    /// in the range a screen-reader user feels, since NVDA's speech pump goes
+    /// through the foreground window's message queue. Every two seconds, that
+    /// is a periodic hitch while arrowing the mixer.
+    pub fn request_app_processes(&self) -> Option<(bool, bool)> {
+        let all_names = self.application_source_names(false);
         if all_names.is_empty() {
+            let mut run = self.run.borrow_mut();
+            let had_any = !run.apps.is_empty();
+            run.apps.clear();
+            return Some((had_any, had_any));
+        }
+        // One at a time: overlapping snapshots would contend for the shared
+        // `System`, and the later answer could be the older one.
+        if self.apps_pending.replace(true) {
+            return None;
+        }
+        let sender = self.apps_tx.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(crate::audio::device::resolve_apps(&all_names));
+        });
+        None
+    }
+
+    /// Picks up a finished enumeration, if one has arrived.
+    ///
+    /// Driven by arrival rather than by the request on purpose: acting at
+    /// request time would compare against a `run.apps` the snapshot never saw.
+    pub fn apply_app_processes(&self) -> (bool, bool) {
+        let Ok(apps) = self.apps_rx.try_recv() else {
+            return (false, false);
+        };
+        self.apps_pending.set(false);
+        self.absorb_apps(apps)
+    }
+
+    /// Enumerates synchronously.
+    ///
+    /// For one-off, user-initiated edits, whose very next line reads
+    /// `run.apps` — adding a source has to know the pid before it can sync the
+    /// engine, and paying 50 ms once on an explicit action is not the problem.
+    /// The *periodic* poll goes through [`App::request_app_processes`].
+    pub fn refresh_app_processes(&self) -> (bool, bool) {
+        let all_names = self.application_source_names(false);
+        if all_names.is_empty() {
+            let mut run = self.run.borrow_mut();
             let had_any = !run.apps.is_empty();
             run.apps.clear();
             return (had_any, had_any);
         }
-        let apps = crate::audio::device::resolve_apps(&all_names);
+        self.absorb_apps(crate::audio::device::resolve_apps(&all_names))
+    }
+
+    /// Stores a fresh snapshot, reporting what it changed.
+    fn absorb_apps(
+        &self,
+        apps: HashMap<String, crate::audio::device::AppProcess>,
+    ) -> (bool, bool) {
+        // Read the active scene now, not when the snapshot was requested: the
+        // user may have switched scenes in between.
+        let active_names = self.application_source_names(true);
+        let mut run = self.run.borrow_mut();
         if apps == run.apps {
             return (false, false);
         }
@@ -576,6 +605,35 @@ impl App {
         });
         run.apps = apps;
         (true, capture_changed)
+    }
+
+    /// The configured process names of Application sources, in the active
+    /// scene only or across every scene.
+    fn application_source_names(&self, active_only: bool) -> Vec<String> {
+        let names = |sources: &[crate::config::SourceConfig]| -> Vec<String> {
+            sources
+                .iter()
+                .filter_map(|s| match &s.kind {
+                    SourceKindConfig::Application { process_name } => Some(process_name.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let config = self.config.borrow();
+        if active_only {
+            config
+                .scenes
+                .active_scene()
+                .map(|scene| names(&scene.sources))
+                .unwrap_or_default()
+        } else {
+            config
+                .scenes
+                .scenes
+                .iter()
+                .flat_map(|scene| names(&scene.sources))
+                .collect()
+        }
     }
 
     /// Forgets which sources were being monitored. Source monitoring is held by
@@ -1123,18 +1181,17 @@ pub fn build(app: Rc<App>) {
                 app.flush_config();
             }
             if ticks % 20 == 0 {
-                // Every two seconds: notice applications starting or exiting,
-                // so their strips say which app they are and (once running)
-                // actually capture it.
-                let (labels_changed, capture_changed) = app.refresh_app_processes();
-                if capture_changed {
-                    app.sync_engine_sources();
-                }
-                if labels_changed {
-                    home::relabel_source_strips(&app);
-                    scenes::refresh_sources_list(&app);
+                // Every two seconds: ask for a fresh look at which applications
+                // are running, so their strips say which app they are and (once
+                // running) actually capture it. The enumeration happens on a
+                // worker; only the "nothing to enumerate" case answers here.
+                if let Some(changes) = app.request_app_processes() {
+                    apply_app_changes(&app, changes);
                 }
             }
+            // A snapshot may have finished since the last tick.
+            let changes = app.apply_app_processes();
+            apply_app_changes(&app, changes);
         });
         timer.start(100, false);
         // Own the timer via App so `on_close` can stop it before teardown.
@@ -1394,6 +1451,17 @@ fn shell_open(target: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("ShellExecute failed with code {code}"))
+    }
+}
+
+/// Acts on the result of an application-process refresh.
+fn apply_app_changes(app: &Rc<App>, (labels_changed, capture_changed): (bool, bool)) {
+    if capture_changed {
+        app.sync_engine_sources();
+    }
+    if labels_changed {
+        home::relabel_source_strips(app);
+        scenes::refresh_sources_list(app);
     }
 }
 

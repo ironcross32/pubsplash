@@ -291,7 +291,7 @@ static SYSTEM: OnceLock<Mutex<sysinfo::System>> = OnceLock::new();
 /// for the rest of the session — with nothing said about why. The data behind
 /// these locks is a cache, so carrying on with it is safe; losing the ability to
 /// see any process is not.
-fn lock_recovering<'a, T>(mutex: &'a Mutex<T>, what: &str) -> std::sync::MutexGuard<'a, T> {
+pub fn lock_recovering<'a, T>(mutex: &'a Mutex<T>, what: &str) -> std::sync::MutexGuard<'a, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
