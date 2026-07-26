@@ -58,6 +58,7 @@ fn main() {
             open_editors: RefCell::new(Vec::new()),
             shutting_down: std::cell::Cell::new(false),
             config_dirty: std::cell::Cell::new(false),
+            pumping: std::cell::Cell::new(false),
             pump_timer: RefCell::new(None),
             shutdown_cue: RefCell::new(None),
         });

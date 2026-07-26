@@ -95,12 +95,27 @@ pub struct AppProcess {
 /// Matches an Application source's configured name against a process name:
 /// case-insensitive, with or without the `.exe` suffix.
 fn matches(configured: &str, process_name: &str) -> bool {
-    let wanted = configured.trim().to_ascii_lowercase();
-    if wanted.is_empty() {
-        return false;
+    let wanted = configured.trim();
+    !wanted.is_empty() && matches_key(wanted, process_name)
+}
+
+/// [`matches`] against an already-trimmed configured name.
+///
+/// Allocation-free on purpose: `resolve_apps` calls this once per running
+/// process per configured Application name, on the UI thread, every couple of
+/// seconds — it used to lowercase both strings and format a third every time.
+fn matches_key(wanted: &str, process_name: &str) -> bool {
+    if process_name.eq_ignore_ascii_case(wanted) {
+        return true;
     }
-    let actual = process_name.to_ascii_lowercase();
-    actual == wanted || actual == format!("{wanted}.exe")
+    // The configured name may omit the `.exe` the OS reports. Splitting on the
+    // last four bytes is safe once they are known to be the ASCII ".exe".
+    let bytes = process_name.as_bytes();
+    let Some(stem_len) = bytes.len().checked_sub(4) else {
+        return false;
+    };
+    bytes[stem_len..].eq_ignore_ascii_case(b".exe")
+        && process_name[..stem_len].eq_ignore_ascii_case(wanted)
 }
 
 /// Resolves every configured Application name in one process enumeration.
@@ -123,11 +138,16 @@ pub fn resolve_apps(names: &[String]) -> HashMap<String, AppProcess> {
         true,
         sysinfo::ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::OnlyIfNotSet),
     );
+    // The lookup keys depend only on the configured names, so they are built
+    // once rather than once per (process x name).
+    let keys: Vec<String> = wanted
+        .iter()
+        .map(|name| name.trim().to_ascii_lowercase())
+        .collect();
     for (pid, process) in system.processes() {
         let process_name = process.name().to_string_lossy().to_string();
-        for name in &wanted {
-            let key = name.trim().to_ascii_lowercase();
-            if found.contains_key(&key) || !matches(name, &process_name) {
+        for key in &keys {
+            if found.contains_key(key) || !matches_key(key, &process_name) {
                 continue;
             }
             let display_name = process
@@ -135,7 +155,7 @@ pub fn resolve_apps(names: &[String]) -> HashMap<String, AppProcess> {
                 .and_then(friendly_name)
                 .unwrap_or_else(|| process_name.clone());
             found.insert(
-                key,
+                key.clone(),
                 AppProcess {
                     pid: pid.as_u32(),
                     exe: process_name.clone(),

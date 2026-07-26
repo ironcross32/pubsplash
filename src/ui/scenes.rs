@@ -227,17 +227,43 @@ pub fn refresh_scenes_list(app: &Rc<App>) {
     });
 }
 
+/// Refreshes the Sources list, in place when only the labels changed.
+///
+/// This is driven by the two-second application poll, so an application that
+/// comes and goes from the process table used to clear and rebuild the list
+/// every two seconds — restoring the selection each time, and interrupting
+/// anyone arrowing through it. The same in-place treatment
+/// `home::relabel_source_strips` gives the mixer strips applies here: the diff
+/// is what does the work, since `set_string` still raises a name change for
+/// the item it touches.
 pub fn refresh_sources_list(app: &Rc<App>) {
     let scene_index = selected_scene_index(app);
-    app.widgets(|w| {
+    let labels = {
         let config = app.config.borrow();
+        match config.scenes.scenes.get(scene_index) {
+            Some(scene) => {
+                let ctx = app.name_context(&scene.sources);
+                crate::source_name::list_labels(&scene.sources, &ctx)
+            }
+            None => Vec::new(),
+        }
+    };
+    app.widgets(|w| {
+        if w.sources_list.get_count() as usize == labels.len() {
+            // Same sources, possibly renamed: touch only what differs.
+            for (index, label) in labels.iter().enumerate() {
+                let index = index as u32;
+                if w.sources_list.get_string(index).as_deref() != Some(label.as_str()) {
+                    w.sources_list.set_string(index, label);
+                }
+            }
+            return;
+        }
+        // The list itself changed, so the focus context genuinely has too.
         let selected = w.sources_list.get_selection();
         w.sources_list.clear();
-        if let Some(scene) = config.scenes.scenes.get(scene_index) {
-            let ctx = app.name_context(&scene.sources);
-            for label in crate::source_name::list_labels(&scene.sources, &ctx) {
-                w.sources_list.append(&label);
-            }
+        for label in &labels {
+            w.sources_list.append(label);
         }
         if let Some(index) = selected {
             if index < w.sources_list.get_count() {

@@ -346,10 +346,42 @@ fn engine_loop(
     let mut send_scratch = vec![0f32; BLOCK_SAMPLES];
     let mut pcm_i16: Vec<i16> = Vec::with_capacity(BLOCK_SAMPLES);
 
+    // The first command is pulled with a blocking receive rather than the
+    // try_recv loop below whenever there is nothing to mix. Pubsplash is an app
+    // people leave open all day, and until the user configures a source there
+    // is no signal, no encoder, no recorder and nothing being monitored — yet
+    // the loop still woke 100 times a second to zero two buffers and throw them
+    // away. Parking instead takes idle wakeups to zero, which is what lets the
+    // package reach a deeper C-state on battery.
+    //
+    // Deliberately spelled out as "nothing configured and nothing consuming the
+    // mix" rather than anything cleverer: the hazard here is a wake condition
+    // that is missed, not one that is checked too often. Nothing can arrive
+    // while parked except a command — `ExternalFeeds` producers are only
+    // installed by `SetRouting`, so a non-empty `sources` means the loop is
+    // already running.
+    let mut parked_command: Option<EngineCommand> = None;
     loop {
+        let idle = sources.is_empty()
+            && encoder.is_none()
+            && rec_encoder.is_none()
+            && recorder.is_none()
+            && monitor_out.is_none()
+            && !master_monitor;
+        if idle && parked_command.is_none() {
+            match commands.recv() {
+                Ok(command) => parked_command = Some(command),
+                // The UI is gone; nothing will ever wake us again.
+                Err(_) => return,
+            }
+            // Re-anchor the cadence: `next_tick` is however long ago the park
+            // started, and the catch-up branch would otherwise chase it.
+            next_tick = Instant::now() + block_period;
+        }
+
         // Drain pending commands without blocking the mix cadence.
         loop {
-            match commands.try_recv() {
+            match parked_command.take().map(Ok).unwrap_or_else(|| commands.try_recv()) {
                 Ok(EngineCommand::SetRouting(update)) => {
                     let RoutingUpdate {
                         sources: new_sources,

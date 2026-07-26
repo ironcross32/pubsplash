@@ -347,6 +347,9 @@ pub struct App {
     /// Set by [`App::save_config`], cleared by [`App::flush_config`] once the
     /// file has been written.
     pub config_dirty: std::cell::Cell<bool>,
+    /// Set while `pump_events` is running, so a modal dialog it opens cannot
+    /// re-enter it from the nested event loop.
+    pub pumping: std::cell::Cell<bool>,
     /// The 100 ms pump timer. Owned here (not leaked) so `on_close` can stop it
     /// before the frame is destroyed: a running timer whose owner frame has been
     /// torn down keeps firing `WM_TIMER` into the freed frame handler and
@@ -1394,8 +1397,30 @@ fn shell_open(target: &str) -> Result<(), String> {
     }
 }
 
+/// Clears [`App::pumping`] however `pump_events` returns — including if a
+/// handler panics, which wxdragon catches and discards, and which would
+/// otherwise wedge the pump for the rest of the session.
+struct PumpGuard(Rc<App>);
+
+impl Drop for PumpGuard {
+    fn drop(&mut self) {
+        self.0.pumping.set(false);
+    }
+}
+
 /// Drains engine and network events into UI state.
+///
+/// Not re-entrant. Several of the handlers below open modal dialogs, and a
+/// modal runs a nested event loop — which can fire the pump timer again, on top
+/// of a call that is part-way through and may be holding an `App` borrow. The
+/// guard makes the nested call a no-op; the events are still there for the
+/// outer call (or the next tick) to drain.
 fn pump_events(app: &Rc<App>) {
+    if app.pumping.replace(true) {
+        return;
+    }
+    let _guard = PumpGuard(app.clone());
+
     let mut stream_ui_dirty = false;
     let mut chat_arrived = 0usize;
     let mut sound_events = Vec::new();
@@ -1414,7 +1439,10 @@ fn pump_events(app: &Rc<App>) {
                 }
                 app.save_config();
                 stream_ui_dirty = true;
-                if let Some(ui) = app.connect_ui.borrow().clone() {
+                // Bound to a local first: an `if let` scrutinee temporary
+                // lives for the whole then-branch, which here opens a modal.
+                let connect_ui = app.connect_ui.borrow().clone();
+                if let Some(ui) = connect_ui {
                     ui.connect_button.set_label("Dis&connect");
                     show_info(
                         &ui.dialog,
@@ -1434,7 +1462,12 @@ fn pump_events(app: &Rc<App>) {
                         ui.connect_button.set_focus();
                     }
                     None => {
-                        app.widgets(|w| show_error(&w.frame, "Connection failed", &text));
+                        // The frame is cloned out before the modal opens:
+                        // `widgets` stays borrowed for the whole closure, and
+                        // a modal runs a nested event loop underneath it.
+                        if let Some(frame) = app.widgets(|w| w.frame.clone()) {
+                            show_error(&frame, "Connection failed", &text);
+                        }
                     }
                 }
             }
@@ -1444,7 +1477,8 @@ fn pump_events(app: &Rc<App>) {
                 run.connecting = false;
                 drop(run);
                 stream_ui_dirty = true;
-                if let Some(ui) = app.connect_ui.borrow().clone() {
+                let connect_ui = app.connect_ui.borrow().clone();
+                if let Some(ui) = connect_ui {
                     ui.connect_button.set_label("&Connect");
                     ui.connect_button.set_focus();
                 }
@@ -1476,7 +1510,9 @@ fn pump_events(app: &Rc<App>) {
                 run.stream_started = None;
                 drop(run);
                 stream_ui_dirty = true;
-                app.widgets(|w| show_error(&w.frame, "Streaming problem", &message));
+                if let Some(frame) = app.widgets(|w| w.frame.clone()) {
+                    show_error(&frame, "Streaming problem", &message);
+                }
             }
             NetEvent::Chat(message) => {
                 play_sound_event(app, crate::soundpack::StreamEvent::IncomingChat);

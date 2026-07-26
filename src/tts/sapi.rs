@@ -20,7 +20,7 @@ use windows::Win32::Media::Speech::{
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, IStream,
-    STREAM_SEEK_SET, StructuredStorage::CreateStreamOnHGlobal,
+    STATFLAG_NONAME, STATSTG, STREAM_SEEK_SET, StructuredStorage::CreateStreamOnHGlobal,
 };
 use windows::core::{GUID, PCWSTR};
 
@@ -108,10 +108,18 @@ fn speech_thread(receiver: Receiver<SpeakRequest>, feeds: ExternalFeeds) {
         };
 
         let mut current_voice = String::new();
+        // The resolved token is kept, not just the name it was resolved from.
+        // `find_voice_token` enumerates every installed voice and compares
+        // description strings, and `synth_to_pcm` needs the token for every
+        // message — so returning `None` here once the voice had settled (i.e.
+        // for every message after the first) sent it back to a full
+        // enumeration per chat message, which is exactly what this was written
+        // to avoid.
+        let mut current_token: Option<ISpObjectToken> = None;
         while let Ok(request) = receiver.recv() {
-            let token = if request.voice != current_voice {
-                let token = find_voice_token(&request.voice);
-                match &token {
+            if request.voice != current_voice {
+                current_token = find_voice_token(&request.voice);
+                match &current_token {
                     Some(t) => {
                         if let Err(e) = voice.SetVoice(t) {
                             log::warn!("Could not select voice {:?}: {e}", request.voice);
@@ -123,10 +131,8 @@ fn speech_thread(receiver: Receiver<SpeakRequest>, feeds: ExternalFeeds) {
                     None => {}
                 }
                 current_voice = request.voice.clone();
-                token
-            } else {
-                None
-            };
+            }
+            let token = current_token.clone();
             let _ = voice.SetRate(request.rate.clamp(-10, 10));
             let _ = voice.SetVolume(request.volume.clamp(0, 100) as u16);
 
@@ -185,8 +191,15 @@ unsafe fn synth_to_pcm(
         voice.Speak(PCWSTR(text.as_ptr()), 0, None)?;
         stream.Close()?;
 
+        // Size the buffer up front. Growing from zero meant ~20 reallocations
+        // and hundreds of kilobytes of memcpy for a few seconds of speech.
+        let mut stat = STATSTG::default();
+        let size = match base.Stat(&mut stat, STATFLAG_NONAME) {
+            Ok(()) => stat.cbSize as usize,
+            Err(_) => 0,
+        };
         base.Seek(0, STREAM_SEEK_SET, None)?;
-        let mut bytes = Vec::new();
+        let mut bytes = Vec::with_capacity(size.min(16 * 1024 * 1024));
         let mut chunk = [0u8; 16 * 1024];
         loop {
             let mut read = 0u32;
