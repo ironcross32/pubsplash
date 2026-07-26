@@ -4,6 +4,14 @@
 
 ### Additions
 
+### Fixes
+
+### Changes
+
+## 0.1.1
+
+### Additions
+
 - Sound packs: randomized WAV cues for listener changes and incoming or outgoing chat, played through configurable Sound Events sources. A Sound Events source plays the pack built into Pubsplash; each of the five events has its own checkbox in the source's edit dialog, so you choose which ones make a sound. (Pointing a source at a pack of your own will arrive on the Preferences Sound packs tab; the per-source path box that briefly existed has been removed.) A standalone Sound Pack Manager is available from Tools, with project creation/opening, interface and stream-event tabs, one-WAV-per-event saving, test playback, and revision-bumping compilation, producing encrypted `.pspack` files.
 
 - A default sound pack is now baked into the executable and plays local startup and shutdown cues automatically.

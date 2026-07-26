@@ -1,6 +1,6 @@
 ﻿[package]
 name = "pubsplash"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 # Two binaries live here (pubsplash + the out-of-process pubsplash-scan helper),
 # so `cargo run` is ambiguous without naming the default target.
