@@ -1,6 +1,7 @@
-//! Preferences dialog. Tabbed; currently only the "VST plugins" tab, which
-//! manages the plugin folder list and starts scans. Scan progress arrives on
-//! the pump (see `pump_scan_events` in `ui/mod.rs`).
+//! Preferences dialog. Tabbed: "Archiving", "Sound packs", and "VST plugins".
+//! The VST tab manages the plugin folder list and starts scans; scan progress
+//! arrives on the pump (see `pump_scan_events` in `ui/mod.rs`). Every tab saves
+//! as the user changes a control, so the dialog only needs a Close button.
 
 use super::{App, ScanUi, WXK_DELETE, show_error};
 use crate::vst::scan::{self, ScanMode};
@@ -17,6 +18,9 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     let archiving_panel = Panel::builder(&notebook).build();
     notebook.add_page(&archiving_panel, "Archiving", true, None);
     build_archiving_tab(app, &dialog, &archiving_panel);
+    let sounds_panel = Panel::builder(&notebook).build();
+    notebook.add_page(&sounds_panel, "Sound packs", false, None);
+    build_sounds_tab(app, &sounds_panel);
     let vst_panel = Panel::builder(&notebook).build();
     notebook.add_page(&vst_panel, "VST plugins", false, None);
     build_vst_tab(app, &dialog, &vst_panel);
@@ -151,6 +155,59 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     sizer.add_sizer(&stream_group, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add_sizer(&recording_group, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    panel.set_sizer(sizer, true);
+}
+
+/// The Sound packs tab. Unlike the other two it opens no sub-dialogs, so it
+/// takes no `dialog` argument.
+fn build_sounds_tab(app: &Rc<App>, panel: &Panel) {
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+
+    let interface_group =
+        StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, panel, "Interface sounds")
+            .build();
+
+    let startup = CheckBox::builder(panel)
+        .with_label("Play the startup sound")
+        .build();
+    super::set_accessible_name(&startup, "Play the startup sound");
+    super::help::tag(
+        &startup,
+        "dialog.preferences.sounds.playStartup",
+        "Play the startup sound checkbox",
+    );
+    startup.set_value(app.config.borrow().sounds.play_startup);
+    interface_group.add(&startup, 0, SizerFlag::All, 4);
+    {
+        let app = app.clone();
+        let startup = startup.clone();
+        startup.clone().on_toggled(move |_| {
+            app.config.borrow_mut().sounds.play_startup = startup.get_value();
+            app.save_config();
+        });
+    }
+
+    let shutdown = CheckBox::builder(panel)
+        .with_label("Play the shut-down sound")
+        .build();
+    super::set_accessible_name(&shutdown, "Play the shut-down sound");
+    super::help::tag(
+        &shutdown,
+        "dialog.preferences.sounds.playShutdown",
+        "Play the shut-down sound checkbox",
+    );
+    shutdown.set_value(app.config.borrow().sounds.play_shutdown);
+    interface_group.add(&shutdown, 0, SizerFlag::All, 4);
+    {
+        let app = app.clone();
+        let shutdown = shutdown.clone();
+        shutdown.clone().on_toggled(move |_| {
+            app.config.borrow_mut().sounds.play_shutdown = shutdown.get_value();
+            app.save_config();
+        });
+    }
+
+    sizer.add_sizer(&interface_group, 0, SizerFlag::Expand | SizerFlag::All, 4);
     panel.set_sizer(sizer, true);
 }
 

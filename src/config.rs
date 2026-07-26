@@ -19,6 +19,7 @@ pub struct Config {
     pub plugins: PluginsConfig,
     pub buses: BusesConfig,
     pub archiving: ArchivingConfig,
+    pub sounds: SoundsConfig,
 }
 
 impl Default for Config {
@@ -31,6 +32,7 @@ impl Default for Config {
             plugins: PluginsConfig::default(),
             buses: BusesConfig::default(),
             archiving: ArchivingConfig::default(),
+            sounds: SoundsConfig::default(),
         }
     }
 }
@@ -283,6 +285,27 @@ impl ArchivingConfig {
             default_recording_dir()
         } else {
             PathBuf::from(trimmed)
+        }
+    }
+}
+
+/// Sound-pack settings that are not tied to a scene or source. The interface
+/// cues here play locally through `audio::cue` and never reach the stream.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SoundsConfig {
+    /// Whether the startup cue plays when Pubsplash launches.
+    pub play_startup: bool,
+    /// Whether the shut-down cue plays on exit. With it off, closing the
+    /// window does not wait for a sound to finish.
+    pub play_shutdown: bool,
+}
+
+impl Default for SoundsConfig {
+    fn default() -> Self {
+        Self {
+            play_startup: true,
+            play_shutdown: true,
         }
     }
 }
@@ -641,6 +664,39 @@ mod tests {
     }
 
     #[test]
+    fn old_config_without_sound_settings_still_loads() {
+        // A config saved before the interface-sound toggles and the sound
+        // events "to the stream" flag existed. All three default to on.
+        let path = temp_path("old_sounds.json");
+        let json = r#"{
+            "scenes": {
+                "scenes": [{
+                    "name": "Default",
+                    "is_default": true,
+                    "sources": [{
+                        "name": "Sound Events 1",
+                        "kind": { "type": "sound_events", "pack_path": "C:\\p\\pack.pspack" }
+                    }]
+                }],
+                "active_scene": "Default"
+            }
+        }"#;
+        std::fs::write(&path, json).unwrap();
+        let config = load_from(&path);
+        assert!(config.sounds.play_startup, "startup cue must default on");
+        assert!(config.sounds.play_shutdown, "shutdown cue must default on");
+        let SourceKindConfig::SoundEvents(settings) = &config.scenes.scenes[0].sources[0].kind
+        else {
+            panic!("expected a Sound Events source");
+        };
+        assert!(
+            settings.output_to_stream,
+            "sound events must default to reaching the stream"
+        );
+        assert_eq!(settings.pack_path, "C:\\p\\pack.pspack");
+    }
+
+    #[test]
     fn un_boosted_volumes_are_clamped_on_load() {
         // A file that claims a boosted volume without the boost flag (hand
         // edited, or written by a newer build and opened by an older one).
@@ -729,12 +785,20 @@ mod tests {
 pub struct SoundEventsSourceConfig {
     /// A `.pspack` file or a development pack directory containing
     /// `sound-pack.toml` and `sounds/`.
+    ///
+    /// Not read yet: every source plays the pack embedded in the executable.
+    /// The field is kept, and round-tripped by the edit dialog, so a path set
+    /// by an earlier build survives until pack selection lands on the
+    /// Preferences "Sound packs" tab.
     pub pack_path: String,
     pub listener_increase: bool,
     pub listener_decrease: bool,
     pub listener_peak_increase: bool,
     pub incoming_chat: bool,
     pub outgoing_chat: bool,
+    /// Whether these cues are mixed into the outgoing stream. With it off the
+    /// cues play locally instead, so only the broadcaster hears them.
+    pub output_to_stream: bool,
 }
 
 impl Default for SoundEventsSourceConfig {
@@ -746,6 +810,7 @@ impl Default for SoundEventsSourceConfig {
             listener_peak_increase: true,
             incoming_chat: true,
             outgoing_chat: true,
+            output_to_stream: true,
         }
     }
 }

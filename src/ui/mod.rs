@@ -26,6 +26,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use wxdragon::prelude::*;
 
@@ -57,6 +58,9 @@ pub const ID_MIXER_BOOST: i32 = 2201;
 pub const ID_MIXER_MONITOR: i32 = 2202;
 
 const README_URL: &str = "https://github.com/ironcross32/pubsplash#readme";
+
+/// How long the exit will wait for the shutdown cue before giving up on it.
+const SHUTDOWN_CUE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamState {
@@ -291,6 +295,18 @@ pub struct App {
     /// torn down keeps firing `WM_TIMER` into the freed frame handler and
     /// crashes inside wx's event dispatch (0xc0000005).
     pub pump_timer: RefCell<Option<Timer<Frame>>>,
+    /// Set while the shutdown cue is playing. `on_close` hides the frame and
+    /// starts the cue on its own thread; the pump polls this and finishes the
+    /// teardown once the cue is done, so the sound is never cut off by the
+    /// process exiting and the UI never freezes waiting for it.
+    pub shutdown_cue: RefCell<Option<ShutdownCue>>,
+}
+
+/// Handle on the in-flight shutdown cue thread.
+pub struct ShutdownCue {
+    done: Arc<AtomicBool>,
+    /// Cap on the wait, so a wedged render device cannot hang exit.
+    deadline: Instant,
 }
 
 /// The live plugin instances backing the FX chains, kept in lockstep with
@@ -308,8 +324,14 @@ pub struct FxRuntime {
 }
 
 /// Plays an event through each enabled Sound Events source in the active scene.
+///
+/// Every source uses the sound pack baked into the executable; per-source pack
+/// selection is not exposed yet. A source that sends to the stream feeds the
+/// mixer through `ExternalFeeds`; one that does not plays locally through
+/// `audio::cue`, so only the broadcaster hears it. The local path bypasses the
+/// strip, so it honours the source's mute (filtered below) but not its volume.
 fn play_sound_event(app: &Rc<App>, event: crate::soundpack::StreamEvent) {
-    let targets: Vec<(String, String)> = {
+    let targets: Vec<(String, bool)> = {
         let config = app.config.borrow();
         let Some(scene) = config.scenes.active_scene() else {
             return;
@@ -321,22 +343,27 @@ fn play_sound_event(app: &Rc<App>, event: crate::soundpack::StreamEvent) {
                 let SourceKindConfig::SoundEvents(settings) = &source.kind else {
                     return None;
                 };
-                if source.muted
-                    || settings.pack_path.trim().is_empty()
-                    || !sound_event_enabled(settings, event)
-                {
+                if source.muted || !sound_event_enabled(settings, event) {
                     return None;
                 }
-                Some((source.name.clone(), settings.pack_path.clone()))
+                Some((source.name.clone(), settings.output_to_stream))
             })
             .collect()
     };
-    for (source_name, path) in targets {
-        let Ok(pack) = crate::soundpack::load(std::path::Path::new(&path)) else {
-            log::warn!("Could not load sound pack {path:?}");
+    if targets.is_empty() {
+        return;
+    }
+    let sound = crate::soundpack::SoundKind::from_stream_event(event);
+    let Some(pack) = crate::soundpack::embedded_default() else {
+        return;
+    };
+    for (source_name, to_stream) in targets {
+        if !to_stream {
+            // `play_sound_kind_async` already picks a variant out of the same
+            // pack and owns the playback thread from here.
+            crate::audio::cue::play_sound_kind_async(sound);
             continue;
-        };
-        let sound = crate::soundpack::SoundKind::from_stream_event(event);
+        }
         let Some(bytes) = pack
             .variants(sound)
             .and_then(|v| v.choose(&mut rand::thread_rng()))
@@ -883,6 +910,14 @@ pub fn build(app: Rc<App>) {
         let app = app.clone();
         let frame_for_close = frame.clone();
         frame.on_close(move |event| {
+            // Already sequencing an exit: keep the frame alive for the cue
+            // rather than restarting (or short-circuiting) the teardown.
+            if app.shutting_down.get() {
+                if let WindowEventData::General(e) = &event {
+                    e.veto();
+                }
+                return;
+            }
             if app.is_streaming_or_starting() {
                 let dialog = MessageDialog::builder(
                     &frame_for_close,
@@ -900,34 +935,22 @@ pub fn build(app: Rc<App>) {
                 // Cleanly terminate the stream before shutdown.
                 app.stop_streaming();
             }
-            if let Err(e) =
-                crate::audio::cue::play_sound_kind_blocking(crate::soundpack::SoundKind::Shutdown)
-            {
-                log::warn!("Could not play shutdown sound cue: {e}");
-            }
-            // Stop the pump from touching widgets while the frame is torn down.
-            // Stopping the timer removes pending WM_TIMER so it can't fire into
-            // the frame after it is destroyed; the flag is a further guard for
-            // any tick already in flight.
+            // Mark the exit as under way. The pump uses this to stop touching
+            // widgets, and from here on it drives the rest of the teardown.
             app.shutting_down.set(true);
-            if let Some(timer) = app.pump_timer.borrow().as_ref() {
-                timer.stop();
-            }
-            // Close plugin editors (and remove the keyboard hook) on exit.
+            // Close plugin editors (and remove the keyboard hook) before the
+            // main frame goes away.
             fx_editor::close_all(&app);
-            // Remove the F1 hook and drop the help announcer provider.
-            help::uninstall_hook();
-            help::uninstall_announcer();
-            // Same for the mixer sliders' providers, while their windows live.
-            home::drop_mixer_strips(&app);
+            // Vanish immediately: the user asked to exit, so the app should
+            // look gone while the cue finishes in the background.
+            frame_for_close.show(false);
             app.save_config();
-            // Destroy explicitly (deferred, wx-managed) rather than skipping to
-            // the platform default. On the native ALT+F4 path, skipping hands the
-            // WM_CLOSE to DefWindowProc, which destroys the window *synchronously*
-            // and joins the engine/net threads from inside the window procedure â€”
-            // a shutdown access violation. This routes ALT+F4 through the same
-            // deferred teardown that File > Exit already uses.
-            frame_for_close.destroy();
+            start_shutdown_cue(&app);
+            // The frame has to outlive the cue, so this close does not proceed.
+            // `finish_close` destroys the frame once the cue is done.
+            if let WindowEventData::General(e) = &event {
+                e.veto();
+            }
         });
     }
 
@@ -945,8 +968,12 @@ pub fn build(app: Rc<App>) {
         let mut ticks: u32 = 0;
         timer.on_tick(move |_| {
             // Once closing, the frame and its widgets are being destroyed;
-            // running the pump against them would touch freed memory.
+            // running the pump against them would touch freed memory. The
+            // tick's only job now is to finish the exit when the cue ends.
             if app.shutting_down.get() {
+                if shutdown_cue_finished(&app) {
+                    finish_close(&app);
+                }
                 return;
             }
             pump_events(&app);
@@ -997,7 +1024,69 @@ pub fn build(app: Rc<App>) {
 
     frame.show(true);
     frame.centre();
-    crate::audio::cue::play_sound_kind_async(crate::soundpack::SoundKind::Startup);
+}
+
+/// Plays the shutdown cue on its own thread and records a handle on it, so the
+/// pump can tell when the sound has actually finished. With the cue turned off
+/// in Preferences nothing is recorded, and the exit is not delayed at all.
+fn start_shutdown_cue(app: &Rc<App>) {
+    if !app.config.borrow().sounds.play_shutdown {
+        return;
+    }
+    let done = Arc::new(AtomicBool::new(false));
+    let flag = done.clone();
+    let spawned = std::thread::Builder::new()
+        .name("shutdown-sound-cue".into())
+        .spawn(move || {
+            if let Err(e) =
+                crate::audio::cue::play_sound_kind_blocking(crate::soundpack::SoundKind::Shutdown)
+            {
+                log::warn!("Could not play shutdown sound cue: {e}");
+            }
+            flag.store(true, Ordering::SeqCst);
+        })
+        .is_ok();
+    if spawned {
+        *app.shutdown_cue.borrow_mut() = Some(ShutdownCue {
+            done,
+            deadline: Instant::now() + SHUTDOWN_CUE_TIMEOUT,
+        });
+    }
+}
+
+/// True once the shutdown cue is done, its deadline has passed, or there is no
+/// cue at all (a failed spawn must not strand the app in a hidden window).
+fn shutdown_cue_finished(app: &Rc<App>) -> bool {
+    match app.shutdown_cue.borrow().as_ref() {
+        Some(cue) => cue.done.load(Ordering::SeqCst) || Instant::now() >= cue.deadline,
+        None => true,
+    }
+}
+
+/// The second half of the exit, run from the pump once the cue has finished.
+fn finish_close(app: &Rc<App>) {
+    // Stop the pump before the frame is torn down: a running timer whose owner
+    // frame has been destroyed keeps firing WM_TIMER into the freed handler.
+    // (Stopped, not dropped: this runs from inside the timer's own callback.)
+    if let Some(timer) = app.pump_timer.borrow().as_ref() {
+        timer.stop();
+    }
+    app.shutdown_cue.borrow_mut().take();
+    // Remove the F1 hook and drop the help announcer provider.
+    help::uninstall_hook();
+    help::uninstall_announcer();
+    // Same for the mixer sliders' providers, while their windows live.
+    home::drop_mixer_strips(app);
+    let frame = app.widgets.borrow().as_ref().map(|w| w.frame.clone());
+    if let Some(frame) = frame {
+        // Destroy explicitly (deferred, wx-managed) rather than skipping to
+        // the platform default. On the native ALT+F4 path, skipping hands the
+        // WM_CLOSE to DefWindowProc, which destroys the window *synchronously*
+        // and joins the engine/net threads from inside the window procedure -
+        // a shutdown access violation. This routes ALT+F4 through the same
+        // deferred teardown that File > Exit already uses.
+        frame.destroy();
+    }
 }
 
 fn build_menu(app: &Rc<App>, frame: &Frame) {

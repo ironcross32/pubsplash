@@ -35,6 +35,11 @@ fn main() {
     let net = net::NetHandle::start();
     let speaker = tts::sapi::Speaker::start(engine.external_feeds.clone());
     tts::prewarm_voices();
+    // Fired before the UI is built so the cue overlaps plugin instantiation and
+    // window construction rather than trailing them.
+    if config.sounds.play_startup {
+        audio::cue::play_sound_kind_async(soundpack::SoundKind::Startup);
+    }
     let _ = wxdragon::main(move |_| {
         let app = Rc::new(ui::App {
             config: RefCell::new(config.clone()),
@@ -51,6 +56,7 @@ fn main() {
             open_editors: RefCell::new(Vec::new()),
             shutting_down: std::cell::Cell::new(false),
             pump_timer: RefCell::new(None),
+            shutdown_cue: RefCell::new(None),
         });
         ui::build(app);
     });

@@ -15,7 +15,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - Sources reconnect on their own if their device is unplugged, resets, or is not ready yet when Pubsplash starts. A source that is retrying reads "(reconnecting)" on its mixer strip, and a source set to a particular microphone is never silently switched to a different one
 - Chat: read incoming messages in an accessible list, send outbound messages, and have chat read aloud automatically with text-to-speech (optionally spoken into the stream as well)
 - Loop-safe by design: Desktop Audio capture excludes Pubsplash's own audio, so text-to-speech and sound cues can never echo into your stream
-- Built-in local startup and shutdown sounds, plus audio cues for stream events (listener changes, incoming and outgoing messages) backed by encrypted custom sound packs
+- Built-in startup and shutdown sounds, each able to be switched off, plus audio cues for stream events (listener changes, incoming and outgoing messages) that you can send to your listeners or keep to yourself
 - A fully keyboard-accessible mixer with per-source volume and mute, plus an optional per-strip volume boost for sources that are too quiet at 100%
 - Mixing buses with per-source sends, so sources can be routed through shared processing (see below)
 - VST2 effect chains on buses and the master output, with a screen-reader-friendly Osara-like parameter editor and shareable effect chains
@@ -143,9 +143,13 @@ See the repository for license details.
 
 ## Sound packs
 
-A Sound Events source can play encrypted `.pspack` files into its scene. It can react to listener increases, listener decreases, listener-peak increases, incoming chat, and successfully sent chat messages. A stream begins with a silent listener baseline, so connecting does not play a count-change cue.
+A Sound Events source plays cues into its scene from the sound pack built into Pubsplash. It can react to listener increases, listener decreases, listener-peak increases, incoming chat, and successfully sent chat messages; each of those five has its own checkbox in the source's edit dialog, and there is nothing else to set up. A stream begins with a silent listener baseline, so connecting does not play a count-change cue.
 
-Pubsplash includes a default sound pack baked into the executable. Its startup and shutdown cues play locally on the default Windows output device; they do not enter the stream mix or local recordings.
+Choosing a sound pack of your own is not wired up yet — it will live on the **Sound packs** tab in Preferences. You can still author packs today with the Sound Pack Manager described below.
+
+By default a Sound Events source's cues go out to your listeners. Clear **Send these sounds to the stream** in the edit dialog to keep them to yourself — they then play on the default Windows output device only, and never reach the stream mix or a recording. Cues kept local bypass the mixer, so the source's volume slider no longer affects them; muting the source still silences them.
+
+Pubsplash includes a default sound pack baked into the executable. Its startup and shutdown cues play locally on the default Windows output device; they do not enter the stream mix or local recordings. Either can be turned off under **File > Preferences** (`CTRL+,`) on the **Sound packs** tab, in the **Interface sounds** group. With the shut-down sound off, closing the window is immediate instead of waiting for the cue to finish.
 
 Open **Tools > Sound Pack Manager** to create or edit a sound pack project. Project editing, saving, and compiling controls stay disabled until you create a project with **New** or load one with **Open**. **New** asks for a pack name and parent folder, then creates a child project folder using a Windows-safe version of the name with spaces changed to underscores. Interface packs currently support `ui_startup` and `ui_shutdown`; stream packs support `se_listener_increase`, `se_listener_decrease`, `se_listener_peak_increase`, `se_incoming_chat`, and `se_outgoing_chat`.
 

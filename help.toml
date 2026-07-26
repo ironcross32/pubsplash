@@ -193,6 +193,18 @@ file = "src/ui/preferences.rs"
 message = "Type the path where you'd like your local recordings to be saved to, or use the browse button to pick a folder using a standard Windows folder picker."
 
 [[control]]
+id = "dialog.preferences.sounds.playShutdown"
+label = "Play the shut-down sound checkbox"
+file = "src/ui/preferences.rs"
+message = "When checked, Pubsplash plays a short sound as it closes, and waits for it to finish before the window goes away. Uncheck it for a silent, immediate exit. Only you hear this sound; it is never sent to the stream."
+
+[[control]]
+id = "dialog.preferences.sounds.playStartup"
+label = "Play the startup sound checkbox"
+file = "src/ui/preferences.rs"
+message = "When checked, Pubsplash plays a short sound as it launches, so you know it is loading. Only you hear this sound; it is never sent to the stream."
+
+[[control]]
 id = "dialog.preferences.vst.addFolder"
 label = "Add plugin folder button"
 file = "src/ui/preferences.rs"
@@ -251,6 +263,42 @@ id = "dialog.sends.toMaster"
 label = "Send this source directly to master checkbox"
 file = "src/ui/sends.rs"
 message = "When checked, the source's output is sent to master as well as to the selected bus. This lets you, for instance, set up a reverb so that you still hear the dry signal, but can lower the send level and give the reverb effect the full wet signal."
+
+[[control]]
+id = "dialog.soundEventsSource.incomingChat"
+label = "Incoming chat message checkbox"
+file = "src/ui/scenes.rs"
+message = "When checked, this source plays a sound each time a chat message arrives from a listener."
+
+[[control]]
+id = "dialog.soundEventsSource.listenerDecrease"
+label = "Listener count decreased checkbox"
+file = "src/ui/scenes.rs"
+message = "When checked, this source plays a sound each time a listener leaves your stream."
+
+[[control]]
+id = "dialog.soundEventsSource.listenerIncrease"
+label = "Listener count increased checkbox"
+file = "src/ui/scenes.rs"
+message = "When checked, this source plays a sound each time a new listener joins your stream."
+
+[[control]]
+id = "dialog.soundEventsSource.listenerPeakIncrease"
+label = "Listener peak increased checkbox"
+file = "src/ui/scenes.rs"
+message = "When checked, this source plays a sound whenever your stream reaches a new record for the most listeners at once."
+
+[[control]]
+id = "dialog.soundEventsSource.outgoingChat"
+label = "Outgoing chat message checkbox"
+file = "src/ui/scenes.rs"
+message = "When checked, this source plays a sound each time you send a chat message of your own."
+
+[[control]]
+id = "dialog.soundEventsSource.toStream"
+label = "Send these sounds to the stream checkbox"
+file = "src/ui/scenes.rs"
+message = "Checked by default, so your listeners hear these cues along with you. Uncheck it to keep them to yourself: the sounds then play on your own speakers only and never reach the stream or a recording. Note that with it unchecked the sounds bypass the mixer, so this source's volume slider no longer affects them, though muting the source still silences them."
 
 [[control]]
 id = "dialog.streamInfo.archive"
@@ -557,3 +605,15 @@ id = "tab.scenes.sourceUp"
 label = "Move source up button"
 file = "src/ui/scenes.rs"
 message = "Move the selected source up in the list. CTRL+Up will also work as long as focus is on the list of sources."
+
+[[stale]]
+id = "dialog.soundEventsSource.browse"
+label = "Browse for a sound pack button"
+file = "src/ui/scenes.rs"
+message = "Opens a file dialog to pick the compiled sound pack, a dot pspack file, that this source plays its sounds from."
+
+[[stale]]
+id = "dialog.soundEventsSource.packPath"
+label = "Sound pack path input"
+file = "src/ui/scenes.rs"
+message = "The sound pack this source plays from. Type the full path to a compiled dot pspack file, or to a sound pack project folder if you are still working on one, or use the browse button. Until this is filled in, the source stays silent."

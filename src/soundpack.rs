@@ -279,6 +279,23 @@ pub fn load_embedded_default() -> Result<LoadedPack, String> {
     load_bytes(EMBEDDED_DEFAULT_PACK)
 }
 
+/// The embedded default pack, decrypted once for the life of the process.
+/// Stream-event cues can fire in bursts (one per incoming chat message), so
+/// this must not re-run AES over the whole pack per event. `None` means the
+/// baked-in pack could not be read at all, which is logged once.
+pub fn embedded_default() -> Option<&'static LoadedPack> {
+    static CACHE: std::sync::OnceLock<Option<LoadedPack>> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| match load_embedded_default() {
+            Ok(pack) => Some(pack),
+            Err(e) => {
+                log::error!("Could not load the built-in sound pack: {e}");
+                None
+            }
+        })
+        .as_ref()
+}
+
 pub fn project_variants(project: &Path, sound: SoundKind) -> Result<Vec<PathBuf>, String> {
     let sounds = project.join(SOUNDS_DIR);
     if !sounds.exists() {

@@ -1,7 +1,9 @@
-//! Local interface-cue playback for embedded sound-pack sounds.
+//! Local cue playback for sound-pack sounds.
 //!
-//! These cues are UI feedback only. They go straight to the default Windows
-//! render device and never enter the mixer, stream encoder, or recorder.
+//! These cues are local feedback only. They go straight to the default Windows
+//! render device and never enter the mixer, stream encoder, or recorder - which
+//! is what the interface startup/shutdown sounds want, and also what a Sound
+//! Events source wants when it is not sending its cues to the stream.
 
 use crate::audio::device;
 use crate::audio::mixer::{CHANNELS, SAMPLE_RATE};
@@ -25,8 +27,9 @@ pub fn play_sound_kind_async(kind: SoundKind) {
 }
 
 pub fn play_sound_kind_blocking(kind: SoundKind) -> Result<(), String> {
-    let pack = crate::soundpack::load_embedded_default()?;
-    let bytes = choose_variant(&pack, kind)?;
+    let pack = crate::soundpack::embedded_default()
+        .ok_or_else(|| "the built-in sound pack could not be loaded".to_string())?;
+    let bytes = choose_variant(pack, kind)?;
     let samples = crate::soundpack::decode_wav(&bytes)?;
     play_samples(&samples)
 }

@@ -4,6 +4,7 @@
 use super::home::on_sources_changed;
 use super::{App, WXK_DELETE, WXK_DOWN, WXK_UP, show_error};
 use crate::config::{SoundEventsSourceConfig, SourceConfig, SourceKindConfig, TtsSourceConfig};
+use crate::soundpack::StreamEvent;
 use crate::state::{ListEdit, move_down, move_up};
 use std::rc::Rc;
 use wxdragon::prelude::*;
@@ -744,42 +745,69 @@ fn edit_sound_events(
     };
     let dialog = Dialog::builder(&frame, "Sound Events source")
         .with_style(DialogStyle::DefaultDialogStyle)
-        .with_size(520, 380)
+        .with_size(420, 320)
         .build();
     let panel = Panel::builder(&dialog).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
-    let path_label = StaticText::builder(&panel)
-        .with_label("Sound pack path")
-        .build();
-    let path_row = BoxSizer::builder(Orientation::Horizontal).build();
-    let pack_path = TextCtrl::builder(&panel).build();
-    pack_path.set_value(&current.pack_path);
-    super::set_accessible_name(&pack_path, "Sound pack path");
-    let browse = Button::builder(&panel).with_label("&Browse...").build();
-    path_row.add(&pack_path, 1, SizerFlag::Expand | SizerFlag::All, 4);
-    path_row.add(&browse, 0, SizerFlag::All, 4);
+    // There is no pack picker here: every Sound Events source plays the pack
+    // baked into the executable. Choosing a custom pack will live on the
+    // Preferences "Sound packs" tab, which is why `current.pack_path` is
+    // carried through untouched rather than dropped.
 
-    let listener_increase = CheckBox::builder(&panel)
-        .with_label("Listener count increased")
+    // The visible labels come from the sound pack's own event labels, so this
+    // dialog and the Sound Pack Manager can never name an event differently.
+    // Screen readers do not announce a checkbox's label here on their own.
+    let event_check = |event: StreamEvent, value: bool| {
+        let check = CheckBox::builder(&panel).with_label(event.label()).build();
+        super::set_accessible_name(&check, event.label());
+        check.set_value(value);
+        check
+    };
+    let listener_increase = event_check(StreamEvent::ListenerIncrease, current.listener_increase);
+    super::help::tag(
+        &listener_increase,
+        "dialog.soundEventsSource.listenerIncrease",
+        "Listener count increased checkbox",
+    );
+    let listener_decrease = event_check(StreamEvent::ListenerDecrease, current.listener_decrease);
+    super::help::tag(
+        &listener_decrease,
+        "dialog.soundEventsSource.listenerDecrease",
+        "Listener count decreased checkbox",
+    );
+    let listener_peak_increase = event_check(
+        StreamEvent::ListenerPeakIncrease,
+        current.listener_peak_increase,
+    );
+    super::help::tag(
+        &listener_peak_increase,
+        "dialog.soundEventsSource.listenerPeakIncrease",
+        "Listener peak increased checkbox",
+    );
+    let incoming_chat = event_check(StreamEvent::IncomingChat, current.incoming_chat);
+    super::help::tag(
+        &incoming_chat,
+        "dialog.soundEventsSource.incomingChat",
+        "Incoming chat message checkbox",
+    );
+    let outgoing_chat = event_check(StreamEvent::OutgoingChat, current.outgoing_chat);
+    super::help::tag(
+        &outgoing_chat,
+        "dialog.soundEventsSource.outgoingChat",
+        "Outgoing chat message checkbox",
+    );
+
+    let output_check = CheckBox::builder(&panel)
+        .with_label("Send these sounds to the stream")
         .build();
-    let listener_decrease = CheckBox::builder(&panel)
-        .with_label("Listener count decreased")
-        .build();
-    let listener_peak_increase = CheckBox::builder(&panel)
-        .with_label("Listener peak increased")
-        .build();
-    let incoming_chat = CheckBox::builder(&panel)
-        .with_label("Incoming chat message")
-        .build();
-    let outgoing_chat = CheckBox::builder(&panel)
-        .with_label("Outgoing chat message")
-        .build();
-    listener_increase.set_value(current.listener_increase);
-    listener_decrease.set_value(current.listener_decrease);
-    listener_peak_increase.set_value(current.listener_peak_increase);
-    incoming_chat.set_value(current.incoming_chat);
-    outgoing_chat.set_value(current.outgoing_chat);
+    super::set_accessible_name(&output_check, "Send these sounds to the stream");
+    super::help::tag(
+        &output_check,
+        "dialog.soundEventsSource.toStream",
+        "Send these sounds to the stream checkbox",
+    );
+    output_check.set_value(current.output_to_stream);
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let ok = Button::builder(&panel).with_label("OK").build();
@@ -787,35 +815,18 @@ fn edit_sound_events(
     buttons.add(&ok, 0, SizerFlag::All, 4);
     buttons.add(&cancel, 0, SizerFlag::All, 4);
 
-    sizer.add(&path_label, 0, SizerFlag::All, 4);
-    sizer.add_sizer(&path_row, 0, SizerFlag::Expand, 0);
     sizer.add(&listener_increase, 0, SizerFlag::All, 4);
     sizer.add(&listener_decrease, 0, SizerFlag::All, 4);
     sizer.add(&listener_peak_increase, 0, SizerFlag::All, 4);
     sizer.add(&incoming_chat, 0, SizerFlag::All, 4);
     sizer.add(&outgoing_chat, 0, SizerFlag::All, 4);
+    sizer.add(&output_check, 0, SizerFlag::All, 8);
     sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight, 0);
     panel.set_sizer(sizer, true);
     let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
     dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
     dialog.set_sizer(dialog_sizer, true);
 
-    {
-        let panel = panel.clone();
-        let pack_path = pack_path.clone();
-        browse.on_click(move |_| {
-            let dialog = FileDialog::builder(&panel)
-                .with_message("Select a compiled sound pack")
-                .with_wildcard("Pubsplash sound packs (*.pspack)|*.pspack|All files (*.*)|*.*")
-                .with_style(FileDialogStyle::Open)
-                .build();
-            if dialog.show_modal() == ID_OK {
-                if let Some(path) = dialog.get_path() {
-                    pack_path.set_value(&path);
-                }
-            }
-        });
-    }
     {
         let dialog = dialog.clone();
         ok.on_click(move |_| dialog.end_modal(ID_OK));
@@ -831,12 +842,15 @@ fn edit_sound_events(
             scene_index,
             source_index,
             SourceKindConfig::SoundEvents(SoundEventsSourceConfig {
-                pack_path: pack_path.get_value().trim().to_string(),
+                // Unused for now; preserved so a path set by an earlier build
+                // survives until the Preferences pack picker can show it.
+                pack_path: current.pack_path,
                 listener_increase: listener_increase.get_value(),
                 listener_decrease: listener_decrease.get_value(),
                 listener_peak_increase: listener_peak_increase.get_value(),
                 incoming_chat: incoming_chat.get_value(),
                 outgoing_chat: outgoing_chat.get_value(),
+                output_to_stream: output_check.get_value(),
             }),
         );
     }
