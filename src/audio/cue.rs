@@ -7,8 +7,7 @@
 
 use crate::audio::device;
 use crate::audio::mixer::{CHANNELS, SAMPLE_RATE};
-use crate::soundpack::{LoadedPack, SoundKind};
-use rand::seq::SliceRandom;
+use crate::soundpack::SoundKind;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use wasapi::{Direction, SampleType, StreamMode, WaveFormat};
@@ -29,16 +28,12 @@ pub fn play_sound_kind_async(kind: SoundKind) {
 pub fn play_sound_kind_blocking(kind: SoundKind) -> Result<(), String> {
     let pack = crate::soundpack::embedded_default()
         .ok_or_else(|| "the built-in sound pack could not be loaded".to_string())?;
-    let bytes = choose_variant(pack, kind)?;
-    let samples = crate::soundpack::decode_wav(&bytes)?;
+    // Decoded once per variant and remembered on the pack, so a burst of cues
+    // is not a burst of WAV parses and resamples.
+    let samples = pack
+        .random_decoded(kind)
+        .ok_or_else(|| format!("embedded default sound pack has no {} cue", kind.label()))?;
     play_samples(&samples)
-}
-
-fn choose_variant(pack: &LoadedPack, kind: SoundKind) -> Result<Vec<u8>, String> {
-    pack.variants(kind)
-        .and_then(|variants| variants.choose(&mut rand::thread_rng()))
-        .cloned()
-        .ok_or_else(|| format!("embedded default sound pack has no {} cue", kind.label()))
 }
 
 fn play_samples(samples: &[f32]) -> Result<(), String> {

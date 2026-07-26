@@ -236,7 +236,12 @@ extern "C" fn host_callback(
         AUDIO_MASTER_GET_LANGUAGE => 1, // English
         AUDIO_MASTER_CAN_DO => host_can_do(ptr),
         AUDIO_MASTER_SIZE_WINDOW => {
-            if let Ok(mut q) = SIZE_REQUESTS.lock() {
+            // `try_lock`, not `lock`. Well-behaved plugins only ask to resize
+            // from the editor thread, but the host cannot make them: a plugin
+            // that asks from `process_replacing` would block the audio thread
+            // on this mutex. A resize request dropped under contention is a
+            // window that stays its old size, which is the cheaper failure.
+            if let Ok(mut q) = SIZE_REQUESTS.try_lock() {
                 q.push((effect as usize, index, value as i32));
             }
             1

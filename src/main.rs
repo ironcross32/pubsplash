@@ -3,6 +3,7 @@
 mod audio;
 mod config;
 mod fx;
+mod json_store;
 mod logging;
 mod net;
 mod soundpack;

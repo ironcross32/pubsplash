@@ -123,7 +123,7 @@ pub enum EngineCommand {
     /// the Icecast task on the network runtime).
     StartEncoding {
         bitrate_kbps: u32,
-        out: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+        out: tokio::sync::mpsc::Sender<Vec<u8>>,
     },
     StopEncoding,
     /// Begin recording the master mix to `path` as MP3, using a dedicated
@@ -379,11 +379,14 @@ fn engine_loop(
     let mut monitor_out: Option<MonitorOutput> = None;
     let mut encoder: Option<(
         encoder::Mp3Encoder,
-        tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+        tokio::sync::mpsc::Sender<Vec<u8>>,
     )> = None;
+    // Consecutive blocks dropped because the outgoing stream buffer was full,
+    // so the log says so once a second rather than a hundred times.
+    let mut dropped_blocks: u64 = 0;
     // Recording runs on its own encoder so it works with or without streaming.
     let mut rec_encoder: Option<encoder::Mp3Encoder> = None;
-    let mut recorder: Option<recorder::Recorder> = None;
+    let mut recorder: Option<recorder::RecorderHandle> = None;
 
     let block_period = Duration::from_millis(10);
     let mut next_tick = Instant::now() + block_period;
@@ -426,6 +429,15 @@ fn engine_loop(
         }
 
         // Drain pending commands without blocking the mix cadence.
+        //
+        // Not everything in here is real-time clean, and deliberately so:
+        // applying a routing update allocates a ring per source and spawns its
+        // capture thread, and starting an encoder or a recording touches LAME
+        // and the filesystem. All of it is user-initiated and happens at most
+        // once per scene switch or button press, where a block's worth of
+        // jitter is not audible. What must never be here is anything that
+        // happens *per block* — the disk write for recording used to be, and is
+        // now on `RecorderHandle`'s own thread.
         loop {
             match parked_command.take().map(Ok).unwrap_or_else(|| commands.try_recv()) {
                 Ok(EngineCommand::SetRouting(update)) => {
@@ -537,14 +549,17 @@ fn engine_loop(
                 Ok(EngineCommand::SetMasterMonitor(m)) => master_monitor = m,
                 Ok(EngineCommand::StartEncoding { bitrate_kbps, out }) => {
                     match encoder::Mp3Encoder::new(bitrate_kbps) {
-                        Ok(enc) => encoder = Some((enc, out)),
+                        Ok(enc) => {
+                            encoder = Some((enc, out));
+                            dropped_blocks = 0;
+                        }
                         Err(e) => log::error!("Failed to create MP3 encoder: {e}"),
                     }
                 }
                 Ok(EngineCommand::StopEncoding) => {
                     if let Some((enc, out)) = encoder.take() {
                         if let Ok(tail) = enc.finish() {
-                            let _ = out.send(tail);
+                            let _ = out.try_send(tail);
                         }
                     }
                 }
@@ -552,7 +567,7 @@ fn engine_loop(
                     if recorder.is_none() {
                         match (
                             encoder::Mp3Encoder::new(bitrate_kbps),
-                            recorder::Recorder::new(&path),
+                            recorder::RecorderHandle::start(&path),
                         ) {
                             (Ok(enc), Ok(rec)) => {
                                 rec_encoder = Some(enc);
@@ -681,10 +696,28 @@ fn engine_loop(
         if let Some((enc, out)) = &mut encoder {
             match enc.encode(&pcm_i16) {
                 Ok(bytes) if !bytes.is_empty() => {
-                    if out.send(bytes.to_vec()).is_err() {
+                    use tokio::sync::mpsc::error::TrySendError;
+                    match out.try_send(bytes.to_vec()) {
+                        Ok(()) => dropped_blocks = 0,
+                        // The Icecast task is behind — its `write_all` is
+                        // waiting on a closed send window. This is a *live*
+                        // stream, so dropping the newest block keeps the mixer
+                        // on cadence and keeps the queue from growing at the
+                        // encoded bitrate for as long as the stall lasts.
+                        Err(TrySendError::Full(_)) => {
+                            dropped_blocks += 1;
+                            // One line per second of stall, not 100.
+                            if dropped_blocks % 100 == 1 {
+                                log::warn!(
+                                    "Outgoing stream buffer is full; dropping audio ({dropped_blocks} blocks so far)"
+                                );
+                            }
+                        }
                         // Consumer went away (stream ended remotely).
-                        encoder = None;
-                        let _ = events.send(EngineEvent::EncodingStopped);
+                        Err(TrySendError::Closed(_)) => {
+                            encoder = None;
+                            let _ = events.send(EngineEvent::EncodingStopped);
+                        }
                     }
                 }
                 Ok(_) => {}
@@ -698,7 +731,7 @@ fn engine_loop(
 
         if let (Some(enc), Some(rec)) = (&mut rec_encoder, &mut recorder) {
             match enc.encode(&pcm_i16) {
-                Ok(bytes) if !bytes.is_empty() => rec.write(bytes),
+                Ok(bytes) if !bytes.is_empty() => rec.write(bytes.to_vec()),
                 Ok(_) => {}
                 Err(e) => {
                     log::error!("Recording encode error: {e}");
@@ -789,12 +822,12 @@ fn stop_sources(sources: &mut Vec<ActiveSource>) {
 /// call when nothing is recording.
 fn finalize_recording(
     rec_encoder: &mut Option<encoder::Mp3Encoder>,
-    recorder: &mut Option<recorder::Recorder>,
+    recorder: &mut Option<recorder::RecorderHandle>,
 ) {
     if let Some(enc) = rec_encoder.take() {
         if let Ok(tail) = enc.finish() {
-            if let Some(rec) = recorder {
-                rec.write(&tail);
+            if let Some(rec) = recorder.as_ref() {
+                rec.write(tail.to_vec());
             }
         }
     }

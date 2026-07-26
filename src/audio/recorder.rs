@@ -12,6 +12,66 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+/// How many encoded blocks may be queued for the writer thread. At 128 kbps a
+/// block is a few hundred bytes, so this is a couple of seconds of slack —
+/// enough to ride out a slow disk without letting a stalled one grow without
+/// bound.
+const QUEUE_BLOCKS: usize = 256;
+
+/// The engine's side of a recording: a bounded queue into a writer thread.
+///
+/// [`Recorder::write`] is a synchronous `write_all`, and once the 8 KB buffer
+/// fills, that is a real disk write. Doing it inline meant doing it on the mix
+/// thread, where a 200 ms stall on a USB stick or a network drive is a 200 ms
+/// gap in the MP3 going out to Icecast. The mixer now only hands over a buffer.
+pub struct RecorderHandle {
+    blocks: Option<crossbeam_channel::Sender<Vec<u8>>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl RecorderHandle {
+    /// Creates the file and starts the writer thread. The file is created here,
+    /// on the caller's thread, so that a path the user cannot write to is
+    /// reported rather than swallowed.
+    pub fn start(path: &Path) -> std::io::Result<Self> {
+        let mut recorder = Recorder::new(path)?;
+        let (blocks, incoming) = crossbeam_channel::bounded::<Vec<u8>>(QUEUE_BLOCKS);
+        let thread = std::thread::Builder::new()
+            .name("recorder".into())
+            .spawn(move || {
+                while let Ok(bytes) = incoming.recv() {
+                    recorder.write(&bytes);
+                }
+                recorder.finish();
+            })?;
+        Ok(Self {
+            blocks: Some(blocks),
+            thread: Some(thread),
+        })
+    }
+
+    /// Queues encoded bytes, dropping them if the writer has fallen a couple of
+    /// seconds behind. Blocking here would stall the mix, which is the thing
+    /// this type exists to prevent.
+    pub fn write(&self, bytes: Vec<u8>) {
+        if let Some(blocks) = &self.blocks {
+            if blocks.try_send(bytes).is_err() {
+                log::error!("Recording is falling behind; dropping audio from the file");
+            }
+        }
+    }
+
+    /// Closes the queue and waits for the writer to finish the file. Waiting is
+    /// the point: producing a complete file is the whole purpose of a
+    /// recording, so stop and shutdown both block here briefly.
+    pub fn finish(mut self) {
+        self.blocks = None;
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 pub struct Recorder {
     /// The path the recording started at (the unsuffixed name).
     base_path: PathBuf,
@@ -35,8 +95,10 @@ impl Recorder {
         })
     }
 
-    /// Appends encoded bytes. Errors are logged and dropped so file trouble can
-    /// never stall the 10 ms mix cadence.
+    /// Appends encoded bytes. Errors are logged and dropped so file trouble
+    /// cannot stop a recording that is otherwise going fine. This blocks on the
+    /// disk, which is why it runs on [`RecorderHandle`]'s thread and not the
+    /// mixer's.
     pub fn write(&mut self, bytes: &[u8]) {
         if let Err(e) = self.writer.write_all(bytes) {
             log::error!("Recording write failed: {e}");

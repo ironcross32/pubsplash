@@ -142,11 +142,51 @@ pub struct LoadedPack {
     pub pack_id: Uuid,
     pub revision: u64,
     pub assets: HashMap<SoundKind, Vec<Vec<u8>>>,
+    /// Decoded variants, filled on first play and keyed by sound and variant
+    /// index.
+    ///
+    /// The pack is cached but the decode was not, so every cue re-parsed and
+    /// re-resampled its WAV — a burst of chat messages meant one full decode
+    /// per message. The cache lives on the pack so that switching packs drops
+    /// it along with the bytes it came from.
+    decoded: std::sync::Mutex<HashMap<(SoundKind, usize), std::sync::Arc<Vec<f32>>>>,
 }
 
 impl LoadedPack {
     pub fn variants(&self, sound: SoundKind) -> Option<&[Vec<u8>]> {
         self.assets.get(&sound).map(Vec::as_slice)
+    }
+
+    /// One of `sound`'s variants at random, decoded to 48 kHz stereo f32.
+    /// Returns `None` when the pack has no such sound; logs and returns `None`
+    /// if the chosen variant will not decode.
+    pub fn random_decoded(&self, sound: SoundKind) -> Option<std::sync::Arc<Vec<f32>>> {
+        use rand::Rng;
+        let count = self.variants(sound).filter(|v| !v.is_empty())?.len();
+        let index = rand::thread_rng().gen_range(0..count);
+        let mut cache = match self.decoded.lock() {
+            Ok(cache) => cache,
+            // A decode that panicked must not disable every later cue.
+            Err(poisoned) => {
+                self.decoded.clear_poison();
+                poisoned.into_inner()
+            }
+        };
+        if let Some(samples) = cache.get(&(sound, index)) {
+            return Some(samples.clone());
+        }
+        let bytes = &self.assets.get(&sound)?[index];
+        match decode_wav(bytes) {
+            Ok(samples) => {
+                let samples = std::sync::Arc::new(samples);
+                cache.insert((sound, index), samples.clone());
+                Some(samples)
+            }
+            Err(e) => {
+                log::warn!("Could not decode the {} cue: {e}", sound.label());
+                None
+            }
+        }
     }
 }
 
@@ -579,6 +619,7 @@ pub fn load_bytes(data: &[u8]) -> Result<LoadedPack, String> {
         pack_id: id,
         revision,
         assets,
+        decoded: Default::default(),
     })
 }
 
@@ -629,6 +670,7 @@ fn load_directory_with_revision(
         pack_id: manifest.pack_id,
         revision,
         assets,
+        decoded: Default::default(),
     })
 }
 

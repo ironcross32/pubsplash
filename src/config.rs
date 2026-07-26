@@ -524,35 +524,21 @@ pub fn load() -> Config {
 }
 
 pub fn load_from(path: &PathBuf) -> Config {
-    match std::fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str::<Config>(&text) {
-            Ok(mut config) => {
-                config.connection.ensure_main_site();
-                config.scenes.ensure_default_scene();
-                config.fix_up_routing();
-                config
-            }
-            Err(e) => {
-                log::error!("Config file is corrupt ({e}); backing it up and using defaults");
-                let backup = path.with_extension("json.bak");
-                if let Err(e) = std::fs::rename(path, &backup) {
-                    log::error!("Failed to back up corrupt config: {e}");
-                }
-                let config = Config::default();
-                save_to(&config, path);
-                config
-            }
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            log::info!("No config file found; creating one with defaults");
+    match crate::json_store::load::<Config>(path, "Config file") {
+        crate::json_store::Load::Ok(mut config) => {
+            config.connection.ensure_main_site();
+            config.scenes.ensure_default_scene();
+            config.fix_up_routing();
+            config
+        }
+        // Missing, or corrupt and now renamed aside: either way the path is
+        // free, so write the defaults the app is about to run on.
+        crate::json_store::Load::Absent => {
             let config = Config::default();
             save_to(&config, path);
             config
         }
-        Err(e) => {
-            log::error!("Failed to read config file: {e}; using defaults without saving");
-            Config::default()
-        }
+        crate::json_store::Load::Unreadable => Config::default(),
     }
 }
 
@@ -561,40 +547,7 @@ pub fn save(config: &Config) {
 }
 
 pub fn save_to(config: &Config, path: &PathBuf) {
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            log::error!("Failed to create config directory: {e}");
-            return;
-        }
-    }
-    match serde_json::to_string_pretty(config) {
-        Ok(json) => {
-            if let Err(e) = write_atomic(path, &json) {
-                log::error!("Failed to write config file: {e}");
-            }
-        }
-        Err(e) => log::error!("Failed to serialize config: {e}"),
-    }
-}
-
-/// Writes `contents` to `path` via a sibling temp file and a rename, so an
-/// interrupted write can never leave a half-written file behind. Config is
-/// saved often enough (every slider tick, until the save is debounced) that a
-/// truncated file is a real risk, and a truncated file reads as corrupt —
-/// which costs the user every scene, source, bus and FX chain they have.
-///
-/// `rename` over an existing file is atomic on NTFS.
-pub fn write_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
-    let temp = path.with_extension("tmp");
-    std::fs::write(&temp, contents)?;
-    match std::fs::rename(&temp, path) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            // Leaving the temp file around would make the next save fail too.
-            let _ = std::fs::remove_file(&temp);
-            Err(e)
-        }
-    }
+    crate::json_store::save(config, path, "config file");
 }
 
 #[cfg(test)]

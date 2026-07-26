@@ -164,13 +164,29 @@ fn base_list_label(source: &SourceConfig, ctx: &NameContext) -> String {
 /// Appends " 2", " 3"... to repeated labels so two sources that resolve to the
 /// same thing (two default-device microphones, say) stay distinguishable.
 fn dedup(mut labels: Vec<String>) -> Vec<String> {
+    // The *suffixed* label goes into `seen` too, not just the base. Recording
+    // only the base meant that a source whose own name already ended in a
+    // number could collide with a suffix generated for a different one — two
+    // default microphones alongside something already called "Microphone 2"
+    // produced two identical labels, in the module whose entire job is telling
+    // sources apart.
     let mut seen: HashMap<String, usize> = HashMap::new();
     for label in &mut labels {
-        let count = seen.entry(label.clone()).or_insert(0);
+        let base = label.clone();
+        let count = seen.entry(base.clone()).or_insert(0);
         *count += 1;
         if *count > 1 {
-            *label = format!("{label} {count}");
+            let mut n = *count;
+            // Step past any suffix already taken by a label of its own.
+            let mut candidate = format!("{base} {n}");
+            while seen.contains_key(&candidate) {
+                n += 1;
+                candidate = format!("{base} {n}");
+            }
+            *seen.get_mut(&base).unwrap() = n;
+            *label = candidate;
         }
+        seen.entry(label.clone()).or_insert(1);
     }
     labels
 }
@@ -179,6 +195,32 @@ fn dedup(mut labels: Vec<String>) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::config::TtsSourceConfig;
+
+    #[test]
+    fn a_generated_suffix_never_collides_with_a_real_label() {
+        // "Microphone" twice would generate "Microphone 2" for the second —
+        // which is already the name of a different device here.
+        let labels = dedup(vec![
+            "Microphone".to_string(),
+            "Microphone 2".to_string(),
+            "Microphone".to_string(),
+        ]);
+        let mut unique = labels.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), labels.len(), "every label must be distinct");
+        assert_eq!(labels[0], "Microphone");
+        assert_eq!(labels[1], "Microphone 2");
+        assert_eq!(labels[2], "Microphone 3");
+    }
+
+    #[test]
+    fn repeated_labels_still_count_up_normally() {
+        assert_eq!(
+            dedup(vec!["Mic".to_string(), "Mic".to_string(), "Mic".to_string()]),
+            vec!["Mic", "Mic 2", "Mic 3"]
+        );
+    }
 
     fn ctx() -> NameContext {
         NameContext {

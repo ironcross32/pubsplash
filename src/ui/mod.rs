@@ -23,7 +23,6 @@ use crate::audio::{
 use crate::config::{Config, SourceKindConfig};
 use crate::net::{NetCommand, NetEvent, NetHandle};
 use crate::source_name::NameContext;
-use rand::seq::SliceRandom;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -429,18 +428,13 @@ fn play_sound_event(app: &Rc<App>, event: crate::soundpack::StreamEvent) {
             crate::audio::cue::play_sound_kind_async(sound);
             continue;
         }
-        let Some(bytes) = pack
-            .variants(sound)
-            .and_then(|v| v.choose(&mut rand::thread_rng()))
-            .cloned()
-        else {
+        // Decoded on the pack's own cache, so a burst of chat messages costs
+        // one WAV parse per variant rather than one per message.
+        let Some(samples) = pack.random_decoded(sound) else {
             continue;
         };
         let feeds = app.engine.external_feeds.clone();
         std::thread::spawn(move || {
-            let Ok(samples) = crate::soundpack::decode_wav(&bytes) else {
-                return;
-            };
             feeds.feed_all(&source_name, &samples, "Sound events");
         });
     }
@@ -944,7 +938,11 @@ pub fn start_streaming(app: &Rc<App>) {
         }
     }
     let info = app.run.borrow().stream_info.clone();
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    // Bounded, at roughly two seconds of encoded audio. Unbounded, a stalled
+    // TCP send window meant the queue grew at the encoded bitrate for as long
+    // as the stall lasted, silently — and for a live stream, minutes of
+    // buffered audio is worse than a gap.
+    let (tx, rx) = tokio::sync::mpsc::channel(200);
     let bitrate = app.config.borrow().audio.bitrate_kbps;
     app.engine.send(EngineCommand::StartEncoding {
         bitrate_kbps: bitrate,
@@ -1451,6 +1449,22 @@ fn shell_open(target: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("ShellExecute failed with code {code}"))
+    }
+}
+
+/// Diagnostic only.
+///
+/// `App` is an `Rc` and every wx event closure holds a clone, while
+/// `App.widgets` holds the `Frame` those closures are bound to — a cycle, so
+/// whether this ever runs depends on whether wxdragon frees closure boxes when
+/// the frame is destroyed. If it does not, plugin DLLs are never `FreeLibrary`d
+/// and the TTS and scan threads are never joined at exit. Nothing depends on
+/// that today (`on_close` flushes the config, the recording and the stream
+/// explicitly, precisely because this cannot be relied on), but the log line
+/// says which world we are in.
+impl Drop for App {
+    fn drop(&mut self) {
+        log::debug!("App dropped");
     }
 }
 

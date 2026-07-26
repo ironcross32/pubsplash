@@ -29,23 +29,10 @@ pub fn load_cache() -> PluginCache {
 }
 
 pub fn load_cache_from(path: &Path) -> PluginCache {
-    match std::fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str::<PluginCache>(&text) {
-            Ok(cache) => cache,
-            Err(e) => {
-                log::error!("Plugin cache is corrupt ({e}); backing it up and starting empty");
-                let backup = path.with_extension("json.bak");
-                if let Err(e) = std::fs::rename(path, &backup) {
-                    log::error!("Failed to back up corrupt plugin cache: {e}");
-                }
-                PluginCache::default()
-            }
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PluginCache::default(),
-        Err(e) => {
-            log::error!("Failed to read plugin cache: {e}");
-            PluginCache::default()
-        }
+    match crate::json_store::load(path, "Plugin cache") {
+        crate::json_store::Load::Ok(cache) => cache,
+        // An empty cache is just an unscanned one; nothing to write back.
+        _ => PluginCache::default(),
     }
 }
 
@@ -54,20 +41,7 @@ pub fn save_cache(cache: &PluginCache) {
 }
 
 pub fn save_cache_to(cache: &PluginCache, path: &Path) {
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            log::error!("Failed to create plugin cache directory: {e}");
-            return;
-        }
-    }
-    match serde_json::to_string_pretty(cache) {
-        Ok(json) => {
-            if let Err(e) = crate::config::write_atomic(path, &json) {
-                log::error!("Failed to write plugin cache: {e}");
-            }
-        }
-        Err(e) => log::error!("Failed to serialize plugin cache: {e}"),
-    }
+    crate::json_store::save(cache, path, "plugin cache");
 }
 
 /// The standard Windows VST folders that exist on this machine, plus any

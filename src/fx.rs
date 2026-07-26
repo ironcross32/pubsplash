@@ -55,23 +55,11 @@ pub fn load_library() -> FxChainLibrary {
 }
 
 pub fn load_library_from(path: &Path) -> FxChainLibrary {
-    match std::fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str::<FxChainLibrary>(&text) {
-            Ok(library) => library,
-            Err(e) => {
-                log::error!("FX chain library is corrupt ({e}); backing it up and starting empty");
-                let backup = path.with_extension("json.bak");
-                if let Err(e) = std::fs::rename(path, &backup) {
-                    log::error!("Failed to back up corrupt FX chain library: {e}");
-                }
-                FxChainLibrary::default()
-            }
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => FxChainLibrary::default(),
-        Err(e) => {
-            log::error!("Failed to read FX chain library: {e}");
-            FxChainLibrary::default()
-        }
+    match crate::json_store::load(path, "FX chain library") {
+        crate::json_store::Load::Ok(library) => library,
+        // Unlike the config, an absent library is not written back: an empty
+        // one is indistinguishable from no file, so there is nothing to save.
+        _ => FxChainLibrary::default(),
     }
 }
 
@@ -80,20 +68,7 @@ pub fn save_library(library: &FxChainLibrary) {
 }
 
 pub fn save_library_to(library: &FxChainLibrary, path: &Path) {
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            log::error!("Failed to create FX chain library directory: {e}");
-            return;
-        }
-    }
-    match serde_json::to_string_pretty(library) {
-        Ok(json) => {
-            if let Err(e) = crate::config::write_atomic(path, &json) {
-                log::error!("Failed to write FX chain library: {e}");
-            }
-        }
-        Err(e) => log::error!("Failed to serialize FX chain library: {e}"),
-    }
+    crate::json_store::save(library, path, "FX chain library");
 }
 
 /// Writes one chain as a standalone `.pubfx` file.

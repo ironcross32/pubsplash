@@ -25,7 +25,7 @@ pub enum NetCommand {
         archive: bool,
         content_type: String,
         /// Encoded audio produced by the audio engine.
-        audio: tokio_mpsc::UnboundedReceiver<Vec<u8>>,
+        audio: tokio_mpsc::Receiver<Vec<u8>>,
     },
     StopStream,
     SendChat(String),
@@ -258,7 +258,7 @@ async fn start_stream(
     description: &str,
     archive: bool,
     content_type: &str,
-    mut audio: tokio_mpsc::UnboundedReceiver<Vec<u8>>,
+    mut audio: tokio_mpsc::Receiver<Vec<u8>>,
     events: crossbeam_channel::Sender<NetEvent>,
 ) -> Result<ActiveStream, String> {
     let stream_id = conn
