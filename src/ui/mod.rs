@@ -24,10 +24,14 @@ use crate::source_name::NameContext;
 use rand::seq::SliceRandom;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+use windows::core::{PCWSTR, w};
 use wxdragon::prelude::*;
 
 // wxWidgets key codes (not exported by wxdragon).
@@ -50,6 +54,7 @@ const ID_MENU_STREAM_INFO: i32 = 2004;
 const ID_MENU_SOUND_PACK_MANAGER: i32 = 2005;
 const ID_MENU_ABOUT: i32 = 2101;
 const ID_MENU_README: i32 = 2102;
+const ID_MENU_CHANGELOG: i32 = 2103;
 /// Command id of the "Enable volume boost" item in a mixer slider's context
 /// menu. One id serves every strip: the menu is popped up on the slider, so
 /// the command comes back to that slider's own handler.
@@ -57,7 +62,10 @@ pub const ID_MIXER_BOOST: i32 = 2201;
 /// Command id of the "Monitor this strip" item in the same menu.
 pub const ID_MIXER_MONITOR: i32 = 2202;
 
+/// Where the Help menu goes when the copy installed with this build cannot be
+/// found or will not open.
 const README_URL: &str = "https://github.com/ironcross32/pubsplash#readme";
+const CHANGELOG_URL: &str = "https://github.com/ironcross32/pubsplash/blob/master/changelog.md";
 
 /// How long the exit will wait for the shutdown cue before giving up on it.
 const SHUTDOWN_CUE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1123,6 +1131,11 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
             "Open &Readme",
             "Open the documentation in your browser",
         )
+        .append_item(
+            ID_MENU_CHANGELOG,
+            "View &Changelog",
+            "Open the list of changes in your browser",
+        )
         .build();
     let menu_bar = MenuBar::builder()
         .append(file_menu, "&File")
@@ -1145,12 +1158,8 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
                 frame.close(false);
             }
             ID_MENU_SOUND_PACK_MANAGER => {
-                if let Err(e) = launch_sound_pack_manager() {
-                    show_error(
-                        &frame,
-                        "Sound Pack Manager",
-                        &format!("Could not launch manager: {e}"),
-                    );
+                if let Err(message) = launch_sound_pack_manager() {
+                    show_error(&frame, "Sound Pack Manager", &message);
                 }
             }
             ID_MENU_ABOUT => {
@@ -1164,45 +1173,99 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
                 );
             }
             ID_MENU_README => {
-                if let Err(e) = open_in_browser(README_URL) {
-                    show_error(
-                        &frame,
-                        "Open Readme",
-                        &format!("Could not open browser: {e}"),
-                    );
+                if let Err(message) = open_doc("readme.html", README_URL) {
+                    show_error(&frame, "Open Readme", &message);
+                }
+            }
+            ID_MENU_CHANGELOG => {
+                if let Err(message) = open_doc("changelog.html", CHANGELOG_URL) {
+                    show_error(&frame, "View Changelog", &message);
                 }
             }
             _ => {}
         });
 }
 
-fn launch_sound_pack_manager() -> std::io::Result<()> {
-    let exe = std::env::current_exe()?;
-    let sibling = exe
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join(if cfg!(windows) {
-            "pubsplash-soundpack.exe"
-        } else {
-            "pubsplash-soundpack"
-        });
-    let executable = if sibling.exists() {
-        sibling
-    } else {
-        std::path::PathBuf::from(if cfg!(windows) {
-            "pubsplash-soundpack.exe"
-        } else {
-            "pubsplash-soundpack"
-        })
-    };
-    std::process::Command::new(executable).spawn().map(|_| ())
-}
-
-fn open_in_browser(url: &str) -> std::io::Result<()> {
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "", url])
+/// Starts the standalone Sound Pack Manager, which ships next to pubsplash.exe.
+///
+/// Sibling-of-`current_exe` only, exactly like `vst::scan::helper_path`. Falling
+/// back to the bare name would let Windows resolve it against the working
+/// directory and PATH — which either fails with a pathless "os error 2" or, on
+/// an unlucky machine, runs something else entirely.
+fn launch_sound_pack_manager() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe failed: {e}"))?;
+    let manager = exe.with_file_name("pubsplash-soundpack.exe");
+    if !manager.is_file() {
+        return Err(format!(
+            "The Sound Pack Manager ({}) is missing. Reinstall Pubsplash to restore it.",
+            manager.display()
+        ));
+    }
+    std::process::Command::new(&manager)
         .spawn()
         .map(|_| ())
+        .map_err(|e| format!("Could not start {}: {e}", manager.display()))
+}
+
+/// Opens a documentation file that ships with Pubsplash, falling back to the
+/// copy on GitHub.
+///
+/// The local file is preferred because it matches the build the user is
+/// actually running and needs no network. `fallback_url` covers a source
+/// checkout that never generated the HTML, plus the case where the file is
+/// there but has no handler — hence the fall-through on a failed open, not
+/// just on a missing file.
+fn open_doc(name: &str, fallback_url: &str) -> Result<(), String> {
+    if let Some(path) = find_doc(name) {
+        let target = path.to_string_lossy().into_owned();
+        if shell_open(&target).is_ok() {
+            return Ok(());
+        }
+    }
+    shell_open(fallback_url).map_err(|e| format!("Could not open {fallback_url}: {e}"))
+}
+
+/// Finds a documentation file that ships with Pubsplash.
+///
+/// Both the installer (everything lands in `$INSTDIR`) and the portable ZIP put
+/// the docs directly beside `pubsplash.exe`, so the sibling check covers every
+/// shipped layout. Walking on up the exe's ancestors additionally picks up a
+/// source checkout, where the generated HTML sits at the repository root and the
+/// exe is down in `target/<profile>`. Resolved from the exe, never the working
+/// directory, which a shortcut's "Start in" can point anywhere.
+fn find_doc(name: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    doc_in(exe.parent()?.ancestors().take(4), name)
+}
+
+/// The pure half of [`find_doc`], split out so it can be tested.
+fn doc_in<'a>(dirs: impl Iterator<Item = &'a Path>, name: &str) -> Option<PathBuf> {
+    dirs.map(|dir| dir.join(name)).find(|path| path.is_file())
+}
+
+/// Opens a file path or URL with whatever the user has it associated with.
+///
+/// `ShellExecuteW` rather than `cmd /C start`: the latter flashes a console
+/// window and treats `&` in a path as a command separator.
+fn shell_open(target: &str) -> Result<(), String> {
+    let wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            PCWSTR(wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // Success is any value above 32; at or below that it is an error code.
+    let code = result.0 as usize;
+    if code > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecute failed with code {code}"))
+    }
 }
 
 /// Drains engine and network events into UI state.
@@ -1531,5 +1594,39 @@ mod token_tests {
         assert!(name.ends_with(".mp3"));
         let stamp = name.trim_end_matches(".mp3").rsplit('_').next().unwrap();
         assert_eq!(stamp.len(), 8, "time HH-MM-SS in {name}");
+    }
+}
+
+#[cfg(test)]
+mod doc_tests {
+    #[test]
+    fn doc_in_finds_the_first_directory_holding_the_file() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let src = root.join("src");
+        // changelog.md lives at the repo root, not in src/, so the walk has to
+        // get past the first candidate before it matches.
+        let found = super::doc_in([src.as_path(), root].into_iter(), "changelog.md");
+        assert_eq!(found, Some(root.join("changelog.md")));
+    }
+
+    #[test]
+    fn doc_in_is_none_when_no_directory_has_the_file() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert_eq!(
+            super::doc_in([root].into_iter(), "no-such-doc.html"),
+            None,
+            "a doc that does not exist must not resolve"
+        );
+    }
+
+    /// Ignored because it opens a browser window. Run with
+    /// `cargo test shell_open_launches_the_readme -- --include-ignored` after
+    /// generating readme.html (`marked README.md -o readme.html`).
+    #[test]
+    #[ignore]
+    fn shell_open_launches_the_readme() {
+        let readme = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("readme.html");
+        assert!(readme.is_file(), "generate readme.html first");
+        super::shell_open(&readme.to_string_lossy()).expect("ShellExecute");
     }
 }

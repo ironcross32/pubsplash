@@ -4,9 +4,25 @@
 
 ### Additions
 
+- **Help > View Changelog** opens the changelog in your default browser.
+
 ### Fixes
 
+- The portable ZIP now includes the Sound Pack Manager and the VST plugin scanner, which previously failed to start for anyone who used the ZIP instead of the installer.
+
+- The Sound Pack Manager no longer opens a console window alongside its own window.
+
+- When a helper program is missing, the error now names the file and the folder it was looked for in instead of reporting "os error 2".
+
 ### Changes
+
+- **Help > Open Readme** now opens the copy installed with Pubsplash, and falls back to GitHub if that copy is unavailable. It no longer flashes a console window.
+
+- The changelog now ships as a web page instead of a Markdown file.
+
+- The command-line pack compiler `soundpack.exe` is now installed alongside Pubsplash.
+
+- The installer no longer includes `gen-help.exe`.
 
 ## 0.1.1
 

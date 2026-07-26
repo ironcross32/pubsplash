@@ -7,6 +7,7 @@ This file defines standard procedures every AI agent must follow when working on
 `changelog.md` must be updated in the same change set as the code it describes.
 
 - Every completed item gets its own bullet point.
+- Keep entries concise and to the point; don't include **why** something was done, just **that** it was done
 - Entries go under the permanent `## Unreleased` major heading until a release is cut; each released version gets its own `## <version>` major heading.
 - Under each major heading, place entries in exactly one of the three subheadings: `### Additions`, `### Fixes`, or `### Changes`.
 - When a release is tagged, rename `Unreleased`'s content to the new version heading and recreate an empty `Unreleased` section above it.
@@ -16,6 +17,7 @@ This file defines standard procedures every AI agent must follow when working on
 `README.md` is user-facing documentation and must always reflect the current behavior of the app.
 
 - When you add, remove, or change a feature, shortcut, setting, or requirement, update the corresponding README section in the same change set.
+- The target audience of the README is non-developers; keep that in mind when deciding what details to include, don't include **why** something has been done, only **that** it has been done
 - The keyboard shortcut table must list every shortcut the app actually binds.
 - The README is converted to HTML and shipped with releases, so keep it self-contained (no relative links into the source tree).
 

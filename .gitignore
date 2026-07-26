@@ -1,1 +1,5 @@
 /target
+# Generated from the Markdown sources at package time and shipped in the
+# installer and the portable ZIP; not repo content.
+/readme.html
+/changelog.html

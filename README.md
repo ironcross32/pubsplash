@@ -34,6 +34,8 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 4. On the **Home** tab, press **Start streaming** (`ALT+S`). If you haven't set the stream info yet, the dialog opens first â€” press **OK** to start with what's filled in (tabbing into a text field selects its contents so you can just type over the defaults), or **Cancel** to not start streaming.
 5. Press **Stop streaming** (`ALT+T`) when you're done.
 
+**Help → Open Readme** and **Help → View Changelog** open this document and the changelog in your default browser. Both are installed with Pubsplash and match the version you are running; if a copy is unavailable, Pubsplash opens the one on GitHub instead.
+
 To record locally without going live, use **Start recording** (`ALT+R`) next to the streaming button; press **Stop recording** (`ALT+C`) to finish. It saves the same MP3 to your recording folder without connecting to the server. Recording and streaming can't run at the same time.
 
 ## Keyboard shortcuts
@@ -155,4 +157,4 @@ Open **Tools > Sound Pack Manager** to create or edit a sound pack project. Proj
 
 Development projects contain `sound-pack.toml` plus a `sounds/` directory. WAV files must be readable by Pubsplash; mono files are duplicated to stereo and non-48 kHz files are resampled during playback. In the manager, choose one Source WAV per sound or event, use **Test** to preview it, then press **Save**. Save copies the selected WAVs into the project; it does not move or delete your original files. The saved files use names such as `se_incoming_chat_01.wav`.
 
-Compiling creates a distributable `.pspack` from the last saved project contents and bumps the project revision after a successful build. Press **Save** before **Compile** after changing Source WAV paths. You can also run `cargo run --bin soundpack -- <project-directory> <output.pspack>`. `.pspack` encrypts assets at rest and authenticates their contents. Because Pubsplash must decrypt audio to play it, it is a deterrent against casual extraction rather than DRM.
+Compiling creates a distributable `.pspack` from the last saved project contents and bumps the project revision after a successful build. Press **Save** before **Compile** after changing Source WAV paths. There is also a command-line compiler installed next to `pubsplash.exe`: `soundpack.exe <project-directory> <output.pspack>`. `.pspack` encrypts assets at rest and authenticates their contents. Because Pubsplash must decrypt audio to play it, it is a deterrent against casual extraction rather than DRM.
