@@ -62,7 +62,7 @@ pub fn save_cache_to(cache: &PluginCache, path: &Path) {
     }
     match serde_json::to_string_pretty(cache) {
         Ok(json) => {
-            if let Err(e) = std::fs::write(path, json) {
+            if let Err(e) = crate::config::write_atomic(path, &json) {
                 log::error!("Failed to write plugin cache: {e}");
             }
         }

@@ -17,12 +17,14 @@ use std::rc::Rc;
 
 fn main() {
     // Logging must come up before config so config recovery can log.
-    let log_handle = logging::init("info");
+    // Held (not leaked) for the lifetime of the app: log writes are buffered
+    // and flushed on a background thread so the audio engine never blocks on
+    // one, and dropping the handle at the end of `main` is what flushes the
+    // tail of the file.
+    let mut log_handle = logging::init("info");
     let config = config::load();
-    if let Some(mut handle) = log_handle {
+    if let Some(handle) = log_handle.as_mut() {
         handle.set_level(&config.logging.level);
-        // Keep the handle alive for the lifetime of the app.
-        std::mem::forget(handle);
     }
     logging::install_panic_hook();
     log::info!("Pubsplash {} starting", env!("CARGO_PKG_VERSION"));
@@ -55,6 +57,7 @@ fn main() {
             chain_library: RefCell::new(chain_library.clone()),
             open_editors: RefCell::new(Vec::new()),
             shutting_down: std::cell::Cell::new(false),
+            config_dirty: std::cell::Cell::new(false),
             pump_timer: RefCell::new(None),
             shutdown_cue: RefCell::new(None),
         });
@@ -62,4 +65,8 @@ fn main() {
     });
 
     log::info!("Pubsplash exiting");
+    if let Some(handle) = &log_handle {
+        handle.flush();
+    }
+    drop(log_handle);
 }

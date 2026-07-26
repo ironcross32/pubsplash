@@ -142,10 +142,10 @@ pub fn open_editor(
     let params = Button::builder(&panel).with_label("&Parameters...").build();
     let bypass = CheckBox::builder(&panel).with_label("&Bypass").build();
     bypass.set_value(
-        fx::slots_for(app, target)
-            .get(slot)
-            .map(|s| s.bypass)
-            .unwrap_or(false),
+        fx::with_slots(app, target, |slots| {
+            slots.get(slot).map(|s| s.bypass).unwrap_or(false)
+        })
+        .unwrap_or(false),
     );
     super::set_accessible_name(&bypass, "Bypass this plugin");
     let focus_plugin = Button::builder(&panel)
@@ -281,16 +281,32 @@ pub fn close_all(app: &Rc<App>) {
 /// Per-tick maintenance: drives editor idle, applies plugin resize requests,
 /// and performs a pending F6 focus escape. Called from the UI pump.
 pub fn pump(app: &Rc<App>) {
-    {
+    // Drained unconditionally. `host_callback` is installed for every plugin
+    // by `Vst2Plugin::load`, which runs at startup — long before any editor
+    // exists — so a resize requested with no editor open used to sit in the
+    // global queue forever.
+    let size_requests = crate::vst::host2::take_size_requests();
+
+    // Take a snapshot and release the borrow before calling into the plugins:
+    // `editor_idle` runs arbitrary third-party code, and JUCE-hosted editors
+    // commonly pump the Windows message queue from it. That can re-enter
+    // `frame.on_close` -> `close_editor` -> `borrow_mut()` and panic — which
+    // wxdragon catches and discards, so the only symptom the user sees is an
+    // editor that refuses to close.
+    let plugins: Vec<std::sync::Arc<Vst2Plugin>> = app
+        .open_editors
+        .borrow()
+        .iter()
+        .map(|e| e.plugin.clone())
+        .collect();
+    for plugin in &plugins {
+        plugin.editor_idle();
+    }
+
+    // Apply any audioMasterSizeWindow requests to matching frames.
+    if !size_requests.is_empty() {
         let editors = app.open_editors.borrow();
-        if editors.is_empty() {
-            return;
-        }
-        for editor in editors.iter() {
-            editor.plugin.editor_idle();
-        }
-        // Apply any audioMasterSizeWindow requests to matching frames.
-        for (effect_id, w, h) in crate::vst::host2::take_size_requests() {
+        for (effect_id, w, h) in size_requests {
             if let Some(editor) = editors.iter().find(|e| e.effect_id == effect_id) {
                 editor
                     .frame

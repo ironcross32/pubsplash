@@ -101,7 +101,11 @@ pub fn inspect(path: &Path) -> Result<PeInfo, String> {
         sections
             .iter()
             .find(|(va, vsize, _, _)| rva >= *va && rva < va.saturating_add(*vsize))
-            .map(|(va, _, raw_ptr, _)| (rva - va + raw_ptr) as u64)
+            // `rva >= va` holds by the predicate above, so only the addition
+            // can go wrong — and these are offsets out of an untrusted file,
+            // where a debug build would panic and a release build would wrap.
+            .and_then(|(va, _, raw_ptr, _)| (rva - va).checked_add(*raw_ptr))
+            .map(u64::from)
     };
 
     let mut exports = Vec::new();

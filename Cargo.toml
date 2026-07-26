@@ -38,7 +38,9 @@ winresource = "0.1"
 wxdragon = "0.9"
 
 log = "0.4"
-flexi_logger = "0.31"
+# `async` gives `WriteMode::Async`, which keeps log writes off the audio
+# engine's mix thread (it logs from inside the 10 ms block loop).
+flexi_logger = { version = "0.31", features = ["async"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -47,9 +49,12 @@ dirs = "6"
 
 crossbeam-channel = "0.5"
 
-tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
+# The network side runs on a single current-thread runtime, so `rt-multi-thread`
+# is deliberately absent; adding a need for it will fail the build loudly.
+tokio = { version = "1", features = ["rt", "net", "io-util", "time", "sync", "macros"] }
 reqwest = { version = "0.12", features = ["json", "cookies", "stream"] }
-futures-util = "0.3"
+# Only `StreamExt` is used; the default feature set pulls in far more.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 thiserror = "2"
 
 wasapi = "0.23"

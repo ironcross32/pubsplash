@@ -569,11 +569,31 @@ pub fn save_to(config: &Config, path: &PathBuf) {
     }
     match serde_json::to_string_pretty(config) {
         Ok(json) => {
-            if let Err(e) = std::fs::write(path, json) {
+            if let Err(e) = write_atomic(path, &json) {
                 log::error!("Failed to write config file: {e}");
             }
         }
         Err(e) => log::error!("Failed to serialize config: {e}"),
+    }
+}
+
+/// Writes `contents` to `path` via a sibling temp file and a rename, so an
+/// interrupted write can never leave a half-written file behind. Config is
+/// saved often enough (every slider tick, until the save is debounced) that a
+/// truncated file is a real risk, and a truncated file reads as corrupt —
+/// which costs the user every scene, source, bus and FX chain they have.
+///
+/// `rename` over an existing file is atomic on NTFS.
+pub fn write_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    let temp = path.with_extension("tmp");
+    std::fs::write(&temp, contents)?;
+    match std::fs::rename(&temp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Leaving the temp file around would make the next save fail too.
+            let _ = std::fs::remove_file(&temp);
+            Err(e)
+        }
     }
 }
 
@@ -594,6 +614,31 @@ mod tests {
         let config = load_from(&path);
         assert_eq!(config, Config::default());
         assert!(path.exists(), "default config should have been written");
+    }
+
+    #[test]
+    fn an_interrupted_write_leaves_the_previous_file_intact() {
+        // Config is saved often enough that a crash mid-write is a real risk,
+        // and a truncated file reads as corrupt — which costs the user every
+        // scene, source, bus and FX chain they have. `write_atomic` stages the
+        // new contents in a sibling temp file, so a crash before the rename
+        // leaves only that temp file behind.
+        let path = temp_path("atomic.json");
+        let temp = path.with_extension("tmp");
+        let _ = std::fs::remove_file(&temp);
+        let mut config = Config::default();
+        config.audio.master_volume = 42;
+        save_to(&config, &path);
+
+        // Simulate the crash: the staged write happened, the rename did not.
+        std::fs::write(&temp, "{ half-written").unwrap();
+        assert_eq!(load_from(&path).audio.master_volume, 42);
+
+        // And a completed write replaces the file and clears the staging area.
+        config.audio.master_volume = 7;
+        save_to(&config, &path);
+        assert_eq!(load_from(&path).audio.master_volume, 7);
+        assert!(!temp.exists(), "temp file should be renamed away, not left");
     }
 
     #[test]

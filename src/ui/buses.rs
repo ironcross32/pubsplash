@@ -291,14 +291,14 @@ fn selected_target(app: &Rc<App>) -> ChainTarget {
         .unwrap_or(ChainTarget::Master)
 }
 
-/// Save, refresh both lists, re-sync the engine. Sources are re-synced too
-/// because their send targets are bus indices, which a bus edit can shift.
+/// Save, refresh both lists, re-sync the engine. Sources go in the same
+/// routing command as the buses because their send targets are bus indices,
+/// which a bus edit can shift.
 fn after_bus_edit(app: &Rc<App>) {
     app.save_config();
     refresh_bus_list(app);
     refresh_fx_list(app);
-    fx::sync_engine_buses(app);
-    app.sync_engine_sources();
+    app.sync_engine_routing();
     super::home::rebuild_mixer(app);
 }
 
@@ -323,13 +323,28 @@ pub fn refresh_bus_list(app: &Rc<App>) {
 /// Refreshes the FX list to show the selected bus's chain.
 pub fn refresh_fx_list(app: &Rc<App>) {
     let target = selected_target(app);
+    // Build the labels first, reading the chain in place rather than cloning
+    // it: `FxSlotConfig` owns the plugin's serialized state, which can be
+    // hundreds of kilobytes, and none of it is needed here.
+    let count = fx::with_slots(app, target, |slots| slots.len()).unwrap_or(0);
+    // Whether each instance actually loaded lives in `app.fx`, not the config,
+    // and is gathered separately so neither borrow spans the other.
+    let loaded: Vec<bool> = (0..count)
+        .map(|i| fx::instance_at(app, target, i).is_some())
+        .collect();
+    let labels = fx::with_slots(app, target, |slots| {
+        slots
+            .iter()
+            .enumerate()
+            .map(|(i, slot)| fx::slot_label(i, slot, loaded.get(i).copied().unwrap_or(false)))
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
     app.widgets(|w| {
         let previous = w.fx_list.get_selection();
         w.fx_list.clear();
-        let slots = fx::slots_for(app, target);
-        for (i, slot) in slots.iter().enumerate() {
-            let loaded = fx::instance_at(app, target, i).is_some();
-            w.fx_list.append(&fx::slot_label(i, slot, loaded));
+        for label in &labels {
+            w.fx_list.append(label);
         }
         if let Some(index) = previous.filter(|&i| i < w.fx_list.get_count()) {
             w.fx_list.set_selection(index, true);
@@ -404,6 +419,12 @@ fn remove_bus(app: &Rc<App>, list: &ListBox) {
     let ChainTarget::Bus(index) = target_for(list.get_selection().unwrap_or(0)) else {
         return;
     };
+    // Closing the editors snapshots each open plugin's state back into its
+    // config slot, addressed by bus index — so it has to happen while the
+    // config still agrees with `app.fx` about what lives at which index.
+    // Deleting first would write the snapshot into whichever bus shifted down
+    // into this slot. (`fx::remove_plugin` closes first for the same reason.)
+    super::fx_editor::close_all(app);
     if app.config.borrow_mut().delete_bus(index) == ListEdit::Changed {
         fx::on_bus_removed(app, index);
         after_bus_edit(app);
@@ -414,6 +435,9 @@ fn move_bus(app: &Rc<App>, list: &ListBox, towards_start: bool) {
     let ChainTarget::Bus(index) = target_for(list.get_selection().unwrap_or(0)) else {
         return;
     };
+    // Snapshot open editors before the swap, for the same reason as
+    // `remove_bus`: the snapshot is written back by bus index.
+    super::fx_editor::close_all(app);
     let result = {
         let mut config = app.config.borrow_mut();
         if towards_start {
@@ -513,10 +537,17 @@ fn set_bypass(app: &Rc<App>, list: &ListBox, bypass: bool) {
 /// disables it when no plugin is selected).
 fn sync_bypass_check(app: &Rc<App>) {
     let target = selected_target(app);
-    let slots = fx::slots_for(app, target);
-    app.widgets(|w| match w.fx_list.get_selection() {
-        Some(i) => {
-            let bypassed = slots.get(i as usize).map(|s| s.bypass).unwrap_or(false);
+    // Bound to the FX list's selection-changed event, so this runs on every
+    // arrow key: project to the one flag it needs rather than cloning the
+    // chain (and every plugin's serialized state with it).
+    let selected = app.widgets(|w| w.fx_list.get_selection()).flatten();
+    let bypassed = selected.and_then(|i| {
+        fx::with_slots(app, target, |slots| {
+            slots.get(i as usize).map(|s| s.bypass).unwrap_or(false)
+        })
+    });
+    app.widgets(|w| match bypassed {
+        Some(bypassed) => {
             w.fx_bypass.set_value(bypassed);
             w.fx_bypass.enable(true);
         }

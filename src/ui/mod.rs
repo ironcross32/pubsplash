@@ -17,7 +17,9 @@ mod sends;
 mod slider_uia;
 mod stream_info_dialog;
 
-use crate::audio::{AudioEngine, EngineCommand, FeedKind, SourceSpec, capture::CaptureKind};
+use crate::audio::{
+    AudioEngine, EngineCommand, FeedKind, RoutingUpdate, SourceSpec, capture::CaptureKind,
+};
 use crate::config::{Config, SourceKindConfig};
 use crate::net::{NetCommand, NetEvent, NetHandle};
 use crate::source_name::NameContext;
@@ -83,6 +85,27 @@ pub struct ChatEntry {
     pub user: String,
     pub content: String,
     pub received: Instant,
+    /// `"user: content"` with newlines flattened — the part of the list label
+    /// that never changes. Built once, because the relative times are
+    /// re-rendered once a second across the whole history.
+    pub prefix: String,
+    /// The relative time currently shown in this entry's list item, so that
+    /// refresh can skip both the formatting and the FFI round-trip for the
+    /// (overwhelmingly common) entries whose displayed age has not changed.
+    pub shown_age: String,
+}
+
+impl ChatEntry {
+    pub fn new(user: String, content: String) -> Self {
+        let prefix = format!("{}: {}", user, content.replace(['\r', '\n'], " "));
+        Self {
+            user,
+            content,
+            received: Instant::now(),
+            prefix,
+            shown_age: String::new(),
+        }
+    }
 }
 
 /// Stream metadata sent to the server when a stream is created. Deliberately
@@ -131,6 +154,28 @@ pub struct Runtime {
     /// Which mixer strips are being monitored through the local playback
     /// device. Deliberately not persisted — see [`Monitors`].
     pub monitors: Monitors,
+    /// What `refresh_stream_ui` last wrote to the stream/record controls.
+    pub shown: ShownStreamUi,
+}
+
+/// The last values `App::refresh_stream_ui` wrote to each control.
+///
+/// It runs once a second for the whole stream, and setting a label or an
+/// enable state fires an MSAA change event whether or not anything changed —
+/// so a screen-reader user parked on the stream button (the likeliest place to
+/// be while streaming) heard it re-announced every second. Nothing is written
+/// now unless it actually differs.
+///
+/// The comparison is against this cache and not a `get_label()` round-trip on
+/// purpose: wx normalises the mnemonic ampersands, so a round-trip would never
+/// compare equal and the guard would silently never fire.
+#[derive(Default)]
+pub struct ShownStreamUi {
+    status_text: String,
+    stream_label: String,
+    stream_enabled: Option<bool>,
+    record_label: String,
+    record_enabled: Option<bool>,
 }
 
 /// Which mixer strips are monitored, by the same indices the mixer and engine
@@ -180,6 +225,7 @@ impl Default for Runtime {
             apps: HashMap::new(),
             failing: HashSet::new(),
             monitors: Monitors::default(),
+            shown: ShownStreamUi::default(),
         }
     }
 }
@@ -298,6 +344,9 @@ pub struct App {
     /// deferred frame teardown; without this guard its callback would run
     /// `pump_events` against already-destroyed widgets and crash (0xc0000005).
     pub shutting_down: std::cell::Cell<bool>,
+    /// Set by [`App::save_config`], cleared by [`App::flush_config`] once the
+    /// file has been written.
+    pub config_dirty: std::cell::Cell<bool>,
     /// The 100 ms pump timer. Owned here (not leaked) so `on_close` can stop it
     /// before the frame is destroyed: a running timer whose owner frame has been
     /// torn down keeps firing `WM_TIMER` into the freed frame handler and
@@ -444,8 +493,25 @@ impl App {
         self.widgets.borrow().as_ref().map(f)
     }
 
+    /// Marks the config as needing to be written. The write itself happens on
+    /// the next one-second pump tick (or at exit) — see [`App::flush_config`].
+    ///
+    /// Saving here directly used to mean serializing the whole config, every
+    /// plugin's base64 state included, once per slider event: a mouse drag
+    /// emits 50-200 of those and a held arrow key about 30 a second, so a
+    /// couple of chunked plugins turned a fader move into megabytes a second of
+    /// synchronous disk I/O on the UI thread. Nothing about it needed to be
+    /// immediate: the engine is told about volume changes by its own command,
+    /// separately and without waiting for this.
     pub fn save_config(&self) {
-        crate::config::save(&self.config.borrow());
+        self.config_dirty.set(true);
+    }
+
+    /// Writes the config if [`App::save_config`] asked for it.
+    pub fn flush_config(&self) {
+        if self.config_dirty.replace(false) {
+            crate::config::save(&self.config.borrow());
+        }
     }
 
     /// The state the derived labels for `sources` are built from. Takes the
@@ -525,16 +591,52 @@ impl App {
 
     /// Sends the active scene's sources to the audio engine (mixer order).
     /// Send targets are translated from bus names to current bus indices,
-    /// so call this again after any bus reorder.
+    /// so call this again after any bus reorder — or better, use
+    /// [`App::sync_engine_routing`], which carries both in one command.
     pub fn sync_engine_sources(&self) {
+        let Some(specs) = self.source_specs() else {
+            return;
+        };
+        self.engine
+            .send(EngineCommand::SetRouting(Box::new(RoutingUpdate {
+                sources: Some(specs),
+                ..Default::default()
+            })));
+        self.send_master_levels();
+    }
+
+    /// Sends sources, buses and the master chain together. A bus reorder shifts
+    /// the indices the sources' sends are addressed by, so the two halves have
+    /// to reach the mixer in the same command or a block can be routed through
+    /// the wrong bus.
+    pub fn sync_engine_routing(self: &Rc<Self>) {
+        let (buses, master_chain) = fx::routing_specs(self);
+        self.engine
+            .send(EngineCommand::SetRouting(Box::new(RoutingUpdate {
+                sources: self.source_specs(),
+                buses: Some(buses),
+                master_chain: Some(master_chain),
+            })));
+        self.send_master_levels();
+    }
+
+    fn send_master_levels(&self) {
+        let config = self.config.borrow();
+        self.engine
+            .send(EngineCommand::SetMasterVolume(config.audio.master_volume));
+        self.engine
+            .send(EngineCommand::SetMasterMute(config.audio.master_muted));
+    }
+
+    /// The active scene's sources as engine specs, or `None` when there is no
+    /// active scene (in which case the engine keeps what it has).
+    fn source_specs(&self) -> Option<Vec<SourceSpec>> {
         let (apps, monitors) = {
             let run = self.run.borrow();
             (run.apps.clone(), run.monitors.clone())
         };
         let config = self.config.borrow();
-        let Some(scene) = config.scenes.active_scene() else {
-            return;
-        };
+        let scene = config.scenes.active_scene()?;
         let bus_index = |name: &str| config.buses.buses.iter().position(|b| b.name == name);
         let specs: Vec<SourceSpec> = scene
             .sources
@@ -582,11 +684,7 @@ impl App {
                 },
             })
             .collect();
-        self.engine.send(EngineCommand::SetSources(specs));
-        self.engine
-            .send(EngineCommand::SetMasterVolume(config.audio.master_volume));
-        self.engine
-            .send(EngineCommand::SetMasterMute(config.audio.master_muted));
+        Some(specs)
     }
 
     pub fn is_streaming_or_starting(&self) -> bool {
@@ -712,15 +810,34 @@ impl App {
         drop(config);
 
         self.widgets(|w| {
-            w.status_bar.set_status_text(&status_text, 0);
+            // Every write below fires an accessibility change event, so each
+            // one is guarded — see [`ShownStreamUi`].
+            let mut run = self.run.borrow_mut();
+            let shown = &mut run.shown;
+            if shown.status_text != status_text {
+                w.status_bar.set_status_text(&status_text, 0);
+                shown.status_text = status_text;
+            }
             if w.overview.get_value() != overview {
                 w.overview.set_value(&overview);
             }
-            w.stream_button.set_label(&button_label);
+            if shown.stream_label != button_label {
+                w.stream_button.set_label(&button_label);
+                shown.stream_label = button_label;
+            }
             // Streaming and standalone recording are mutually exclusive.
-            w.stream_button.enable(!recording);
-            w.record_button.set_label(record_label);
-            w.record_button.enable(!streaming_or_starting);
+            if shown.stream_enabled != Some(!recording) {
+                w.stream_button.enable(!recording);
+                shown.stream_enabled = Some(!recording);
+            }
+            if shown.record_label != record_label {
+                w.record_button.set_label(record_label);
+                shown.record_label = record_label.to_string();
+            }
+            if shown.record_enabled != Some(!streaming_or_starting) {
+                w.record_button.enable(!streaming_or_starting);
+                shown.record_enabled = Some(!streaming_or_starting);
+            }
         });
     }
 }
@@ -943,6 +1060,12 @@ pub fn build(app: Rc<App>) {
                 // Cleanly terminate the stream before shutdown.
                 app.stop_streaming();
             }
+            // Flush any recording. Standalone recording is not covered by the
+            // streaming check above, and without this the encoder's flush and
+            // the writer's tail never run, truncating the file the user was
+            // making. (Falling back to `AudioEngine::drop` would not do it:
+            // `App` is an `Rc` held by every event closure and may never drop.)
+            app.stop_recording();
             // Mark the exit as under way. The pump uses this to stop touching
             // widgets, and from here on it drives the rest of the teardown.
             app.shutting_down.set(true);
@@ -953,6 +1076,7 @@ pub fn build(app: Rc<App>) {
             // look gone while the cue finishes in the background.
             frame_for_close.show(false);
             app.save_config();
+            app.flush_config();
             start_shutdown_cue(&app);
             // The frame has to outlive the cue, so this close does not proceed.
             // `finish_close` destroys the frame once the cue is done.
@@ -987,11 +1111,13 @@ pub fn build(app: Rc<App>) {
             pump_events(&app);
             ticks = ticks.wrapping_add(1);
             if ticks % 10 == 0 {
-                // Once a second: durations and relative chat times.
+                // Once a second: durations, relative chat times, and the
+                // config write that slider and text edits deferred to here.
                 if app.is_streaming_or_starting() {
                     app.refresh_stream_ui();
                 }
                 chat::refresh_chat_times(&app);
+                app.flush_config();
             }
             if ticks % 20 == 0 {
                 // Every two seconds: notice applications starting or exiting,
@@ -1271,7 +1397,7 @@ fn shell_open(target: &str) -> Result<(), String> {
 /// Drains engine and network events into UI state.
 fn pump_events(app: &Rc<App>) {
     let mut stream_ui_dirty = false;
-    let mut chat_dirty = false;
+    let mut chat_arrived = 0usize;
     let mut sound_events = Vec::new();
 
     while let Ok(event) = app.net.events.try_recv() {
@@ -1356,12 +1482,11 @@ fn pump_events(app: &Rc<App>) {
                 play_sound_event(app, crate::soundpack::StreamEvent::IncomingChat);
                 let user = message.user.display().to_string();
                 speak_chat(app, &user, &message.content);
-                app.run.borrow_mut().chat.push(ChatEntry {
-                    user,
-                    content: message.content,
-                    received: Instant::now(),
-                });
-                chat_dirty = true;
+                app.run
+                    .borrow_mut()
+                    .chat
+                    .push(ChatEntry::new(user, message.content));
+                chat_arrived += 1;
             }
             NetEvent::Listeners { active, peak } => {
                 let mut run = app.run.borrow_mut();
@@ -1434,8 +1559,8 @@ fn pump_events(app: &Rc<App>) {
     if stream_ui_dirty {
         app.refresh_stream_ui();
     }
-    if chat_dirty {
-        chat::refresh_chat_list(app);
+    if chat_arrived > 0 {
+        chat::append_new_messages(app, chat_arrived);
     }
 }
 

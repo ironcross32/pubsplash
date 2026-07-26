@@ -148,24 +148,23 @@ fn view_selected(app: &Rc<App>, list: &ListBox) {
     dialog.destroy();
 }
 
-fn format_entry(entry: &super::ChatEntry) -> String {
-    let content = entry.content.replace(['\r', '\n'], " ");
-    format!(
-        "{}: {}: {}",
-        entry.user,
-        content,
-        relative_time(entry.received.elapsed())
-    )
+/// The list label for an entry showing `age` as its relative time. The
+/// unchanging half is `entry.prefix`, precomputed when the message arrived.
+fn label_for(entry: &super::ChatEntry, age: &str) -> String {
+    format!("{}: {}", entry.prefix, age)
 }
 
-/// Repopulates the whole list (new message arrived or stream restarted).
+/// Repopulates the whole list. Only for when the history itself changed out
+/// from under the list (it is cleared at the start of a stream) — an arriving
+/// message goes through [`append_new_messages`] instead.
 pub fn refresh_chat_list(app: &App) {
     app.widgets(|w| {
-        let run = app.run.borrow();
+        let mut run = app.run.borrow_mut();
         let selected = w.chat_list.get_selection();
         w.chat_list.clear();
-        for entry in &run.chat {
-            w.chat_list.append(&format_entry(entry));
+        for entry in run.chat.iter_mut() {
+            entry.shown_age = relative_time(entry.received.elapsed());
+            w.chat_list.append(&label_for(entry, &entry.shown_age));
         }
         if let Some(index) = selected {
             if index < w.chat_list.get_count() {
@@ -178,15 +177,45 @@ pub fn refresh_chat_list(app: &App) {
     });
 }
 
+/// Appends the `count` newest entries to the list.
+///
+/// Rebuilding the list per arriving message made a session cost O(n²) in
+/// formats and FFI appends, and clearing a list a screen-reader user may be
+/// sitting in is worse for them than leaving it alone — so messages are only
+/// ever added.
+pub fn append_new_messages(app: &App, count: usize) {
+    app.widgets(|w| {
+        let mut run = app.run.borrow_mut();
+        let total = run.chat.len();
+        let start = total.saturating_sub(count);
+        for entry in run.chat[start..].iter_mut() {
+            entry.shown_age = relative_time(entry.received.elapsed());
+            w.chat_list.append(&label_for(entry, &entry.shown_age));
+        }
+        // Keep the newest message visible, as the full rebuild does.
+        if w.chat_list.get_selection().is_none() && total > 0 {
+            w.chat_list.ensure_visible(total as i32 - 1);
+        }
+    });
+}
+
 /// Updates only labels whose relative time has changed (runs every second).
+///
+/// `relative_time` moves in buckets — seconds, then minutes, then hours — so
+/// after the first minute almost every entry is unchanged on any given tick.
+/// Comparing against the stored `shown_age` skips the label formatting and the
+/// `get_string` FFI round-trip for all of them, which matters because this runs
+/// over the entire history once a second for as long as the app is open.
 pub fn refresh_chat_times(app: &App) {
     app.widgets(|w| {
-        let run = app.run.borrow();
-        for (index, entry) in run.chat.iter().enumerate() {
-            let label = format_entry(entry);
-            if w.chat_list.get_string(index as u32).as_deref() != Some(label.as_str()) {
-                w.chat_list.set_string(index as u32, &label);
+        let mut run = app.run.borrow_mut();
+        for (index, entry) in run.chat.iter_mut().enumerate() {
+            let age = relative_time(entry.received.elapsed());
+            if age == entry.shown_age {
+                continue;
             }
+            w.chat_list.set_string(index as u32, &label_for(entry, &age));
+            entry.shown_age = age;
         }
     });
 }

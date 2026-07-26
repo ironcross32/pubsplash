@@ -119,20 +119,63 @@ pub fn is_named(name: &str) -> bool {
     !trimmed.is_empty() && !trimmed.chars().all(|c| c.is_ascii_digit())
 }
 
-/// The parameter indices the dialog should show: automatable, name-matched,
-/// and (unless `include_unnamed`) meaningfully named.
-pub fn filter_params(src: &dyn ParamSource, filter: &str, include_unnamed: bool) -> Vec<i32> {
-    let filter = filter.trim().to_lowercase();
+/// One parameter's unchanging metadata.
+pub struct ParamInfo {
+    pub index: i32,
+    pub name: String,
+    /// Lowercased once, because the filter box compares against it on every
+    /// keystroke.
+    pub search_name: String,
+    pub automatable: bool,
+}
+
+/// Reads every parameter's name and automatability.
+///
+/// Both are dispatcher round-trips into the plugin, and the filter box
+/// re-filters on every keystroke — so re-reading them per keystroke cost a
+/// 300-parameter plugin around 900 round-trips per character typed, in the one
+/// dialog built specifically for screen-reader users. The dialog reads this
+/// once when it opens and filters over the result.
+///
+/// The trade-off is that a plugin renaming its parameters while the dialog is
+/// open shows stale names until it is reopened. That is rare, and the host
+/// already ignores `AUDIO_MASTER_UPDATE_DISPLAY` (see `vst::host2`).
+pub fn param_infos(src: &dyn ParamSource) -> Vec<ParamInfo> {
     (0..src.count())
-        .filter(|&i| src.automatable(i))
-        .filter(|&i| {
-            let name = src.name(i);
-            if !include_unnamed && !is_named(&name) {
-                return false;
+        .map(|index| {
+            let name = src.name(index);
+            ParamInfo {
+                index,
+                search_name: name.to_lowercase(),
+                name,
+                automatable: src.automatable(index),
             }
-            filter.is_empty() || name.to_lowercase().contains(&filter)
         })
         .collect()
+}
+
+/// The parameter indices the dialog should show: automatable, name-matched,
+/// and (unless `include_unnamed`) meaningfully named.
+pub fn filter_infos(infos: &[ParamInfo], filter: &str, include_unnamed: bool) -> Vec<i32> {
+    let filter = filter.trim().to_lowercase();
+    infos
+        .iter()
+        .filter(|info| info.automatable)
+        .filter(|info| {
+            if !include_unnamed && !is_named(&info.name) {
+                return false;
+            }
+            filter.is_empty() || info.search_name.contains(&filter)
+        })
+        .map(|info| info.index)
+        .collect()
+}
+
+/// [`filter_infos`] straight off a plugin, reading its metadata as it goes.
+/// The dialog caches via [`param_infos`] instead; this is for tests.
+#[cfg(test)]
+pub fn filter_params(src: &dyn ParamSource, filter: &str, include_unnamed: bool) -> Vec<i32> {
+    filter_infos(&param_infos(src), filter, include_unnamed)
 }
 
 /// Applies one keyboard step and returns the new normalized value. Moves to
@@ -260,6 +303,8 @@ pub fn edit_parameters(app: &Rc<App>, target: ChainTarget, slot: usize, plugin: 
 
     // Visible parameter indices, refreshed by the filter and unnamed toggle.
     let visible: Rc<std::cell::RefCell<Vec<i32>>> = Rc::new(std::cell::RefCell::new(Vec::new()));
+    // Parameter names and automatability, read once — see `param_infos`.
+    let infos = Rc::new(param_infos(src.as_ref()));
 
     // Updates the slider position, value text, and accessible value for the
     // currently selected parameter.
@@ -291,7 +336,7 @@ pub fn edit_parameters(app: &Rc<App>, target: ChainTarget, slot: usize, plugin: 
     };
 
     let repopulate = {
-        let src = src.clone();
+        let infos = infos.clone();
         let visible = visible.clone();
         let filter_box = filter_box.clone();
         let param_choice = param_choice.clone();
@@ -299,11 +344,16 @@ pub fn edit_parameters(app: &Rc<App>, target: ChainTarget, slot: usize, plugin: 
         let show_value = show_value.clone();
         move || {
             let filter = filter_box.get_value();
-            let indices = filter_params(src.as_ref(), &filter, unnamed_check.get_value());
+            let indices = filter_infos(&infos, &filter, unnamed_check.get_value());
             *visible.borrow_mut() = indices.clone();
             param_choice.clear();
             for &index in &indices {
-                param_choice.append(&src.name(index));
+                // `param_infos` walks `0..count` in order, so position is index.
+                let name = infos
+                    .get(index as usize)
+                    .map(|info| info.name.as_str())
+                    .unwrap_or_default();
+                param_choice.append(name);
             }
             if !indices.is_empty() {
                 param_choice.set_selection(0);

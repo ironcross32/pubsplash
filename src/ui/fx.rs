@@ -10,7 +10,7 @@
 
 use super::App;
 use crate::audio::fx_chain::{FxChain, FxUnit};
-use crate::audio::{BusSpec, EngineCommand};
+use crate::audio::{BusSpec, EngineCommand, RoutingUpdate};
 use crate::config::{FxSlotConfig, PluginRef};
 use crate::vst::PluginFormat;
 use crate::vst::host2::Vst2Plugin;
@@ -102,9 +102,9 @@ fn build_chain(instances: &[Option<Arc<Vst2Plugin>>], slots: &[FxSlotConfig]) ->
     FxChain::new(units)
 }
 
-/// Pushes the current bus set and master chain (with live plugins) to the
-/// engine. Call after any chain or bus change.
-pub fn sync_engine_buses(app: &Rc<App>) {
+/// Builds the current bus set and master chain (with live plugins), ready to
+/// hand to the engine.
+pub fn routing_specs(app: &Rc<App>) -> (Vec<BusSpec>, FxChain) {
     let monitors = app.run.borrow().monitors.clone();
     let config = app.config.borrow();
     let fx = app.fx.borrow();
@@ -118,11 +118,22 @@ pub fn sync_engine_buses(app: &Rc<App>) {
             monitor: monitors.bus(i),
         });
     }
-    app.engine.send(EngineCommand::SetBuses(specs));
-    app.engine.send(EngineCommand::SetMasterChain(build_chain(
-        &fx.master,
-        &config.buses.master_chain,
-    )));
+    let master = build_chain(&fx.master, &config.buses.master_chain);
+    (specs, master)
+}
+
+/// Pushes the current bus set and master chain (with live plugins) to the
+/// engine. Call after any chain change. After a *bus* change use
+/// `App::sync_engine_routing` instead, so the sources' send indices are
+/// updated in the same command.
+pub fn sync_engine_buses(app: &Rc<App>) {
+    let (buses, master_chain) = routing_specs(app);
+    app.engine
+        .send(EngineCommand::SetRouting(Box::new(RoutingUpdate {
+            sources: None,
+            buses: Some(buses),
+            master_chain: Some(master_chain),
+        })));
 }
 
 // --- Structural updates that keep `App.fx` aligned with `config.buses` ---
@@ -300,7 +311,7 @@ pub fn snapshot_slot(app: &Rc<App>, target: ChainTarget, slot: usize) {
 /// Snapshots every loaded slot in a chain back into config (before saving or
 /// exporting it).
 pub fn snapshot_chain(app: &Rc<App>, target: ChainTarget) {
-    let count = slots_of(app, target).len();
+    let count = with_slots(app, target, |slots| slots.len()).unwrap_or(0);
     for slot in 0..count {
         snapshot_slot(app, target, slot);
     }
@@ -353,6 +364,25 @@ pub fn slot_label(index: usize, slot: &FxSlotConfig, loaded: bool) -> String {
     label
 }
 
+/// Clones a target's chain. Prefer [`with_slots`] — `FxSlotConfig` owns
+/// `chunk`, the plugin's serialized state, which is base64 and can run to
+/// hundreds of kilobytes per plugin, so cloning a chain to read a name or a
+/// flag is expensive out of all proportion to what it is for.
 pub fn slots_for(app: &Rc<App>, target: ChainTarget) -> Vec<FxSlotConfig> {
     slots_of(app, target)
+}
+
+/// Reads a target's chain without cloning it. The read-only twin of
+/// [`with_slots_mut`]; like it, the closure form is what keeps the `config`
+/// borrow from overlapping an `app.widgets(...)` borrow at the call site.
+pub fn with_slots<R>(
+    app: &Rc<App>,
+    target: ChainTarget,
+    f: impl FnOnce(&[FxSlotConfig]) -> R,
+) -> Option<R> {
+    let config = app.config.borrow();
+    match target {
+        ChainTarget::Bus(i) => config.buses.buses.get(i).map(|b| f(&b.chain)),
+        ChainTarget::Master => Some(f(&config.buses.master_chain)),
+    }
 }

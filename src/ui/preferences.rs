@@ -37,6 +37,15 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     dialog.set_sizer(dialog_sizer, true);
 
     dialog.show_modal();
+    // A scan can still be running: `ScanEvent::Started` only builds a progress
+    // dialog when the folders actually held plugins, so scanning an empty
+    // folder leaves the scan alive with this dialog fully interactive. Its
+    // `ScanUi` holds this dialog as the parent for its progress and result
+    // message boxes, so it must not outlive the `destroy()` below.
+    // Dropping the handle cancels the worker and joins it, so take it out from
+    // under the borrow first.
+    let scan = app.scan.borrow_mut().take();
+    drop(scan);
     dialog.destroy();
 }
 

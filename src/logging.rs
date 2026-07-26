@@ -54,6 +54,13 @@ impl LogHandle {
         }
     }
 
+    /// Writes out anything the async writer still has buffered. Worth calling
+    /// before the process can die without unwinding — a panic, for instance —
+    /// since buffered records are otherwise lost exactly when they matter most.
+    pub fn flush(&self) {
+        self.handle.flush();
+    }
+
     /// The logging UI (upcoming) disables the level picker when pinned.
     #[allow(dead_code)]
     pub fn env_pinned(&self) -> bool {
@@ -83,6 +90,9 @@ pub fn install_panic_hook() {
             info.payload_as_str().unwrap_or("<non-string payload>"),
             std::backtrace::Backtrace::force_capture()
         );
+        // Log writes are buffered and written on a background thread, and this
+        // process may not survive long enough for that to happen on its own.
+        log::logger().flush();
         // Debug builds still print to the console as usual.
         previous(info);
     }));
@@ -101,6 +111,10 @@ pub fn init(configured_level: &str) -> Option<LogHandle> {
                 .directory(crate::config::config_dir().join("logs"))
                 .basename("pubsplash"),
         )
+        // Buffer and write on a background thread: the audio engine logs from
+        // inside the 10 ms mix loop, and the default mode makes each of those a
+        // mutex-guarded synchronous file write on that thread.
+        .write_mode(flexi_logger::WriteMode::Async)
         .rotate(
             flexi_logger::Criterion::Size(5 * 1024 * 1024),
             flexi_logger::Naming::Numbers,

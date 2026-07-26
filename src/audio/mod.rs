@@ -72,25 +72,42 @@ pub struct BusSpec {
     pub monitor: bool,
 }
 
+/// The payload of [`EngineCommand::SetRouting`]. Boxed there so the frequently
+/// sent little commands (volume, mute) are not each sized to hold this.
+#[derive(Default)]
+pub struct RoutingUpdate {
+    pub sources: Option<Vec<SourceSpec>>,
+    pub buses: Option<Vec<BusSpec>>,
+    pub master_chain: Option<FxChain>,
+}
+
 pub enum EngineCommand {
-    /// Replace the active source set (scene switch, reorder, add/remove).
-    /// Index order matches the mixer order.
-    SetSources(Vec<SourceSpec>),
+    /// Replaces routing. Every field of the update that is `Some` is applied in
+    /// a single step, before the next block is mixed.
+    ///
+    /// The three parts are one command rather than three because they are not
+    /// independent. Sends address buses by index, so a bus reorder that landed
+    /// a block before the matching source update would route a send to the
+    /// wrong bus. And splitting the FX halves used to mean two
+    /// [`EngineEvent::BusesApplied`]s for one edit, so the UI could release the
+    /// last reference to a plugin the engine still held — leaving the *engine*
+    /// to run plugin teardown and `FreeLibrary`, which the hosting contract in
+    /// `vst::host2` puts on the UI thread. One command, one apply point, one
+    /// `BusesApplied`.
+    ///
+    /// `sources` index order matches the mixer order; buses are addressed by
+    /// index too.
+    SetRouting(Box<RoutingUpdate>),
     SetSourceVolume(usize, u32),
     SetSourceMute(usize, bool),
     /// Play (or stop playing) this source's post-fader signal out of the local
     /// monitoring device. The output device is opened on the first strip that
     /// asks for it and closed again when the last one stops.
     SetSourceMonitor(usize, bool),
-    /// Replace the bus set, including each bus's FX chain. Send `SetSources`
-    /// (or `SetSourceSends`) after a bus reorder so send indices match again.
-    SetBuses(Vec<BusSpec>),
     SetBusVolume(usize, u32),
     SetBusMute(usize, bool),
     /// See [`EngineCommand::SetSourceMonitor`].
     SetBusMonitor(usize, bool),
-    /// Replace the master output's FX chain.
-    SetMasterChain(FxChain),
     /// Toggle bypass on one plugin. `bus: None` targets the master chain.
     SetFxBypass {
         bus: Option<usize>,
@@ -236,6 +253,9 @@ pub struct AudioEngine {
     /// Used by the TTS and sound-event subsystems (upcoming milestone).
     #[allow(dead_code)]
     pub external_feeds: ExternalFeeds,
+    /// FX chains the engine hands back at shutdown so they are dropped here
+    /// rather than on the audio thread. See the `Shutdown` arm of `engine_loop`.
+    retired: Receiver<FxChain>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -243,16 +263,18 @@ impl AudioEngine {
     pub fn start() -> Self {
         let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
         let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (retired_tx, retired_rx) = crossbeam_channel::unbounded();
         let feeds = ExternalFeeds::default();
         let feeds_clone = feeds.clone();
         let thread = std::thread::Builder::new()
             .name("audio-engine".into())
-            .spawn(move || engine_loop(cmd_rx, event_tx, feeds_clone))
+            .spawn(move || engine_loop(cmd_rx, event_tx, retired_tx, feeds_clone))
             .expect("spawning audio engine thread");
         Self {
             commands: cmd_tx,
             events: event_rx,
             external_feeds: feeds,
+            retired: retired_rx,
             thread: Some(thread),
         }
     }
@@ -268,12 +290,19 @@ impl Drop for AudioEngine {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        // Now that the engine thread is gone, release the chains it parked:
+        // dropping a plugin runs its teardown and `FreeLibrary`, which belongs
+        // on this thread.
+        while let Ok(chain) = self.retired.try_recv() {
+            drop(chain);
+        }
     }
 }
 
 fn engine_loop(
     commands: Receiver<EngineCommand>,
     events: Sender<EngineEvent>,
+    retired: Sender<FxChain>,
     feeds: ExternalFeeds,
 ) {
     // Flush denormals to zero (FTZ + DAZ in MXCSR): FX plugins (reverbs,
@@ -321,43 +350,70 @@ fn engine_loop(
         // Drain pending commands without blocking the mix cadence.
         loop {
             match commands.try_recv() {
-                Ok(EngineCommand::SetSources(specs)) => {
-                    stop_sources(&mut sources);
-                    feeds.clear();
-                    epoch = epoch.wrapping_add(1);
-                    // The new threads start from a clean slate, so anything the
-                    // old set was reporting is no longer true of this one.
-                    for name in failing.drain() {
-                        let _ = events.send(EngineEvent::SourceRecovered { name });
-                    }
-                    for spec in specs {
-                        let (producer, consumer) = RingBuffer::new(RING_CAPACITY);
-                        let stop = Arc::new(AtomicBool::new(false));
-                        match spec.feed {
-                            FeedKind::Capture(kind) => {
-                                capture::spawn(
-                                    spec.name.clone(),
-                                    epoch,
-                                    kind,
-                                    producer,
-                                    stop.clone(),
-                                    capture_tx.clone(),
-                                );
-                            }
-                            FeedKind::External => {
-                                feeds.insert(spec.name.clone(), producer);
-                            }
+                Ok(EngineCommand::SetRouting(update)) => {
+                    let RoutingUpdate {
+                        sources: new_sources,
+                        buses: new_buses,
+                        master_chain: new_master_chain,
+                    } = *update;
+                    // Whether this edit touched FX, and so whether the UI is
+                    // waiting to hear that its retired plugins are unreferenced.
+                    let touched_fx = new_buses.is_some() || new_master_chain.is_some();
+                    if let Some(specs) = new_sources {
+                        stop_sources(&mut sources);
+                        feeds.clear();
+                        epoch = epoch.wrapping_add(1);
+                        // The new threads start from a clean slate, so anything
+                        // the old set was reporting is no longer true of this one.
+                        for name in failing.drain() {
+                            let _ = events.send(EngineEvent::SourceRecovered { name });
                         }
-                        sources.push(ActiveSource {
-                            name: spec.name,
-                            strip: ChannelStrip::new(spec.volume, spec.muted),
-                            consumer,
-                            stop,
-                            scratch: vec![0f32; BLOCK_SAMPLES],
-                            to_master: spec.to_master,
-                            sends: active_sends(spec.sends),
-                            monitor: spec.monitor,
-                        });
+                        for spec in specs {
+                            let (producer, consumer) = RingBuffer::new(RING_CAPACITY);
+                            let stop = Arc::new(AtomicBool::new(false));
+                            match spec.feed {
+                                FeedKind::Capture(kind) => {
+                                    capture::spawn(
+                                        spec.name.clone(),
+                                        epoch,
+                                        kind,
+                                        producer,
+                                        stop.clone(),
+                                        capture_tx.clone(),
+                                    );
+                                }
+                                FeedKind::External => {
+                                    feeds.insert(spec.name.clone(), producer);
+                                }
+                            }
+                            sources.push(ActiveSource {
+                                name: spec.name,
+                                strip: ChannelStrip::new(spec.volume, spec.muted),
+                                consumer,
+                                stop,
+                                scratch: vec![0f32; BLOCK_SAMPLES],
+                                to_master: spec.to_master,
+                                sends: active_sends(spec.sends),
+                                monitor: spec.monitor,
+                            });
+                        }
+                    }
+                    if let Some(specs) = new_buses {
+                        buses = specs
+                            .into_iter()
+                            .map(|spec| ActiveBus {
+                                strip: ChannelStrip::new(spec.volume, spec.muted),
+                                chain: spec.chain,
+                                buffer: vec![0f32; BLOCK_SAMPLES],
+                                monitor: spec.monitor,
+                            })
+                            .collect();
+                    }
+                    if let Some(chain) = new_master_chain {
+                        master_chain = chain;
+                    }
+                    if touched_fx {
+                        let _ = events.send(EngineEvent::BusesApplied);
                     }
                 }
                 Ok(EngineCommand::SetSourceVolume(i, v)) => {
@@ -375,18 +431,6 @@ fn engine_loop(
                         s.monitor = m;
                     }
                 }
-                Ok(EngineCommand::SetBuses(specs)) => {
-                    buses = specs
-                        .into_iter()
-                        .map(|spec| ActiveBus {
-                            strip: ChannelStrip::new(spec.volume, spec.muted),
-                            chain: spec.chain,
-                            buffer: vec![0f32; BLOCK_SAMPLES],
-                            monitor: spec.monitor,
-                        })
-                        .collect();
-                    let _ = events.send(EngineEvent::BusesApplied);
-                }
                 Ok(EngineCommand::SetBusVolume(i, v)) => {
                     if let Some(b) = buses.get_mut(i) {
                         b.strip.set_volume(v);
@@ -401,10 +445,6 @@ fn engine_loop(
                     if let Some(b) = buses.get_mut(i) {
                         b.monitor = m;
                     }
-                }
-                Ok(EngineCommand::SetMasterChain(chain)) => {
-                    master_chain = chain;
-                    let _ = events.send(EngineEvent::BusesApplied);
                 }
                 Ok(EngineCommand::SetFxBypass { bus, slot, bypass }) => match bus {
                     Some(i) => {
@@ -455,6 +495,26 @@ fn engine_loop(
                 Ok(EngineCommand::Shutdown) => {
                     finalize_recording(&mut rec_encoder, &mut recorder);
                     stop_sources(&mut sources);
+                    // Returning here would drop every live `FxChain` — and any
+                    // still sitting in the command queue — on this thread,
+                    // running plugin teardown and `FreeLibrary` from the audio
+                    // thread. Park them on the retirement channel instead;
+                    // `AudioEngine::drop` drains it after the join, on the UI
+                    // thread, as the hosting contract requires.
+                    for bus in buses.drain(..) {
+                        let _ = retired.send(bus.chain);
+                    }
+                    let _ = retired.send(std::mem::replace(&mut master_chain, FxChain::empty()));
+                    while let Ok(command) = commands.try_recv() {
+                        if let EngineCommand::SetRouting(update) = command {
+                            for bus in update.buses.into_iter().flatten() {
+                                let _ = retired.send(bus.chain);
+                            }
+                            if let Some(chain) = update.master_chain {
+                                let _ = retired.send(chain);
+                            }
+                        }
+                    }
                     return;
                 }
                 Err(_) => break,
@@ -601,8 +661,10 @@ fn mix_one_block(
     }
     for source in sources.iter_mut() {
         let available = source.consumer.slots();
+        // `take` is bounded by what the ring reports available, so every pop
+        // below succeeds and fills its slot; only the tail past `take` needs
+        // zeroing.
         let take = available.min(BLOCK_SAMPLES);
-        source.scratch[..take].iter_mut().for_each(|s| *s = 0.0);
         for slot in source.scratch[..take].iter_mut() {
             if let Ok(sample) = source.consumer.pop() {
                 *slot = sample;

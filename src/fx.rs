@@ -88,7 +88,7 @@ pub fn save_library_to(library: &FxChainLibrary, path: &Path) {
     }
     match serde_json::to_string_pretty(library) {
         Ok(json) => {
-            if let Err(e) = std::fs::write(path, json) {
+            if let Err(e) = crate::config::write_atomic(path, &json) {
                 log::error!("Failed to write FX chain library: {e}");
             }
         }

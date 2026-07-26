@@ -8,6 +8,16 @@
 
 ### Fixes
 
+- Deleting or reordering a bus no longer saves an open plugin's settings into the wrong bus.
+
+- Settings files are now written safely, so a crash or power loss while saving can no longer wipe your scenes, sources, buses and effect chains.
+
+- Exiting Pubsplash while recording now finishes the recording instead of truncating the file.
+
+- Closing Preferences while a plugin scan is running no longer crashes, including when the scan found no plugins.
+
+- Reordering a bus no longer briefly routes a source's send to the wrong bus.
+
 - The portable ZIP now includes the Sound Pack Manager and the VST plugin scanner, which previously failed to start for anyone who used the ZIP instead of the installer.
 
 - The Sound Pack Manager no longer opens a console window alongside its own window.
@@ -15,6 +25,16 @@
 - When a helper program is missing, the error now names the file and the folder it was looked for in instead of reporting "os error 2".
 
 ### Changes
+
+- The stream and record buttons are no longer re-announced by screen readers once a second while streaming.
+
+- The chat list is no longer rebuilt every time a message arrives, so long chat sessions stay responsive and no longer interrupt you while you read back through them.
+
+- Moving a volume slider, or typing in the recording folder box, no longer writes the settings file on every step; settings are saved once a second and on exit instead.
+
+- Arrowing through a bus's effects list, and typing in the plugin parameter filter, no longer stall on plugins with large presets or many parameters.
+
+- Log writing no longer happens on the audio mixing thread.
 
 - **Help > Open Readme** now opens the copy installed with Pubsplash, and falls back to GitHub if that copy is unavailable. It no longer flashes a console window.
 
