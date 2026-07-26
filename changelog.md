@@ -18,6 +18,10 @@
 
 - Reordering a bus no longer briefly routes a source's send to the wrong bus.
 
+- Two sources that resolve to the same name are always told apart now, even when another source already carries the numbered name that would have been generated.
+
+- A corrupt settings file no longer overwrites the backup of an earlier one.
+
 - The portable ZIP now includes the Sound Pack Manager and the VST plugin scanner, which previously failed to start for anyone who used the ZIP instead of the installer.
 
 - The Sound Pack Manager no longer opens a console window alongside its own window.
@@ -25,6 +29,16 @@
 - When a helper program is missing, the error now names the file and the folder it was looked for in instead of reporting "os error 2".
 
 ### Changes
+
+- Chat messages are now spoken as soon as they arrive rather than up to a tenth of a second later, and stream status changes and error messages appear immediately.
+
+- Pubsplash uses noticeably less power when left open, especially before any sources are set up.
+
+- With an Application source configured, the mixer and Sources list no longer hitch every couple of seconds.
+
+- Recordings are written on their own thread, so recording to a slow USB stick or a network drive can no longer put gaps in what listeners hear.
+
+- If the connection to the server stalls, Pubsplash now drops audio rather than building up an ever-growing backlog of it.
 
 - The stream and record buttons are no longer re-announced by screen readers once a second while streaming.
 

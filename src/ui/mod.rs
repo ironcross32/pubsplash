@@ -359,6 +359,9 @@ pub struct App {
     /// torn down keeps firing `WM_TIMER` into the freed frame handler and
     /// crashes inside wx's event dispatch (0xc0000005).
     pub pump_timer: RefCell<Option<Timer<Frame>>>,
+    /// The 100 ms timer that services open plugin editors and a running plugin
+    /// scan. Exists only while one of those does — see [`sync_fast_timer`].
+    pub fast_timer: RefCell<Option<Timer<Frame>>>,
     /// Set while the shutdown cue is playing. `on_close` hides the frame and
     /// starts the cue on its own thread; the pump polls this and finishes the
     /// teardown once the cue is done, so the sound is never cut off by the
@@ -1150,35 +1153,54 @@ pub fn build(app: Rc<App>) {
     help::install_announcer(&frame);
     help::install_hook();
 
-    // The pump: carries events from the engine/net threads onto the UI
-    // thread and refreshes time-based displays.
+    // The pump has two halves.
+    //
+    // Events from the engine and network threads arrive on **idle**: each
+    // sender rings `wake_up_idle` after posting, so a chat message reaches
+    // `speak_chat` as soon as it lands instead of waiting out an average half
+    // a timer period. For an app whose whole point is that a blind broadcaster
+    // hears their chat, that queueing delay was a real cost.
+    //
+    // The timer keeps only what genuinely needs a clock — elapsed durations,
+    // relative timestamps, the deferred config write, and asking after running
+    // applications — and so runs once a second rather than ten times.
     {
-        let app_for_timer = app.clone();
         let app = app.clone();
-        let timer = Timer::new(&frame);
-        let mut ticks: u32 = 0;
-        timer.on_tick(move |_| {
-            // Once closing, the frame and its widgets are being destroyed;
-            // running the pump against them would touch freed memory. The
-            // tick's only job now is to finish the exit when the cue ends.
+        frame.on_idle(move |_| {
             if app.shutting_down.get() {
+                // The frame and its widgets are being torn down; touching them
+                // would be a use-after-free. The only job left is finishing the
+                // exit once the shutdown cue has played out.
                 if shutdown_cue_finished(&app) {
                     finish_close(&app);
                 }
                 return;
             }
             pump_events(&app);
-            ticks = ticks.wrapping_add(1);
-            if ticks % 10 == 0 {
-                // Once a second: durations, relative chat times, and the
-                // config write that slider and text edits deferred to here.
-                if app.is_streaming_or_starting() {
-                    app.refresh_stream_ui();
+        });
+    }
+    {
+        let app_for_timer = app.clone();
+        let app = app.clone();
+        let timer = Timer::new(&frame);
+        let mut ticks: u32 = 0;
+        timer.on_tick(move |_| {
+            if app.shutting_down.get() {
+                if shutdown_cue_finished(&app) {
+                    finish_close(&app);
                 }
-                chat::refresh_chat_times(&app);
-                app.flush_config();
+                return;
             }
-            if ticks % 20 == 0 {
+            // Durations, relative chat times, and the config write that slider
+            // and text edits deferred to here.
+            if app.is_streaming_or_starting() {
+                app.refresh_stream_ui();
+            }
+            chat::refresh_chat_times(&app);
+            app.flush_config();
+
+            ticks = ticks.wrapping_add(1);
+            if ticks % 2 == 0 {
                 // Every two seconds: ask for a fresh look at which applications
                 // are running, so their strips say which app they are and (once
                 // running) actually capture it. The enumeration happens on a
@@ -1190,8 +1212,11 @@ pub fn build(app: Rc<App>) {
             // A snapshot may have finished since the last tick.
             let changes = app.apply_app_processes();
             apply_app_changes(&app, changes);
+            // A backstop for the fast timer, in case an idle never followed the
+            // transition that should have started or stopped it.
+            sync_fast_timer(&app);
         });
-        timer.start(100, false);
+        timer.start(1000, false);
         // Own the timer via App so `on_close` can stop it before teardown.
         // (Leaking it here would keep it firing into the destroyed frame.)
         *app_for_timer.pump_timer.borrow_mut() = Some(timer);
@@ -1236,6 +1261,9 @@ fn start_shutdown_cue(app: &Rc<App>) {
                 log::warn!("Could not play shutdown sound cue: {e}");
             }
             flag.store(true, Ordering::SeqCst);
+            // Ring the doorbell: the frame is already hidden, so no input will
+            // arrive to wake the idle handler that finishes the exit.
+            wxdragon::wake_up_idle();
         })
         .is_ok();
     if spawned {
@@ -1261,6 +1289,9 @@ fn finish_close(app: &Rc<App>) {
     // frame has been destroyed keeps firing WM_TIMER into the freed handler.
     // (Stopped, not dropped: this runs from inside the timer's own callback.)
     if let Some(timer) = app.pump_timer.borrow().as_ref() {
+        timer.stop();
+    }
+    if let Some(timer) = app.fast_timer.borrow().as_ref() {
         timer.stop();
     }
     app.shutdown_cue.borrow_mut().take();
@@ -1468,6 +1499,46 @@ impl Drop for App {
     }
 }
 
+/// Starts or stops the 100 ms timer that services open plugin editors and a
+/// running plugin scan, to match whether either exists.
+///
+/// These two are the only things left that need a steady cadence no event can
+/// supply: a plugin editor expects `effEditIdle` regularly whether or not the
+/// user is doing anything, and a progress dialog has to animate and have its
+/// Cancel button polled. Neither is usually happening, so rather than keep a
+/// 10 Hz timer running for the whole session, the timer exists only while one
+/// of them does.
+///
+/// Deriving the answer from current state, rather than starting and stopping in
+/// pairs, is what keeps this from drifting out of step: call it after anything
+/// that could have changed either, and it settles on the right answer.
+pub fn sync_fast_timer(app: &Rc<App>) {
+    let needed = !app.open_editors.borrow().is_empty() || app.scan.borrow().is_some();
+    let mut slot = app.fast_timer.borrow_mut();
+    if needed == slot.is_some() {
+        return;
+    }
+    if !needed {
+        // Dropping the timer destroys it, which stops it.
+        *slot = None;
+        return;
+    }
+    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+        return;
+    };
+    let timer = Timer::new(&frame);
+    let app_for_tick = app.clone();
+    timer.on_tick(move |_| {
+        if app_for_tick.shutting_down.get() {
+            return;
+        }
+        pump_scan_events(&app_for_tick);
+        fx_editor::pump(&app_for_tick);
+    });
+    timer.start(100, false);
+    *slot = Some(timer);
+}
+
 /// Acts on the result of an application-process refresh.
 fn apply_app_changes(app: &Rc<App>, (labels_changed, capture_changed): (bool, bool)) {
     if capture_changed {
@@ -1670,9 +1741,13 @@ fn pump_events(app: &Rc<App>) {
         scenes::refresh_sources_list(app);
     }
 
-    pump_scan_events(app);
-    fx_editor::pump(app);
+    // F1 help: one relaxed atomic unless F1 was actually pressed, and the hook
+    // rings the idle doorbell when it was.
     help::pump();
+    // Scans and plugin editors are serviced by the fast timer, which only runs
+    // while one of them exists; settle that here so no transition can leave it
+    // running with nothing to do (or stopped with something waiting).
+    sync_fast_timer(app);
 
     if stream_ui_dirty {
         app.refresh_stream_ui();

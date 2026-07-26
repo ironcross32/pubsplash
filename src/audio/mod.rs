@@ -152,6 +152,21 @@ pub enum EngineEvent {
     BusesApplied,
 }
 
+/// The engine thread's end of the event channel.
+///
+/// Sending also rings the UI's idle doorbell, which is what drains these; see
+/// `net::EventSender` for why it lives on the sender rather than at each call
+/// site.
+#[derive(Clone)]
+pub struct EventSender(Sender<EngineEvent>);
+
+impl EventSender {
+    fn send(&self, event: EngineEvent) {
+        let _ = self.0.send(event);
+        wxdragon::wake_up_idle();
+    }
+}
+
 /// Producers for `External` sources, keyed by source name. The TTS and
 /// sound-event subsystems `take()` theirs after a scene change.
 #[derive(Default, Clone)]
@@ -314,7 +329,7 @@ impl AudioEngine {
         let feeds_clone = feeds.clone();
         let thread = std::thread::Builder::new()
             .name("audio-engine".into())
-            .spawn(move || engine_loop(cmd_rx, event_tx, retired_tx, feeds_clone))
+            .spawn(move || engine_loop(cmd_rx, EventSender(event_tx), retired_tx, feeds_clone))
             .expect("spawning audio engine thread");
         Self {
             commands: cmd_tx,
@@ -347,7 +362,7 @@ impl Drop for AudioEngine {
 
 fn engine_loop(
     commands: Receiver<EngineCommand>,
-    events: Sender<EngineEvent>,
+    events: EventSender,
     retired: Sender<FxChain>,
     feeds: ExternalFeeds,
 ) {
@@ -456,7 +471,7 @@ fn engine_loop(
                         // The new threads start from a clean slate, so anything
                         // the old set was reporting is no longer true of this one.
                         for name in failing.drain() {
-                            let _ = events.send(EngineEvent::SourceRecovered { name });
+                            events.send(EngineEvent::SourceRecovered { name });
                         }
                         for spec in specs {
                             let (producer, consumer) = RingBuffer::new(RING_CAPACITY);
@@ -503,7 +518,7 @@ fn engine_loop(
                         master_chain = chain;
                     }
                     if touched_fx {
-                        let _ = events.send(EngineEvent::BusesApplied);
+                        events.send(EngineEvent::BusesApplied);
                     }
                 }
                 Ok(EngineCommand::SetSourceVolume(i, v)) => {
@@ -637,7 +652,7 @@ fn engine_loop(
                     EngineEvent::SourceRecovered { name: report.name }
                 }
             };
-            let _ = events.send(event);
+            events.send(event);
         }
 
         // The playback device is only held open while something is actually
@@ -716,7 +731,7 @@ fn engine_loop(
                         // Consumer went away (stream ended remotely).
                         Err(TrySendError::Closed(_)) => {
                             encoder = None;
-                            let _ = events.send(EngineEvent::EncodingStopped);
+                            events.send(EngineEvent::EncodingStopped);
                         }
                     }
                 }
@@ -724,7 +739,7 @@ fn engine_loop(
                 Err(e) => {
                     log::error!("MP3 encode error: {e}");
                     encoder = None;
-                    let _ = events.send(EngineEvent::EncodingStopped);
+                    events.send(EngineEvent::EncodingStopped);
                 }
             }
         }

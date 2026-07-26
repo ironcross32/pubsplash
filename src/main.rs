@@ -65,6 +65,7 @@ fn main() {
             apps_rx,
             apps_pending: std::cell::Cell::new(false),
             pump_timer: RefCell::new(None),
+            fast_timer: RefCell::new(None),
             shutdown_cue: RefCell::new(None),
         });
         ui::build(app);

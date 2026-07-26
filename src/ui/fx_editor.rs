@@ -244,6 +244,9 @@ pub fn open_editor(
         target,
         slot,
     });
+    // The editor needs `effEditIdle` on a steady cadence; start the timer that
+    // supplies it now rather than waiting for the next idle event.
+    super::sync_fast_timer(app);
 }
 
 /// Closes and destroys one editor by effect id, snapshotting its state.

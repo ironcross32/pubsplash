@@ -47,6 +47,27 @@ pub enum NetEvent {
     ChatSendFailed { message: String },
 }
 
+/// The network thread's end of the event channel.
+///
+/// Sending also wakes the UI's idle loop, which is what drains these. Doing it
+/// here rather than at each call site means a new event can never be added
+/// without the doorbell — and a missed doorbell is a message that sits unread
+/// until something else happens to wake the loop.
+///
+/// `wxWakeUpIdle` is thread-safe and carries nothing; the events themselves
+/// travel by channel. (It has to be a doorbell: wxdragon's `call_after` needs
+/// `Send`, and `App` is an `Rc` of `RefCell`s.)
+#[derive(Clone)]
+pub struct EventSender(crossbeam_channel::Sender<NetEvent>);
+
+impl EventSender {
+    pub fn send(&self, event: NetEvent) -> Result<(), crossbeam_channel::SendError<NetEvent>> {
+        let result = self.0.send(event);
+        wxdragon::wake_up_idle();
+        result
+    }
+}
+
 pub struct NetHandle {
     commands: tokio_mpsc::UnboundedSender<NetCommand>,
     pub events: crossbeam_channel::Receiver<NetEvent>,
@@ -64,7 +85,7 @@ impl NetHandle {
                     .enable_all()
                     .build()
                     .expect("building tokio runtime");
-                runtime.block_on(net_loop(cmd_rx, event_tx));
+                runtime.block_on(net_loop(cmd_rx, EventSender(event_tx)));
             })
             .expect("spawning net thread");
         Self {
@@ -121,7 +142,7 @@ fn icecast_host_for(site_url: &str) -> String {
 
 async fn net_loop(
     mut commands: tokio_mpsc::UnboundedReceiver<NetCommand>,
-    events: crossbeam_channel::Sender<NetEvent>,
+    events: EventSender,
 ) {
     let mut connection: Option<Connection> = None;
     let mut stream: Option<ActiveStream> = None;
@@ -259,7 +280,7 @@ async fn start_stream(
     archive: bool,
     content_type: &str,
     mut audio: tokio_mpsc::Receiver<Vec<u8>>,
-    events: crossbeam_channel::Sender<NetEvent>,
+    events: EventSender,
 ) -> Result<ActiveStream, String> {
     let stream_id = conn
         .client

@@ -409,6 +409,9 @@ fn begin_scan(app: &Rc<App>, dialog: &Dialog, mode: ScanMode) {
                 determinate: false,
                 parent: dialog.clone(),
             });
+            // Bring up the timer that drives the progress dialog now, rather
+            // than waiting for the next idle to notice the scan exists.
+            super::sync_fast_timer(app);
         }
         Err(message) => show_error(dialog, "Scan plugins", &message),
     }

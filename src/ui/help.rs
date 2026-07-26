@@ -298,6 +298,9 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         if kb.vkCode == VK_F1.0 as u32 && foreground_is_ours() {
             HELP_REQUESTED.store(true, Ordering::Relaxed);
+            // Ring the doorbell: `pump` runs from the idle handler, and F1 is
+            // swallowed below, so nothing else would wake the loop to notice.
+            wxdragon::wake_up_idle();
             // Swallow F1 so no underlying control pops its own help.
             return LRESULT(1);
         }
