@@ -4,6 +4,7 @@
 
 pub mod app_list;
 pub mod capture;
+pub mod cue;
 pub mod device;
 pub mod encoder;
 pub mod fx_chain;

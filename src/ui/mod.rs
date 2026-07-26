@@ -900,6 +900,11 @@ pub fn build(app: Rc<App>) {
                 // Cleanly terminate the stream before shutdown.
                 app.stop_streaming();
             }
+            if let Err(e) =
+                crate::audio::cue::play_sound_kind_blocking(crate::soundpack::SoundKind::Shutdown)
+            {
+                log::warn!("Could not play shutdown sound cue: {e}");
+            }
             // Stop the pump from touching widgets while the frame is torn down.
             // Stopping the timer removes pending WM_TIMER so it can't fire into
             // the frame after it is destroyed; the flag is a further guard for
@@ -992,6 +997,7 @@ pub fn build(app: Rc<App>) {
 
     frame.show(true);
     frame.centre();
+    crate::audio::cue::play_sound_kind_async(crate::soundpack::SoundKind::Startup);
 }
 
 fn build_menu(app: &Rc<App>, frame: &Frame) {

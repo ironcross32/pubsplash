@@ -4,6 +4,7 @@ mod soundpack;
 
 use std::{
     cell::RefCell,
+    collections::HashMap,
     path::{Path, PathBuf},
     process::Command,
     rc::Rc,
@@ -13,6 +14,8 @@ use wxdragon::prelude::*;
 #[derive(Default)]
 struct ManagerState {
     project: Option<PathBuf>,
+    source_paths: HashMap<soundpack::SoundKind, String>,
+    updating_source_path: bool,
 }
 
 #[derive(Clone)]
@@ -20,9 +23,6 @@ struct TabControls {
     sounds: ListBox,
     source_path: TextCtrl,
     browse: Button,
-    add: Button,
-    variants: ListBox,
-    remove: Button,
     test: Button,
 }
 
@@ -30,7 +30,7 @@ fn main() {
     let _ = wxdragon::main(|_| {
         let frame = Frame::builder()
             .with_title("Pubsplash Sound Pack Manager")
-            .with_size(Size::new(820, 560))
+            .with_size(Size::new(820, 500))
             .build();
         let state = Rc::new(RefCell::new(ManagerState::default()));
 
@@ -40,9 +40,11 @@ fn main() {
         let toolbar = BoxSizer::builder(Orientation::Horizontal).build();
         let new_project = Button::builder(&root).with_label("&New...").build();
         let open_project = Button::builder(&root).with_label("&Open...").build();
+        let save = Button::builder(&root).with_label("&Save").build();
         let compile = Button::builder(&root).with_label("&Compile...").build();
         toolbar.add(&new_project, 0, SizerFlag::All, 4);
         toolbar.add(&open_project, 0, SizerFlag::All, 4);
+        toolbar.add(&save, 0, SizerFlag::All, 4);
         toolbar.add(&compile, 0, SizerFlag::All, 4);
         outer.add_sizer(&toolbar, 0, SizerFlag::All, 2);
 
@@ -56,11 +58,13 @@ fn main() {
             &notebook,
             "Interface sounds",
             &soundpack::SoundKind::INTERFACE,
+            &state,
         );
         let stream_tab = build_tab(
             &notebook,
             "Stream events",
             &soundpack::SoundKind::STREAM_EVENTS,
+            &state,
         );
         outer.add(&notebook, 1, SizerFlag::Expand | SizerFlag::All, 4);
         root.set_sizer_and_fit(outer, true);
@@ -70,6 +74,7 @@ fn main() {
             &project_label,
             &interface_tab,
             &stream_tab,
+            &save,
             &compile,
         );
         wire_project_buttons(
@@ -80,6 +85,7 @@ fn main() {
             &stream_tab,
             &new_project,
             &open_project,
+            &save,
             &compile,
         );
         wire_tab(
@@ -99,7 +105,12 @@ fn main() {
     });
 }
 
-fn build_tab(notebook: &Notebook, title: &str, kinds: &[soundpack::SoundKind]) -> TabControls {
+fn build_tab(
+    notebook: &Notebook,
+    title: &str,
+    kinds: &[soundpack::SoundKind],
+    state: &Rc<RefCell<ManagerState>>,
+) -> TabControls {
     let panel = Panel::builder(notebook).build();
     let outer = BoxSizer::builder(Orientation::Horizontal).build();
 
@@ -116,36 +127,21 @@ fn build_tab(notebook: &Notebook, title: &str, kinds: &[soundpack::SoundKind]) -
     let source_row = BoxSizer::builder(Orientation::Horizontal).build();
     let source_path = TextCtrl::builder(&panel).build();
     let browse = Button::builder(&panel).with_label("&Browse...").build();
-    let add = Button::builder(&panel).with_label("&Add Variant").build();
     source_row.add(&source_path, 1, SizerFlag::Expand | SizerFlag::All, 4);
     source_row.add(&browse, 0, SizerFlag::All, 4);
-    source_row.add(&add, 0, SizerFlag::All, 4);
 
-    let variants_label = StaticText::builder(&panel)
-        .with_label("Variants in project")
-        .build();
-    let variants = ListBox::builder(&panel).build();
     let action_row = BoxSizer::builder(Orientation::Horizontal).build();
-    let remove = Button::builder(&panel)
-        .with_label("&Remove Variant")
-        .build();
     let test = Button::builder(&panel).with_label("&Test").build();
-    action_row.add(&remove, 0, SizerFlag::All, 4);
     action_row.add(&test, 0, SizerFlag::All, 4);
 
     right.add(&source_label, 0, SizerFlag::All, 4);
     right.add_sizer(&source_row, 0, SizerFlag::Expand, 0);
-    right.add(&variants_label, 0, SizerFlag::All, 4);
-    right.add(&variants, 1, SizerFlag::Expand | SizerFlag::All, 4);
     right.add_sizer(&action_row, 0, SizerFlag::All, 0);
 
     let controls = TabControls {
         sounds,
         source_path,
         browse,
-        add,
-        variants,
-        remove,
         test,
     };
 
@@ -166,25 +162,11 @@ fn build_tab(notebook: &Notebook, title: &str, kinds: &[soundpack::SoundKind]) -
     }
 
     {
-        let controls_for_add = controls.clone();
-        let kinds_for_add = kinds.to_vec();
-        let panel_for_add = panel.clone();
-        controls.add.clone().on_click(move |_| {
-            let Some(project) = current_project_from_parent(&panel_for_add) else {
-                return;
-            };
-            let Some(kind) = selected_sound(&controls_for_add.sounds, &kinds_for_add) else {
-                return;
-            };
-            let source = controls_for_add.source_path.get_value();
-            if source.trim().is_empty() {
-                show_error(&panel_for_add, "Choose or type a WAV path first.");
-                return;
-            }
-            match soundpack::add_variant(&project, kind, Path::new(source.trim())) {
-                Ok(_) => refresh_tab(&Some(project), &controls_for_add, &kinds_for_add),
-                Err(err) => show_error(&panel_for_add, &err),
-            }
+        let controls = controls.clone();
+        let state = Rc::clone(state);
+        let kinds = kinds.to_vec();
+        controls.source_path.clone().on_text_changed(move |_| {
+            remember_source_path(&state, &controls, &kinds);
         });
     }
 
@@ -193,14 +175,6 @@ fn build_tab(notebook: &Notebook, title: &str, kinds: &[soundpack::SoundKind]) -
     panel.set_sizer_and_fit(outer, true);
     notebook.add_page(&panel, title, false, None);
     controls
-}
-
-thread_local! {
-    static CURRENT_PROJECT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
-}
-
-fn current_project_from_parent(_parent: &dyn WxWidget) -> Option<PathBuf> {
-    CURRENT_PROJECT.with(|p| p.borrow().clone())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -212,6 +186,7 @@ fn wire_project_buttons(
     stream_tab: &TabControls,
     new_project: &Button,
     open_project: &Button,
+    save: &Button,
     compile: &Button,
 ) {
     {
@@ -220,25 +195,24 @@ fn wire_project_buttons(
         let project_label = project_label.clone();
         let interface_tab = interface_tab.clone();
         let stream_tab = stream_tab.clone();
+        let save = save.clone();
         let compile = compile.clone();
         new_project.on_click(move |_| {
-            let dialog =
-                DirDialog::builder(&frame, "Choose a new sound pack project folder", "").build();
-            if dialog.show_modal() != ID_OK {
-                return;
-            }
-            let Some(path) = dialog.get_path().map(PathBuf::from) else {
+            let Some((name, parent)) = show_new_project_dialog(&frame) else {
                 return;
             };
-            match soundpack::create_project(&path) {
-                Ok(()) => {
-                    state.borrow_mut().project = Some(path.clone());
-                    CURRENT_PROJECT.with(|p| *p.borrow_mut() = Some(path));
+            match soundpack::create_named_project(&parent, &name) {
+                Ok(path) => {
+                    let mut state_mut = state.borrow_mut();
+                    state_mut.project = Some(path);
+                    state_mut.source_paths.clear();
+                    drop(state_mut);
                     refresh_all(
                         &state,
                         &project_label,
                         &interface_tab,
                         &stream_tab,
+                        &save,
                         &compile,
                     );
                 }
@@ -252,6 +226,7 @@ fn wire_project_buttons(
         let project_label = project_label.clone();
         let interface_tab = interface_tab.clone();
         let stream_tab = stream_tab.clone();
+        let save = save.clone();
         let compile = compile.clone();
         open_project.on_click(move |_| {
             let dialog = DirDialog::builder(&frame, "Open a sound pack project folder", "").build();
@@ -263,13 +238,16 @@ fn wire_project_buttons(
             };
             match soundpack::read_project_manifest(&path) {
                 Ok(_) => {
-                    state.borrow_mut().project = Some(path.clone());
-                    CURRENT_PROJECT.with(|p| *p.borrow_mut() = Some(path));
+                    let mut state_mut = state.borrow_mut();
+                    state_mut.project = Some(path);
+                    state_mut.source_paths.clear();
+                    drop(state_mut);
                     refresh_all(
                         &state,
                         &project_label,
                         &interface_tab,
                         &stream_tab,
+                        &save,
                         &compile,
                     );
                 }
@@ -283,6 +261,40 @@ fn wire_project_buttons(
         let project_label = project_label.clone();
         let interface_tab = interface_tab.clone();
         let stream_tab = stream_tab.clone();
+        let save_button = save.clone();
+        let compile = compile.clone();
+        save.on_click(move |_| {
+            remember_source_path(&state, &interface_tab, &soundpack::SoundKind::INTERFACE);
+            remember_source_path(&state, &stream_tab, &soundpack::SoundKind::STREAM_EVENTS);
+            let Some(project) = state.borrow().project.clone() else {
+                show_error(&frame, "Open or create a sound pack project first.");
+                return;
+            };
+            let assignments = collect_assignments(&state, &project);
+            match soundpack::save_single_variants(&project, &assignments) {
+                Ok(count) => {
+                    state.borrow_mut().source_paths.clear();
+                    refresh_all(
+                        &state,
+                        &project_label,
+                        &interface_tab,
+                        &stream_tab,
+                        &save_button,
+                        &compile,
+                    );
+                    show_info(&frame, &format!("Saved {count} sound(s) to the project."));
+                }
+                Err(err) => show_error(&frame, &err),
+            }
+        });
+    }
+    {
+        let frame = frame.clone();
+        let state = Rc::clone(state);
+        let project_label = project_label.clone();
+        let interface_tab = interface_tab.clone();
+        let stream_tab = stream_tab.clone();
+        let save = save.clone();
         let compile_for_refresh = compile.clone();
         compile.on_click(move |_| {
             let Some(project) = state.borrow().project.clone() else {
@@ -310,6 +322,7 @@ fn wire_project_buttons(
                         &project_label,
                         &interface_tab,
                         &stream_tab,
+                        &save,
                         &compile_for_refresh,
                     );
                     show_info(
@@ -343,63 +356,117 @@ fn wire_tab_slice(
         let state = Rc::clone(state);
         let kinds = kinds.to_vec();
         controls.sounds.clone().on_selection_changed(move |_| {
-            refresh_tab(&state.borrow().project, &controls, &kinds);
-        });
-    }
-    {
-        let controls = controls.clone();
-        let state = Rc::clone(state);
-        let kinds = kinds.to_vec();
-        controls.variants.clone().on_selection_changed(move |_| {
-            if let Some(path) = selected_variant_path(&state.borrow().project, &controls, &kinds) {
-                controls.source_path.set_value(&path.display().to_string());
-            }
+            refresh_tab(&state, &controls, &kinds);
         });
     }
     {
         let frame = frame.clone();
         let controls = controls.clone();
-        let state = Rc::clone(state);
-        let kinds = kinds.to_vec();
-        controls.remove.clone().on_click(move |_| {
-            let Some(project) = state.borrow().project.clone() else {
-                show_error(&frame, "Open or create a sound pack project first.");
-                return;
-            };
-            let Some(kind) = selected_sound(&controls.sounds, &kinds) else {
-                return;
-            };
-            let Some(index) = controls.variants.get_selection().map(|i| i as usize) else {
-                show_error(&frame, "Select a variant to remove.");
-                return;
-            };
-            match soundpack::remove_variant(&project, kind, index) {
-                Ok(()) => refresh_tab(&Some(project), &controls, &kinds),
-                Err(err) => show_error(&frame, &err),
-            }
-        });
-    }
-    {
-        let frame = frame.clone();
-        let controls = controls.clone();
-        let state = Rc::clone(state);
-        let kinds = kinds.to_vec();
         controls.test.clone().on_click(move |_| {
-            let path =
-                selected_variant_path(&state.borrow().project, &controls, &kinds).or_else(|| {
-                    let typed = controls.source_path.get_value();
-                    let trimmed = typed.trim();
-                    (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
-                });
-            let Some(path) = path else {
-                show_error(&frame, "Select or type a WAV path to test.");
+            let typed = controls.source_path.get_value();
+            let trimmed = typed.trim();
+            if trimmed.is_empty() {
+                show_error(&frame, "Choose or type a WAV path to test.");
                 return;
-            };
-            if let Err(err) = test_play(&path) {
+            }
+            if let Err(err) = test_play(Path::new(trimmed)) {
                 show_error(&frame, &err);
             }
         });
     }
+}
+
+fn show_new_project_dialog(frame: &Frame) -> Option<(String, PathBuf)> {
+    let dialog = Dialog::builder(frame, "New sound pack project")
+        .with_style(DialogStyle::DefaultDialogStyle)
+        .with_size(560, 220)
+        .build();
+    let panel = Panel::builder(&dialog).build();
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+
+    let name_label = StaticText::builder(&panel).with_label("Pack name").build();
+    let name = TextCtrl::builder(&panel).build();
+
+    let folder_label = StaticText::builder(&panel)
+        .with_label("Parent folder")
+        .build();
+    let folder_row = BoxSizer::builder(Orientation::Horizontal).build();
+    let folder = TextCtrl::builder(&panel).build();
+    let browse = Button::builder(&panel).with_label("&Browse...").build();
+    folder_row.add(&folder, 1, SizerFlag::Expand | SizerFlag::All, 4);
+    folder_row.add(&browse, 0, SizerFlag::All, 4);
+
+    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
+    let ok = Button::builder(&panel)
+        .with_id(ID_OK)
+        .with_label("OK")
+        .build();
+    let cancel = Button::builder(&panel)
+        .with_id(ID_CANCEL)
+        .with_label("Cancel")
+        .build();
+    ok.set_default();
+    buttons.add(&ok, 0, SizerFlag::All, 4);
+    buttons.add(&cancel, 0, SizerFlag::All, 4);
+
+    sizer.add(&name_label, 0, SizerFlag::All, 4);
+    sizer.add(&name, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&folder_label, 0, SizerFlag::All, 4);
+    sizer.add_sizer(&folder_row, 0, SizerFlag::Expand, 0);
+    sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight, 0);
+    panel.set_sizer(sizer, true);
+    let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
+    dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
+    dialog.set_sizer(dialog_sizer, true);
+
+    {
+        let panel = panel.clone();
+        let folder = folder.clone();
+        browse.on_click(move |_| {
+            let picker = DirDialog::builder(&panel, "Choose a parent folder", "")
+                .with_style(DirDialogStyle::MustExist.bits())
+                .build();
+            if picker.show_modal() == ID_OK {
+                if let Some(path) = picker.get_path() {
+                    folder.set_value(&path);
+                }
+            }
+        });
+    }
+    {
+        let dialog = dialog.clone();
+        let panel = panel.clone();
+        let name = name.clone();
+        let folder = folder.clone();
+        ok.on_click(move |_| {
+            if let Err(err) = soundpack::sanitize_pack_name(&name.get_value()) {
+                show_error(&panel, &err);
+                return;
+            }
+            let parent = folder.get_value();
+            if parent.trim().is_empty() {
+                show_error(&panel, "Choose a parent folder.");
+                return;
+            }
+            if !Path::new(parent.trim()).is_dir() {
+                show_error(&panel, "The parent folder does not exist.");
+                return;
+            }
+            dialog.end_modal(ID_OK);
+        });
+    }
+    {
+        let dialog = dialog.clone();
+        cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    }
+
+    let result = if dialog.show_modal() == ID_OK {
+        Some((name.get_value(), PathBuf::from(folder.get_value().trim())))
+    } else {
+        None
+    };
+    dialog.destroy();
+    result
 }
 
 fn refresh_all(
@@ -407,79 +474,116 @@ fn refresh_all(
     project_label: &StaticText,
     interface_tab: &TabControls,
     stream_tab: &TabControls,
+    save: &Button,
     compile: &Button,
 ) {
     let project = state.borrow().project.clone();
+    save.enable(project.is_some());
     compile.enable(project.is_some());
-    CURRENT_PROJECT.with(|p| *p.borrow_mut() = project.clone());
     if let Some(project) = &project {
-        let revision = soundpack::read_project_manifest(project)
-            .map(|m| m.revision.to_string())
-            .unwrap_or_else(|_| "?".into());
+        let manifest = soundpack::read_project_manifest(project);
+        let (name, revision) = manifest
+            .map(|m| (m.name, m.revision.to_string()))
+            .unwrap_or_else(|_| ("?".into(), "?".into()));
         project_label.set_label(&format!(
-            "Project: {} (revision {revision})",
+            "Project: {name} at {} (revision {revision})",
             project.display()
         ));
     } else {
         project_label.set_label("No sound pack project is open");
     }
-    refresh_tab(&project, interface_tab, &soundpack::SoundKind::INTERFACE);
-    refresh_tab(&project, stream_tab, &soundpack::SoundKind::STREAM_EVENTS);
+    refresh_tab(state, interface_tab, &soundpack::SoundKind::INTERFACE);
+    refresh_tab(state, stream_tab, &soundpack::SoundKind::STREAM_EVENTS);
 }
 
-fn refresh_tab(project: &Option<PathBuf>, controls: &TabControls, kinds: &[soundpack::SoundKind]) {
-    controls.variants.clear();
+fn refresh_tab(
+    state: &Rc<RefCell<ManagerState>>,
+    controls: &TabControls,
+    kinds: &[soundpack::SoundKind],
+) {
+    let (project, source_paths) = {
+        let state = state.borrow();
+        (state.project.clone(), state.source_paths.clone())
+    };
     let Some(project) = project else {
+        set_source_path_value(state, controls, "");
         set_tab_enabled(controls, false);
         return;
     };
     set_tab_enabled(controls, true);
     let Some(kind) = selected_sound(&controls.sounds, kinds) else {
-        controls.remove.enable(false);
+        set_source_path_value(state, controls, "");
         controls.test.enable(false);
         return;
     };
-    let variants = soundpack::project_variants(project, kind).unwrap_or_default();
-    for path in &variants {
-        controls.variants.append(&path.display().to_string());
-    }
-    if !variants.is_empty() {
-        controls.variants.set_selection(0, true);
-        controls
-            .source_path
-            .set_value(&variants[0].display().to_string());
-    }
-    controls.remove.enable(!variants.is_empty());
+    let path = source_paths
+        .get(&kind)
+        .cloned()
+        .or_else(|| first_project_variant(&project, kind).map(|path| path.display().to_string()))
+        .unwrap_or_default();
+    set_source_path_value(state, controls, &path);
     controls.test.enable(true);
+}
+
+fn collect_assignments(
+    state: &Rc<RefCell<ManagerState>>,
+    project: &Path,
+) -> HashMap<soundpack::SoundKind, PathBuf> {
+    let source_paths = state.borrow().source_paths.clone();
+    let mut assignments = HashMap::new();
+    for sound in soundpack::SoundKind::ALL {
+        if let Some(path) = source_paths.get(&sound) {
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                assignments.insert(sound, PathBuf::from(trimmed));
+            }
+        } else if let Some(path) = first_project_variant(project, sound) {
+            assignments.insert(sound, path);
+        }
+    }
+    assignments
+}
+
+fn first_project_variant(project: &Path, sound: soundpack::SoundKind) -> Option<PathBuf> {
+    soundpack::project_variants(project, sound)
+        .ok()?
+        .into_iter()
+        .next()
+}
+
+fn set_source_path_value(state: &Rc<RefCell<ManagerState>>, controls: &TabControls, value: &str) {
+    state.borrow_mut().updating_source_path = true;
+    controls.source_path.set_value(value);
+    state.borrow_mut().updating_source_path = false;
+}
+
+fn remember_source_path(
+    state: &Rc<RefCell<ManagerState>>,
+    controls: &TabControls,
+    kinds: &[soundpack::SoundKind],
+) {
+    let Some(kind) = selected_sound(&controls.sounds, kinds) else {
+        return;
+    };
+    let mut state = state.borrow_mut();
+    if state.updating_source_path {
+        return;
+    }
+    state
+        .source_paths
+        .insert(kind, controls.source_path.get_value());
 }
 
 fn set_tab_enabled(controls: &TabControls, enabled: bool) {
     controls.sounds.enable(enabled);
     controls.source_path.enable(enabled);
     controls.browse.enable(enabled);
-    controls.add.enable(enabled);
-    controls.variants.enable(enabled);
-    controls.remove.enable(enabled);
     controls.test.enable(enabled);
 }
 
 fn selected_sound(list: &ListBox, kinds: &[soundpack::SoundKind]) -> Option<soundpack::SoundKind> {
     let index = list.get_selection().unwrap_or(0) as usize;
     kinds.get(index).copied()
-}
-
-fn selected_variant_path(
-    project: &Option<PathBuf>,
-    controls: &TabControls,
-    kinds: &[soundpack::SoundKind],
-) -> Option<PathBuf> {
-    let project = project.as_ref()?;
-    let kind = selected_sound(&controls.sounds, kinds)?;
-    let index = controls.variants.get_selection()? as usize;
-    soundpack::project_variants(project, kind)
-        .ok()?
-        .get(index)
-        .cloned()
 }
 
 fn test_play(path: &Path) -> Result<(), String> {

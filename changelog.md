@@ -4,7 +4,9 @@
 
 ### Additions
 
-- Sound packs: encrypted `.pspack` files and live development directories provide randomized 48 kHz stereo WAV cues for listener changes and incoming or outgoing chat through configurable Sound Events sources. A standalone Sound Pack Manager is available from Tools, with project creation/opening, interface and stream-event tabs, WAV variant management, test playback, and revision-bumping compilation.
+- Sound packs: encrypted `.pspack` files and live development directories provide randomized WAV cues for listener changes and incoming or outgoing chat through configurable Sound Events sources. A standalone Sound Pack Manager is available from Tools, with project creation/opening, interface and stream-event tabs, one-WAV-per-event saving, test playback, and revision-bumping compilation.
+
+- A default sound pack is now baked into the executable and plays local startup and shutdown cues automatically.
 
 - Capture sources reconnect on their own. If a microphone or desktop audio source cannot be opened â€” the interface has not finished starting up, it is unplugged, or its driver resets mid-session â€” Pubsplash keeps trying (quickly at first, then every five seconds) until it comes back, instead of leaving that source silent until you edited it. While a source is retrying, its mixer strip and its entry on the Scenes and Sources tab read "(reconnecting)", so a screen reader tells you the microphone is not on air; the labels change in place, without moving keyboard focus. A source configured for a specific microphone is never quietly switched to a different one â€” being silent is better than going on air through the laptop's built-in microphone without being told.
 - Application sources now show the application's real name. While the app is running, Pubsplash reads the product name out of its executable and uses that â€” an Application source pointing at `nvda.exe` reads as "NVDA volume" on the Home tab, and "Application: NVDA (nvda.exe)" on the Scenes and Sources tab â€” so it is clear which app a slider is adjusting. When the app is not running, the name you typed is shown instead, with "(not running)" on the sources list.
@@ -49,6 +51,12 @@
 - The plugin scan progress dialog now has a Skip button: if a plugin hangs or stalls the scan (for example while waiting on a hidden dialog), Skip abandons just that plugin and the scan moves on. Skipped plugins are counted in the scan summary and can be retried with "Rescan all plugins".
 
 ### Fixes
+
+- Sound packs now accept any readable WAV file instead of rejecting cues solely because they are not 48 kHz stereo; playback converts them to the engine format when decoded.
+
+- The Sound Pack Manager now creates new projects in a sanitized child folder, stores that name in `sound-pack.toml`, and adds an explicit Save step that copies the selected WAVs into the project before Compile reads them.
+
+- The Sound Pack Manager Source WAV field now follows the selected interface sound or stream event without wiping browsed or typed paths from other events.
 
 - The Sound Pack Manager now disables its project editing tabs and Compile button until a project is created with **New** or loaded with **Open**, avoiding ambiguous save or compile actions before a project folder exists.
 
