@@ -1,10 +1,17 @@
 # Cuts a GitHub Release (NSIS installer + portable ZIP) on any v* tag push.
+#
+# Can also be started by hand from the Actions tab ("Run workflow") against any
+# branch, to test packaging without cutting a release: those runs skip the
+# release step and attach the installer and ZIP to the run as artifacts instead.
+# The manual button only appears while this trigger is on the default branch,
+# and a branch can only be dispatched if its own copy of this file has it too.
 name: Release
 
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -51,7 +58,21 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path bundle/* -DestinationPath "pubsplash-${{ github.ref_name }}.zip"
 
+      # Manual runs stop here: the build is downloadable from the run's summary
+      # page for 90 days, and nothing is published.
+      - name: Upload artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pubsplash-${{ github.ref_name }}
+          path: |
+            target/release/*-setup.exe
+            pubsplash-*.zip
+
+      # Guarded on the ref rather than the event so this can only ever publish
+      # from a tag, however the workflow was started.
       - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
