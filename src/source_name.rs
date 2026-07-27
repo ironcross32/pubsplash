@@ -147,10 +147,7 @@ fn base_list_label(source: &SourceConfig, ctx: &NameContext) -> String {
             }
         }
         SourceKindConfig::Tts(tts) => {
-            let engine = match tts.engine.as_str() {
-                "sapi" => "SAPI",
-                other => other,
-            };
+            let engine = crate::tts::engines::display_name(&tts.engine);
             if tts.voice.is_empty() {
                 format!("Text-to-Speech: {engine}, default voice")
             } else {
@@ -381,13 +378,38 @@ mod tests {
         );
         assert_eq!(
             list_label(&src, &ctx()),
-            "Text-to-Speech: SAPI, Blastbay Libby - English (United States)"
+            "Text-to-Speech: SAPI 5, Blastbay Libby - English (United States)"
         );
         let default_voice = source(SourceKindConfig::Tts(TtsSourceConfig::default()));
         assert_eq!(strip_label(&default_voice, &ctx()), "Text-to-Speech");
         assert_eq!(
             list_label(&default_voice, &ctx()),
-            "Text-to-Speech: SAPI, default voice"
+            "Text-to-Speech: SAPI 5, default voice"
+        );
+    }
+
+    /// The list label names the engine, so a user with several TTS sources can
+    /// tell which is which without opening each one.
+    #[test]
+    fn tts_names_the_engine_it_is_using() {
+        let edge = source(SourceKindConfig::Tts(TtsSourceConfig {
+            engine: "edge".into(),
+            voice: "en-US-AriaNeural".into(),
+            ..Default::default()
+        }));
+        assert_eq!(
+            list_label(&edge, &ctx()),
+            "Text-to-Speech: Microsoft Edge, en-US-AriaNeural"
+        );
+
+        // An engine id from a newer build must not print raw into the UI.
+        let unknown = source(SourceKindConfig::Tts(TtsSourceConfig {
+            engine: "not-an-engine".into(),
+            ..Default::default()
+        }));
+        assert_eq!(
+            list_label(&unknown, &ctx()),
+            "Text-to-Speech: SAPI 5, default voice"
         );
     }
 

@@ -57,6 +57,17 @@ reqwest = { version = "0.12", features = ["json", "cookies", "stream"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 thiserror = "2"
 
+# Edge and Star speak WebSocket, not HTTP. `native-tls` rather than rustls so
+# this shares reqwest's schannel-backed TLS stack instead of linking a second one.
+tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
+# Only Google Translate and Star return compressed audio; every other speech API
+# is asked for PCM or WAV, which `hound` already reads.
+symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
+# Edge's Sec-MS-GEC token and Polly's SigV4 signature.
+sha2 = "0.10"
+hmac = "0.12"
+urlencoding = "2"
+
 wasapi = "0.23"
 mp3lame-encoder = "0.2"
 rtrb = "0.3"
@@ -67,7 +78,7 @@ bincode = "1.3"
 uuid = { version = "1", features = ["v4", "serde"] }
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
 windows-core = "0.62.2"
-windows = { version = "0.62", features = ["Win32_Media_Speech", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_Foundation", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Accessibility", "Win32_UI_Shell", "Win32_System_Variant", "Win32_System_Ole"] }
+windows = { version = "0.62", features = ["Win32_Media_Speech", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_Foundation", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Accessibility", "Win32_UI_Shell", "Win32_System_Variant", "Win32_System_Ole", "Win32_Security_Cryptography"] }
 
 [package.metadata.packager]
 before-packaging-command = "cargo build --release --bin pubsplash --bin pubsplash-scan --bin pubsplash-soundpack --bin soundpack"

@@ -4,6 +4,7 @@
 //! is regenerated from defaults. A corrupt file is renamed to `config.json.bak`
 //! and replaced with defaults so the app always starts.
 
+use crate::secret::Secret;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -20,6 +21,7 @@ pub struct Config {
     pub buses: BusesConfig,
     pub archiving: ArchivingConfig,
     pub sounds: SoundsConfig,
+    pub speech: SpeechConfig,
 }
 
 impl Default for Config {
@@ -33,6 +35,7 @@ impl Default for Config {
             buses: BusesConfig::default(),
             archiving: ArchivingConfig::default(),
             sounds: SoundsConfig::default(),
+            speech: SpeechConfig::default(),
         }
     }
 }
@@ -468,13 +471,18 @@ impl SourceKindConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct TtsSourceConfig {
+    /// A [`crate::tts::EngineId`] value; unknown strings fall back to SAPI.
     pub engine: String,
     /// Engine-specific voice identifier; empty means the engine default.
     pub voice: String,
     /// 0-100.
     pub volume: u32,
-    /// SAPI-style rate, -10..=10.
+    /// SAPI-style rate, -10..=10. Network engines scale this to their own
+    /// range — see `tts::engine::SynthRequest`.
     pub rate: i32,
+    /// -50..=50, in whatever unit the engine uses. Engines without a pitch
+    /// control (SAPI, OpenAI, gTTS, Polly) ignore it.
+    pub pitch: i32,
     /// Whether synthesized speech is mixed into the outgoing stream.
     pub output_to_stream: bool,
 }
@@ -486,7 +494,82 @@ impl Default for TtsSourceConfig {
             voice: String::new(),
             volume: 100,
             rate: 0,
+            pitch: 0,
             output_to_stream: true,
+        }
+    }
+}
+
+/// Credentials and limits shared by every text-to-speech source.
+///
+/// These are global rather than per-source on purpose: an ElevenLabs key
+/// retyped into every scene's TTS source is a lot of typing for a screen-reader
+/// user, and a lot of copies of a secret. Sources carry only the engine choice,
+/// voice, and prosody.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SpeechConfig {
+    pub openai_api_key: Secret,
+    pub elevenlabs_api_key: Secret,
+    pub elevenlabs_model: String,
+    pub azure_key: Secret,
+    pub azure_region: String,
+    pub aws_access_key_id: String,
+    pub aws_secret_access_key: Secret,
+    pub aws_region: String,
+    pub aws_engine: String,
+    pub google_api_key: Secret,
+    pub google_language_code: String,
+    /// WebSocket URL of a Star coagulator, e.g. `ws://localhost:4567`.
+    pub star_host: String,
+    /// Longest message a network engine will synthesize. Chat can carry a wall
+    /// of text, and the paid engines bill by the character, so messages are
+    /// truncated rather than sent whole.
+    pub max_chars: usize,
+    /// Floor on the gap between two network syntheses. A chat flood would
+    /// otherwise be a burst of billed API calls.
+    pub min_request_interval_ms: u64,
+    /// Which engine's settings the Speech preferences tab was last showing.
+    ///
+    /// A UI convenience, not an engine setting: the tab shows one engine at a
+    /// time, and a user who is midway through entering an ElevenLabs key should
+    /// not have to find it again after closing the dialog. Empty (or unknown)
+    /// resolves to SAPI like any other engine id.
+    pub last_engine: String,
+}
+
+impl Default for SpeechConfig {
+    fn default() -> Self {
+        Self {
+            openai_api_key: Secret::default(),
+            elevenlabs_api_key: Secret::default(),
+            elevenlabs_model: "eleven_multilingual_v2".into(),
+            azure_key: Secret::default(),
+            azure_region: String::new(),
+            aws_access_key_id: String::new(),
+            aws_secret_access_key: Secret::default(),
+            aws_region: "us-east-1".into(),
+            aws_engine: "neural".into(),
+            google_api_key: Secret::default(),
+            google_language_code: "en-US".into(),
+            star_host: "ws://localhost:4567".into(),
+            max_chars: Self::DEFAULT_MAX_CHARS,
+            min_request_interval_ms: Self::DEFAULT_MIN_INTERVAL_MS,
+            last_engine: String::new(),
+        }
+    }
+}
+
+impl SpeechConfig {
+    pub const DEFAULT_MAX_CHARS: usize = 500;
+    pub const DEFAULT_MIN_INTERVAL_MS: u64 = 750;
+
+    /// The effective character cap; 0 in the file means "use the default".
+    pub fn max_chars(&self) -> usize {
+        if self.max_chars == 0 {
+            Self::DEFAULT_MAX_CHARS
+        } else {
+            self.max_chars
         }
     }
 }
@@ -794,8 +877,9 @@ pub struct SoundEventsSourceConfig {
     pub listener_peak_increase: bool,
     pub incoming_chat: bool,
     pub outgoing_chat: bool,
-    /// Whether these cues are mixed into the outgoing stream. With it off the
-    /// cues play locally instead, so only the broadcaster hears them.
+    /// Whether these cues are mixed into the outgoing stream. They always play
+    /// locally for the broadcaster; with this off, only the broadcaster hears
+    /// them.
     pub output_to_stream: bool,
 }
 

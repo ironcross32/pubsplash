@@ -2,8 +2,9 @@
 //!
 //! These cues are local feedback only. They go straight to the default Windows
 //! render device and never enter the mixer, stream encoder, or recorder - which
-//! is what the interface startup/shutdown sounds want, and also what a Sound
-//! Events source wants when it is not sending its cues to the stream.
+//! is what the interface startup/shutdown sounds want, and also how a Sound
+//! Events source gets heard by the broadcaster, whether or not the same cue is
+//! also being fed to the stream.
 
 use crate::audio::device;
 use crate::audio::mixer::{CHANNELS, SAMPLE_RATE};
@@ -20,6 +21,20 @@ pub fn play_sound_kind_async(kind: SoundKind) {
         .spawn(move || {
             if let Err(e) = play_sound_kind_blocking(kind) {
                 log::warn!("Could not play {:?} sound cue: {e}", kind);
+            }
+        })
+        .ok();
+}
+
+/// Plays an already-decoded buffer. Callers that also feed the same samples to
+/// the mixer use this rather than [`play_sound_kind_async`] so that both copies
+/// are the same randomly chosen variant.
+pub fn play_samples_async(samples: std::sync::Arc<Vec<f32>>) {
+    std::thread::Builder::new()
+        .name("ui-sound-cue".into())
+        .spawn(move || {
+            if let Err(e) = play_samples(&samples) {
+                log::warn!("Could not play sound cue: {e}");
             }
         })
         .ok();

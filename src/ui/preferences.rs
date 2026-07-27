@@ -1,4 +1,5 @@
-//! Preferences dialog. Tabbed: "Archiving", "Sound packs", and "VST plugins".
+//! Preferences dialog. Tabbed: "Archiving", "Speech", "Sound packs", and
+//! "VST plugins".
 //! The VST tab manages the plugin folder list and starts scans; scan progress
 //! arrives on the pump (see `pump_scan_events` in `ui/mod.rs`). Every tab saves
 //! as the user changes a control, so the dialog only needs a Close button.
@@ -18,6 +19,9 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     let archiving_panel = Panel::builder(&notebook).build();
     notebook.add_page(&archiving_panel, "Archiving", true, None);
     build_archiving_tab(app, &dialog, &archiving_panel);
+    let speech_panel = Panel::builder(&notebook).build();
+    notebook.add_page(&speech_panel, "Speech", false, None);
+    build_speech_tab(app, &speech_panel);
     let sounds_panel = Panel::builder(&notebook).build();
     notebook.add_page(&sounds_panel, "Sound packs", false, None);
     build_sounds_tab(app, &sounds_panel);
@@ -165,6 +169,314 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     sizer.add_sizer(&stream_group, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add_sizer(&recording_group, 0, SizerFlag::Expand | SizerFlag::All, 4);
     panel.set_sizer(sizer, true);
+}
+
+/// Credentials and limits for the network speech engines.
+///
+/// These live here rather than on each TTS source because a key retyped into
+/// every scene is a lot of typing for a screen-reader user, and a lot of
+/// copies of a secret. The source dialog keeps the engine, voice, and prosody.
+///
+/// Keys are stored DPAPI-encrypted; see `crate::secret`.
+///
+/// One engine at a time: eleven credential fields in one tab order meant
+/// tabbing past OpenAI, Azure, AWS and Google to reach Star. The picker comes
+/// first and everything after it belongs to whichever engine it names, so the
+/// tab order is only ever as long as the engine you are actually configuring.
+fn build_speech_tab(app: &Rc<App>, panel: &Panel) {
+    use crate::tts::engines;
+
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+
+    let intro = StaticText::builder(panel)
+        .with_label(
+            "Keys entered here are encrypted for your Windows account. \
+             SAPI, Microsoft Edge, and Google Translate need no key.",
+        )
+        .build();
+    sizer.add(&intro, 0, SizerFlag::All, 6);
+
+    let engine_label = StaticText::builder(panel)
+        .with_label("Speech engine")
+        .build();
+    let engine_choice = Choice::builder(panel).build();
+    let engine_list = crate::tts::engine_names();
+    for (_, display) in &engine_list {
+        engine_choice.append(display);
+    }
+    super::set_accessible_name(&engine_choice, "Speech engine");
+    super::help::tag(
+        &engine_choice,
+        "dialog.preferences.speech.engine",
+        "Speech engine choice",
+    );
+    sizer.add(&engine_label, 0, SizerFlag::All, 4);
+    sizer.add(&engine_choice, 0, SizerFlag::Expand | SizerFlag::All, 4);
+
+    // A page per engine, all built up front and all but one hidden. Hidden
+    // windows are skipped by both the sizer and the tab order, which is the
+    // whole point; rebuilding on each switch would cost the same and lose
+    // whatever the user was part-way through typing.
+    let pages: Vec<(&'static str, Panel)> = engine_list
+        .iter()
+        .map(|(id, _)| {
+            let page = Panel::builder(panel).build();
+            let page_sizer = BoxSizer::builder(Orientation::Vertical).build();
+            build_engine_page(app, &page, &page_sizer, id);
+            page.set_sizer(page_sizer, true);
+            sizer.add(&page, 0, SizerFlag::Expand | SizerFlag::All, 4);
+            (*id, page)
+        })
+        .collect();
+
+    let shown = engines::resolve_id(&app.config.borrow().speech.last_engine);
+    let shown_index = engine_list
+        .iter()
+        .position(|(id, _)| *id == shown)
+        .unwrap_or(0);
+    engine_choice.set_selection(shown_index as u32);
+
+    {
+        let app = app.clone();
+        let panel = panel.clone();
+        let pages = pages.clone();
+        let ids: Vec<&'static str> = engine_list.iter().map(|(id, _)| *id).collect();
+        let choice = engine_choice.clone();
+        engine_choice.clone().on_selection_changed(move |_| {
+            let id = choice
+                .get_selection()
+                .and_then(|i| ids.get(i as usize).copied())
+                .unwrap_or(engines::SAPI);
+            show_engine_page(&panel, &pages, id);
+            app.config.borrow_mut().speech.last_engine = id.to_string();
+            app.save_config();
+        });
+    }
+
+    // Global, not per-engine: these cap what any network engine will spend, so
+    // they stay put no matter which engine the picker names.
+    let limits =
+        StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, panel, "Limits").build();
+
+    let chars_label = StaticText::builder(panel)
+        .with_label("Longest message to speak, in characters")
+        .build();
+    let chars = SpinCtrl::builder(panel)
+        .with_range(50, 5000)
+        .with_initial_value(app.config.borrow().speech.max_chars() as i32)
+        .build();
+    super::set_accessible_name(&chars, "Longest message to speak, in characters");
+    super::help::tag(
+        &chars,
+        "dialog.preferences.speech.maxChars",
+        "Maximum message length",
+    );
+    limits.add(&chars_label, 0, SizerFlag::All, 2);
+    limits.add(&chars, 0, SizerFlag::All, 2);
+    {
+        let app = app.clone();
+        let chars = chars.clone();
+        chars.clone().on_value_changed(move |_| {
+            app.config.borrow_mut().speech.max_chars = chars.value().max(1) as usize;
+            app.save_config();
+        });
+    }
+
+    let interval_label = StaticText::builder(panel)
+        .with_label("Shortest gap between requests, in milliseconds")
+        .build();
+    let interval = SpinCtrl::builder(panel)
+        .with_range(0, 10_000)
+        .with_initial_value(app.config.borrow().speech.min_request_interval_ms as i32)
+        .build();
+    super::set_accessible_name(&interval, "Shortest gap between requests, in milliseconds");
+    super::help::tag(
+        &interval,
+        "dialog.preferences.speech.minInterval",
+        "Minimum request interval",
+    );
+    limits.add(&interval_label, 0, SizerFlag::All, 2);
+    limits.add(&interval, 0, SizerFlag::All, 2);
+    {
+        let app = app.clone();
+        let interval = interval.clone();
+        interval.clone().on_value_changed(move |_| {
+            app.config.borrow_mut().speech.min_request_interval_ms =
+                interval.value().max(0) as u64;
+            app.save_config();
+        });
+    }
+
+    sizer.add_sizer(&limits, 0, SizerFlag::Expand | SizerFlag::All, 4);
+
+    panel.set_sizer(sizer, true);
+    // After the sizer is in place, so the eight hidden pages' space is actually
+    // reclaimed rather than left as a gap.
+    show_engine_page(panel, &pages, shown);
+}
+
+/// Shows the page belonging to `engine` and hides the rest.
+///
+/// Frozen across the swap so the tab does not flicker through a half-laid-out
+/// state, and `layout()` is what actually reclaims the hidden pages' space.
+fn show_engine_page(panel: &Panel, pages: &[(&'static str, Panel)], engine: &str) {
+    panel.freeze();
+    for (id, page) in pages {
+        page.show(*id == engine);
+    }
+    panel.layout();
+    panel.thaw();
+}
+
+/// Fills one engine's page with the fields that engine needs.
+///
+/// Spelled out per engine rather than driven from a table because `gen-help`
+/// scans this file for tag call sites and reads the id and label as *literal*
+/// arguments; a loop passing them as variables makes it scrape whatever string
+/// literal comes next and write nonsense into `help.toml`.
+fn build_engine_page(app: &Rc<App>, page: &Panel, sizer: &BoxSizer, engine: &str) {
+    use crate::secret::Secret;
+    use crate::tts::engines;
+
+    match engine {
+        engines::OPENAI => {
+            let key = secret_row(app, page, sizer, "OpenAI API key", engines::OPENAI, |s| {
+                s.openai_api_key.as_str().to_string()
+            }, |s, v| s.openai_api_key = Secret::new(v));
+            super::help::tag(&key, "dialog.preferences.speech.openaiKey", "OpenAI API key");
+        }
+        engines::ELEVENLABS => {
+            let key = secret_row(app, page, sizer, "ElevenLabs API key", engines::ELEVENLABS, |s| {
+                s.elevenlabs_api_key.as_str().to_string()
+            }, |s, v| s.elevenlabs_api_key = Secret::new(v));
+            super::help::tag(&key, "dialog.preferences.speech.elevenlabsKey", "ElevenLabs API key");
+            let model = text_row(app, page, sizer, "ElevenLabs model", engines::ELEVENLABS, |s| {
+                s.elevenlabs_model.clone()
+            }, |s, v| s.elevenlabs_model = v);
+            super::help::tag(&model, "dialog.preferences.speech.elevenlabsModel", "ElevenLabs model");
+        }
+        engines::AZURE => {
+            let key = secret_row(app, page, sizer, "Azure subscription key", engines::AZURE, |s| {
+                s.azure_key.as_str().to_string()
+            }, |s, v| s.azure_key = Secret::new(v));
+            super::help::tag(&key, "dialog.preferences.speech.azureKey", "Azure subscription key");
+            let region = text_row(app, page, sizer, "Azure region, for example eastus", engines::AZURE, |s| {
+                s.azure_region.clone()
+            }, |s, v| s.azure_region = v);
+            super::help::tag(&region, "dialog.preferences.speech.azureRegion", "Azure region");
+        }
+        engines::AWS => {
+            let id = text_row(app, page, sizer, "AWS access key ID", engines::AWS, |s| {
+                s.aws_access_key_id.clone()
+            }, |s, v| s.aws_access_key_id = v);
+            super::help::tag(&id, "dialog.preferences.speech.awsId", "AWS access key ID");
+            let key = secret_row(app, page, sizer, "AWS secret access key", engines::AWS, |s| {
+                s.aws_secret_access_key.as_str().to_string()
+            }, |s, v| s.aws_secret_access_key = Secret::new(v));
+            super::help::tag(&key, "dialog.preferences.speech.awsSecret", "AWS secret access key");
+            let region = text_row(app, page, sizer, "AWS region, for example us-east-1", engines::AWS, |s| {
+                s.aws_region.clone()
+            }, |s, v| s.aws_region = v);
+            super::help::tag(&region, "dialog.preferences.speech.awsRegion", "AWS region");
+            let polly_engine = text_row(app, page, sizer, "Polly engine, neural or standard", engines::AWS, |s| {
+                s.aws_engine.clone()
+            }, |s, v| s.aws_engine = v);
+            super::help::tag(&polly_engine, "dialog.preferences.speech.awsEngine", "Polly engine");
+        }
+        engines::GOOGLE => {
+            let key = secret_row(app, page, sizer, "Google Cloud API key", engines::GOOGLE, |s| {
+                s.google_api_key.as_str().to_string()
+            }, |s, v| s.google_api_key = Secret::new(v));
+            super::help::tag(&key, "dialog.preferences.speech.googleKey", "Google Cloud API key");
+            let language = text_row(app, page, sizer, "Google Cloud language code, for example en-US", engines::GOOGLE, |s| {
+                s.google_language_code.clone()
+            }, |s, v| s.google_language_code = v);
+            super::help::tag(&language, "dialog.preferences.speech.googleLanguage", "Google Cloud language code");
+        }
+        engines::STAR => {
+            let host = text_row(app, page, sizer, "Star server URL", engines::STAR, |s| {
+                s.star_host.clone()
+            }, |s, v| s.star_host = v);
+            super::help::tag(&host, "dialog.preferences.speech.starHost", "Star server URL");
+        }
+        // SAPI, Microsoft Edge and Google Translate. Nothing focusable here, so
+        // the tab order runs straight from the picker to the limits below —
+        // which is itself the answer to "what do I have to fill in for this
+        // one?". The intro text says as much for anyone who tabs past it.
+        _ => {
+            let none = StaticText::builder(page)
+                .with_label("This engine needs no settings.")
+                .build();
+            sizer.add(&none, 0, SizerFlag::All, 6);
+        }
+    }
+}
+
+/// A masked credential field. See [`speech_row`].
+fn secret_row(
+    app: &Rc<App>,
+    panel: &Panel,
+    sizer: &BoxSizer,
+    label: &str,
+    engine: &'static str,
+    read: fn(&crate::config::SpeechConfig) -> String,
+    write: fn(&mut crate::config::SpeechConfig, String),
+) -> TextCtrl {
+    speech_row(app, panel, sizer, label, engine, true, read, write)
+}
+
+/// A plain field — a region, a model id, a host. See [`speech_row`].
+fn text_row(
+    app: &Rc<App>,
+    panel: &Panel,
+    sizer: &BoxSizer,
+    label: &str,
+    engine: &'static str,
+    read: fn(&crate::config::SpeechConfig) -> String,
+    write: fn(&mut crate::config::SpeechConfig, String),
+) -> TextCtrl {
+    speech_row(app, panel, sizer, label, engine, false, read, write)
+}
+
+/// Builds one setting row and wires it to save as the user types.
+///
+/// The caller tags the returned control for context help, because `gen-help`
+/// needs those arguments to be literals at the call site.
+#[allow(clippy::too_many_arguments)]
+fn speech_row(
+    app: &Rc<App>,
+    panel: &Panel,
+    sizer: &BoxSizer,
+    label: &str,
+    engine: &'static str,
+    secret: bool,
+    read: fn(&crate::config::SpeechConfig) -> String,
+    write: fn(&mut crate::config::SpeechConfig, String),
+) -> TextCtrl {
+    let caption = StaticText::builder(panel).with_label(label).build();
+    let mut builder = TextCtrl::builder(panel).with_value(&read(&app.config.borrow().speech));
+    if secret {
+        builder = builder.with_style(TextCtrlStyle::Password);
+    }
+    let input = builder.build();
+    // The adjacent StaticText is not announced; name the control itself.
+    super::set_accessible_name(&input, label);
+    sizer.add(&caption, 0, SizerFlag::All, 2);
+    sizer.add(&input, 0, SizerFlag::Expand | SizerFlag::All, 2);
+    {
+        let app = app.clone();
+        let input = input.clone();
+        input.clone().on_text_updated(move |_| {
+            write(
+                &mut app.config.borrow_mut().speech,
+                input.get_value().trim().to_string(),
+            );
+            // A voice list fetched under the old credentials is stale.
+            crate::tts::forget_voices(engine);
+            app.save_config();
+        });
+    }
+    input
 }
 
 /// The Sound packs tab. Unlike the other two it opens no sub-dialogs, so it

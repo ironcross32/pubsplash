@@ -1,11 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod b64;
 mod config;
 mod fx;
 mod json_store;
 mod logging;
 mod net;
+mod secret;
 mod soundpack;
 mod source_name;
 mod state;
@@ -36,7 +38,7 @@ fn main() {
 
     let engine = audio::AudioEngine::start();
     let net = net::NetHandle::start();
-    let speaker = tts::sapi::Speaker::start(engine.external_feeds.clone());
+    let speaker = tts::speaker::Speaker::start(engine.external_feeds.clone());
     tts::prewarm_voices();
     // Fired before the UI is built so the cue overlaps plugin instantiation and
     // window construction rather than trailing them.

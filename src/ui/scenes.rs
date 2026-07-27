@@ -614,8 +614,13 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     };
     let dialog = Dialog::builder(&frame, "Text-to-Speech source")
         .with_style(DialogStyle::DefaultDialogStyle)
-        .with_size(400, 360)
+        .with_size(440, 520)
         .build();
+    // Voice fetches and previews finish on the pump, which keeps running
+    // inside this dialog's modal loop — and can outlive the dialog if the user
+    // closes it mid-request. Cleared just before `destroy()`, so those
+    // callbacks bail instead of touching freed widgets.
+    let alive = Rc::new(std::cell::Cell::new(true));
     let panel = Panel::builder(&dialog).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
@@ -628,30 +633,39 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         "dialog.ttsSource.engine",
         "TTS engine choice",
     );
-    for name in &engines {
-        engine_choice.append(name);
+    for (_, display) in &engines {
+        engine_choice.append(display);
     }
+    let selected_id = crate::tts::engines::resolve_id(&current.engine);
     let engine_index = engines
         .iter()
-        .position(|e| *e == current.engine)
+        .position(|(id, _)| *id == selected_id)
         .unwrap_or(0);
     engine_choice.set_selection(engine_index as u32);
 
     let voice_label = StaticText::builder(&panel).with_label("Voice").build();
     let voice_choice = Choice::builder(&panel).build();
-    super::set_accessible_name(&voice_choice, "Voice");
     super::help::tag(&voice_choice, "dialog.ttsSource.voice", "TTS voice choice");
-    let voices = crate::tts::voices_for(&current.engine);
-    voice_choice.append("Default voice");
-    for voice in &voices {
-        voice_choice.append(voice);
-    }
-    let voice_index = voices
-        .iter()
-        .position(|v| *v == current.voice)
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    voice_choice.set_selection(voice_index as u32);
+    // The list backing the picker; index 0 of the control is "Default voice",
+    // so a selection of n maps to `voices[n - 1]`.
+    let voices: Rc<std::cell::RefCell<Vec<crate::tts::engine::Voice>>> =
+        Rc::new(std::cell::RefCell::new(Vec::new()));
+    fill_voice_choice(&voice_choice, &voices, selected_id, &current.voice);
+    // How many voices this engine has, as a real label rather than only an
+    // accessible name — and refreshed with the engine, so it can never report
+    // the previous engine's count.
+    let voice_count_label = StaticText::builder(&panel).build();
+    update_voice_status(&voice_count_label, &voice_choice, selected_id);
+
+    let fetch_voices = Button::builder(&panel)
+        .with_label("&Get available voices")
+        .build();
+    super::set_accessible_name(&fetch_voices, "Get available voices");
+    super::help::tag(
+        &fetch_voices,
+        "dialog.ttsSource.fetchVoices",
+        "Get available voices button",
+    );
 
     let volume_label = StaticText::builder(&panel)
         .with_label("Voice volume")
@@ -683,6 +697,23 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         "TTS speech rate slider",
     );
 
+    let pitch_label = StaticText::builder(&panel)
+        .with_label("Voice pitch (-50 to 50)")
+        .build();
+    let pitch_slider = Slider::builder(&panel)
+        .with_value(current.pitch)
+        .with_min_value(-50)
+        .with_max_value(50)
+        .build();
+    super::help::tag(
+        &pitch_slider,
+        "dialog.ttsSource.pitch",
+        "TTS voice pitch slider",
+    );
+    // Named per engine: not every engine has a pitch control, and a slider
+    // that silently does nothing is worse than one that says so.
+    set_pitch_name(&pitch_slider, selected_id);
+
     let output_check = CheckBox::builder(&panel)
         .with_label("Send speech to the stream")
         .build();
@@ -696,6 +727,14 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     );
     output_check.set_value(current.output_to_stream);
 
+    let preview = Button::builder(&panel).with_label("&Preview voice").build();
+    super::set_accessible_name(&preview, "Preview voice");
+    super::help::tag(
+        &preview,
+        "dialog.ttsSource.preview",
+        "Preview voice button",
+    );
+
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let ok = Button::builder(&panel).with_label("OK").build();
     let cancel = Button::builder(&panel).with_label("Cancel").build();
@@ -706,16 +745,238 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     sizer.add(&engine_choice, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&voice_label, 0, SizerFlag::All, 4);
     sizer.add(&voice_choice, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&voice_count_label, 0, SizerFlag::All, 4);
+    sizer.add(&fetch_voices, 0, SizerFlag::All, 4);
     sizer.add(&volume_label, 0, SizerFlag::All, 4);
     sizer.add(&volume_slider, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&rate_label, 0, SizerFlag::All, 4);
     sizer.add(&rate_slider, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&pitch_label, 0, SizerFlag::All, 4);
+    sizer.add(&pitch_slider, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&output_check, 0, SizerFlag::All, 8);
+    sizer.add(&preview, 0, SizerFlag::All, 4);
     sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight, 0);
     panel.set_sizer(sizer, true);
     let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
     dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
     dialog.set_sizer(dialog_sizer, true);
+
+    // Reads the engine id the picker currently shows.
+    let engines_for_read = engines.clone();
+    let engine_choice_for_read = engine_choice.clone();
+    let selected_engine = move || -> &'static str {
+        engines_for_read
+            .get(
+                engine_choice_for_read
+                    .get_selection()
+                    .map(|i| i as usize)
+                    .unwrap_or(0),
+            )
+            .map(|(id, _)| *id)
+            .unwrap_or(crate::tts::engines::SAPI)
+    };
+
+    // Switching engines invalidates the voice list: an ElevenLabs voice id
+    // means nothing to Azure. Rebuilding it is not cheap, though — a few
+    // hundred native combobox inserts plus a fresh MSAA object — and a wxChoice
+    // fires a selection change on *every* arrow key, so doing the work inline
+    // made arrowing from SAPI to Star pay for it nine times. Instead:
+    //
+    //   * `applied` records which engine the voice picker, count label and
+    //     pitch name currently reflect, so passing back through where you
+    //     started costs a pointer compare;
+    //   * `settle` is a one-shot timer restarted on each keypress, so the work
+    //     happens once, shortly after the user stops;
+    //   * leaving the control (Tab) applies immediately, because a user who has
+    //     moved on should not have to wait out a timer.
+    //
+    // A timer rather than a `run_when_ready` deadline: the pump is idle-driven,
+    // and no idle follows the user's last arrow key, so a polled deadline would
+    // never come due.
+    let applied = Rc::new(std::cell::Cell::new(selected_id));
+    // The voice picked per engine, for this dialog only. Without it, arrowing
+    // *through* an engine on the way to another one threw away the voice you
+    // had already chosen there.
+    let voice_memory: Rc<std::cell::RefCell<std::collections::HashMap<&'static str, String>>> =
+        Rc::new(std::cell::RefCell::new(
+            [(selected_id, current.voice.clone())].into_iter().collect(),
+        ));
+    let pitch_supported = Rc::new(std::cell::Cell::new(pitch_is_supported(selected_id)));
+
+    let apply_engine: Rc<dyn Fn()> = {
+        let voice_choice = voice_choice.clone();
+        let voice_count_label = voice_count_label.clone();
+        let pitch_slider = pitch_slider.clone();
+        let voices = voices.clone();
+        let selected_engine = selected_engine.clone();
+        let applied = applied.clone();
+        let voice_memory = voice_memory.clone();
+        let pitch_supported = pitch_supported.clone();
+        Rc::new(move || {
+            let engine = selected_engine();
+            if engine == applied.get() {
+                return;
+            }
+            let wanted = voice_memory
+                .borrow()
+                .get(engine)
+                .cloned()
+                .unwrap_or_default();
+            voice_choice.freeze();
+            fill_voice_choice(&voice_choice, &voices, engine, &wanted);
+            voice_choice.thaw();
+            update_voice_status(&voice_count_label, &voice_choice, engine);
+            let supported = pitch_is_supported(engine);
+            if supported != pitch_supported.replace(supported) {
+                set_pitch_name(&pitch_slider, engine);
+            }
+            applied.set(engine);
+        })
+    };
+
+    // Owned here so it dies with the dialog: a timer whose owner window has
+    // been destroyed keeps firing into freed memory (see the pump timer in
+    // `ui/mod.rs`). Stopped explicitly before `destroy()` below.
+    let settle = Rc::new(Timer::new(&dialog));
+    {
+        let apply_engine = apply_engine.clone();
+        let alive = alive.clone();
+        settle.on_tick(move |_| {
+            if alive.get() {
+                apply_engine();
+            }
+        });
+    }
+
+    {
+        let voice_choice = voice_choice.clone();
+        let voices = voices.clone();
+        let applied = applied.clone();
+        let voice_memory = voice_memory.clone();
+        let settle = settle.clone();
+        engine_choice.clone().on_selection_changed(move |_| {
+            // Remember what was picked for the engine we are leaving, then do
+            // nothing else until the user settles.
+            voice_memory
+                .borrow_mut()
+                .insert(applied.get(), selected_voice(&voice_choice, &voices));
+            settle.start(SETTLE_MS, true);
+        });
+    }
+
+    {
+        let apply_engine = apply_engine.clone();
+        let alive = alive.clone();
+        engine_choice.clone().on_kill_focus(move |event| {
+            if alive.get() {
+                apply_engine();
+            }
+            event.skip(true);
+        });
+    }
+
+    {
+        let voice_choice = voice_choice.clone();
+        let fetch_voices_btn = fetch_voices.clone();
+        let voices = voices.clone();
+        let selected_engine = selected_engine.clone();
+        let app = app.clone();
+        let panel = panel.clone();
+        let alive = alive.clone();
+        let apply_engine = apply_engine.clone();
+        let voice_count_label = voice_count_label.clone();
+        fetch_voices.on_click(move |_| {
+            // The picker may have changed within the settle window; fetching
+            // the previous engine's voices would be a wasted round trip.
+            apply_engine();
+            let engine = selected_engine();
+            crate::tts::forget_voices(engine);
+            // Blocking the UI thread on a voice fetch would freeze the dialog
+            // for as long as the service takes, so the button reports its own
+            // progress and the work happens off-thread.
+            fetch_voices_btn.set_label("Fetching voices…");
+            fetch_voices_btn.enable(false);
+            super::set_accessible_name(&fetch_voices_btn, "Fetching voices");
+
+            let speech = app.config.borrow().speech.clone();
+            let (sender, receiver) = crossbeam_channel::bounded(1);
+            std::thread::Builder::new()
+                .name("tts-voice-fetch".into())
+                .spawn(move || {
+                    let result = match crate::tts::engines::build(engine, &speech) {
+                        Some(built) => built.voices(),
+                        None => Ok(crate::tts::cached_voices(engine).unwrap_or_default()),
+                    };
+                    let _ = sender.send(result);
+                })
+                .ok();
+
+            let voice_choice = voice_choice.clone();
+            let voices = voices.clone();
+            let button = fetch_voices_btn.clone();
+            let panel = panel.clone();
+            let alive = alive.clone();
+            let voice_count_label = voice_count_label.clone();
+            // wxdragon has no cross-thread post, so the result is collected on
+            // the next idle tick rather than by blocking here.
+            super::run_when_ready(move || {
+                if !alive.get() {
+                    return true;
+                }
+                let Ok(result) = receiver.try_recv() else {
+                    return false;
+                };
+                button.set_label("&Get available voices");
+                button.enable(true);
+                super::set_accessible_name(&button, "Get available voices");
+                match result {
+                    Ok(fetched) if fetched.is_empty() => {
+                        crate::tts::store_voices(engine, fetched);
+                        update_voice_status(&voice_count_label, &voice_choice, engine);
+                        super::show_info(
+                            &panel,
+                            "Voices",
+                            "That engine reported no voices.",
+                        );
+                    }
+                    Ok(fetched) => {
+                        crate::tts::store_voices(engine, fetched);
+                        fill_voice_choice(&voice_choice, &voices, engine, "");
+                        update_voice_status(&voice_count_label, &voice_choice, engine);
+                    }
+                    Err(error) => {
+                        super::show_error(&panel, "Voices", &error.to_string());
+                    }
+                }
+                true
+            });
+        });
+    }
+
+    {
+        let app = app.clone();
+        let panel = panel.clone();
+        let voice_choice = voice_choice.clone();
+        let voices = voices.clone();
+        let volume_slider = volume_slider.clone();
+        let rate_slider = rate_slider.clone();
+        let pitch_slider = pitch_slider.clone();
+        let selected_engine = selected_engine.clone();
+        let alive = alive.clone();
+        let apply_engine = apply_engine.clone();
+        preview.on_click(move |_| {
+            apply_engine();
+            let engine = selected_engine();
+            let synth = crate::tts::engine::SynthRequest {
+                text: "Pubsplash text to speech is working.".into(),
+                voice: selected_voice(&voice_choice, &voices),
+                rate: rate_slider.value().clamp(-10, 10),
+                volume: volume_slider.value().clamp(0, 100) as u32,
+                pitch: pitch_slider.value().clamp(-50, 50),
+            };
+            preview_voice(&app, &panel, engine, synth, &alive);
+        });
+    }
 
     {
         let dialog = dialog.clone();
@@ -726,39 +987,180 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
 
-    if dialog.show_modal() == ID_OK {
-        let engine = engines
-            .get(
-                engine_choice
-                    .get_selection()
-                    .map(|i| i as usize)
-                    .unwrap_or(0),
-            )
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "sapi".into());
-        let voice_selection = voice_choice
-            .get_selection()
-            .map(|i| i as usize)
-            .unwrap_or(0);
-        let voice = if voice_selection == 0 {
-            String::new()
-        } else {
-            voices.get(voice_selection - 1).cloned().unwrap_or_default()
-        };
+    let outcome = dialog.show_modal();
+    // Nothing may have settled yet if OK was pressed straight after an arrow
+    // key; `selected_voice` below would then read the old engine's list.
+    apply_engine();
+    if outcome == ID_OK {
         set_source_kind(
             app,
             scene_index,
             source_index,
             SourceKindConfig::Tts(TtsSourceConfig {
-                engine,
-                voice,
+                engine: selected_engine().to_string(),
+                voice: selected_voice(&voice_choice, &voices),
                 volume: volume_slider.value().clamp(0, 100) as u32,
                 rate: rate_slider.value().clamp(-10, 10),
+                pitch: pitch_slider.value().clamp(-50, 50),
                 output_to_stream: output_check.get_value(),
             }),
         );
     }
+    alive.set(false);
+    settle.stop();
     dialog.destroy();
+}
+
+/// How long the engine picker waits after the last keypress before rebuilding
+/// the voice list. Long enough to arrow through all nine engines without
+/// stopping, short enough to feel immediate once you land.
+const SETTLE_MS: i32 = 300;
+
+/// Whether an engine honours the pitch slider at all.
+fn pitch_is_supported(engine: &str) -> bool {
+    use crate::tts::engines;
+    matches!(engine, engines::EDGE | engines::AZURE | engines::GOOGLE)
+}
+
+/// The count line for `engine`, given what is cached for it.
+///
+/// Split out from the widget so the three cases can be tested: "never fetched"
+/// and "fetched and empty" are different answers and must not collapse.
+fn voice_status_text(engine: &str, count: Option<usize>) -> String {
+    let name = crate::tts::engines::display_name(engine);
+    match count {
+        Some(0) => format!("{name} reported no voices."),
+        Some(1) => format!("1 voice available for {name}."),
+        Some(n) => format!("{n} voices available for {name}."),
+        None => format!("Voices for {name} not fetched yet. Use Get available voices."),
+    }
+}
+
+/// Refreshes the count label, and the picker's accessible name from the same
+/// text so the spoken and the visible answer can never disagree.
+fn update_voice_status(label: &StaticText, choice: &Choice, engine: &str) {
+    let text = voice_status_text(engine, crate::tts::voice_count(engine));
+    label.set_label(&text);
+    super::set_accessible_name(choice, &format!("Voice. {text}"));
+}
+
+/// Repopulates the voice picker for `engine`, selecting `wanted` if it is
+/// still in the list.
+///
+/// Engines whose voices have not been fetched yet show only "Default voice" —
+/// the fetch button fills the rest in. That keeps opening the dialog instant
+/// even when the configured engine is a slow cloud service.
+fn fill_voice_choice(
+    choice: &Choice,
+    voices: &Rc<std::cell::RefCell<Vec<crate::tts::engine::Voice>>>,
+    engine: &str,
+    wanted: &str,
+) {
+    let fetched = crate::tts::cached_voices(engine).unwrap_or_default();
+    choice.clear();
+    choice.append("Default voice");
+    for voice in &fetched {
+        choice.append(&voice.label);
+    }
+    let selection = fetched
+        .iter()
+        .position(|v| v.id == wanted)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    choice.set_selection(selection as u32);
+    *voices.borrow_mut() = fetched;
+}
+
+/// The voice id the picker is showing; empty means the engine default.
+fn selected_voice(
+    choice: &Choice,
+    voices: &Rc<std::cell::RefCell<Vec<crate::tts::engine::Voice>>>,
+) -> String {
+    let selection = choice.get_selection().map(|i| i as usize).unwrap_or(0);
+    if selection == 0 {
+        return String::new();
+    }
+    voices
+        .borrow()
+        .get(selection - 1)
+        .map(|v| v.id.clone())
+        .unwrap_or_default()
+}
+
+/// Names the pitch slider, saying so when the engine ignores it.
+fn set_pitch_name(slider: &Slider, engine: &str) {
+    super::set_accessible_name(
+        slider,
+        if pitch_is_supported(engine) {
+            "Voice pitch"
+        } else {
+            "Voice pitch, not supported by this engine"
+        },
+    );
+}
+
+/// Synthesizes a fixed phrase and reports the outcome.
+///
+/// This is the only way a user can tell a wrong API key from a silent source:
+/// chat-driven failures are deliberately reported quietly, but a button the
+/// user just pressed should answer them directly.
+fn preview_voice(
+    app: &Rc<App>,
+    parent: &Panel,
+    engine: &'static str,
+    synth: crate::tts::engine::SynthRequest,
+    alive: &Rc<std::cell::Cell<bool>>,
+) {
+    if !crate::tts::engines::is_network(engine) {
+        // SAPI speaks locally on its own thread; there is nothing to report.
+        app.speaker.speak(crate::tts::speaker::SpeakRequest {
+            engine: engine.to_string(),
+            synth,
+            source_name: String::new(),
+            to_stream: false,
+            speech: app.config.borrow().speech.clone(),
+        });
+        return;
+    }
+
+    let speech = app.config.borrow().speech.clone();
+    let (sender, receiver) = crossbeam_channel::bounded(1);
+    std::thread::Builder::new()
+        .name("tts-preview".into())
+        .spawn(move || {
+            let result = match crate::tts::engines::build(engine, &speech) {
+                Some(built) => built.synth(&synth.truncated(speech.max_chars())),
+                None => Ok(Vec::new()),
+            };
+            let _ = sender.send(result);
+        })
+        .ok();
+
+    let parent = parent.clone();
+    let alive = alive.clone();
+    super::run_when_ready(move || {
+        if !alive.get() {
+            return true;
+        }
+        let Ok(result) = receiver.try_recv() else {
+            return false;
+        };
+        match result {
+            Ok(samples) if samples.is_empty() => super::show_error(
+                &parent,
+                "Preview voice",
+                "The engine returned no audio.",
+            ),
+            Ok(samples) => {
+                // Played through the app's own cue output rather than a mixer
+                // source, so a preview works before the source exists and can
+                // never reach the stream.
+                crate::audio::cue::play_samples_async(std::sync::Arc::new(samples));
+            }
+            Err(error) => super::show_error(&parent, "Preview voice", &error.to_string()),
+        }
+        true
+    });
 }
 fn edit_sound_events(
     app: &Rc<App>,
@@ -881,4 +1283,54 @@ fn edit_sound_events(
         );
     }
     dialog.destroy();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tts::engines;
+
+    /// The whole point of the label: "we have never asked" and "we asked and
+    /// there were none" are different answers, and neither is a number.
+    #[test]
+    fn voice_status_distinguishes_unfetched_from_empty() {
+        let unfetched = voice_status_text(engines::AZURE, None);
+        assert!(unfetched.contains("not fetched"), "{unfetched}");
+        assert!(unfetched.contains("Azure"), "{unfetched}");
+
+        let empty = voice_status_text(engines::AZURE, Some(0));
+        assert!(empty.contains("no voices"), "{empty}");
+        assert!(!empty.contains("not fetched"), "{empty}");
+    }
+
+    #[test]
+    fn voice_status_names_the_engine_and_the_count() {
+        assert_eq!(
+            voice_status_text(engines::ELEVENLABS, Some(42)),
+            "42 voices available for ElevenLabs."
+        );
+        assert_eq!(
+            voice_status_text(engines::STAR, Some(1)),
+            "1 voice available for Star."
+        );
+    }
+
+    /// The pitch slider's name is derived from this, and `TtsSourceConfig`'s
+    /// docs record the same split from the other side.
+    #[test]
+    fn only_the_ssml_engines_support_pitch() {
+        for engine in [engines::EDGE, engines::AZURE, engines::GOOGLE] {
+            assert!(pitch_is_supported(engine), "{engine}");
+        }
+        for engine in [
+            engines::SAPI,
+            engines::OPENAI,
+            engines::GTTS,
+            engines::AWS,
+            engines::ELEVENLABS,
+            engines::STAR,
+        ] {
+            assert!(!pitch_is_supported(engine), "{engine}");
+        }
+    }
 }

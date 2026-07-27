@@ -9,9 +9,10 @@
 //! capture excludes Pubsplash's own process, so local playback can never
 //! loop back into the stream.
 
-use crate::audio::mixer::{CHANNELS, SAMPLE_RATE};
+use super::engine::SynthRequest;
+use super::queue::Queue;
 use crate::audio::ExternalFeeds;
-use crossbeam_channel::{Receiver, Sender};
+use crate::audio::mixer::{CHANNELS, SAMPLE_RATE};
 use windows::Win32::Foundation::HGLOBAL;
 use windows::Win32::Media::Audio::WAVEFORMATEX;
 use windows::Win32::Media::Speech::{
@@ -55,47 +56,38 @@ pub fn voice_names() -> Vec<String> {
     voices
 }
 
+/// One utterance for the apartment thread.
+///
+/// SAPI is the only engine that both speaks locally and renders to the mix, so
+/// unlike the network engines it needs `to_stream` as a separate flag: local
+/// playback happens either way.
 #[derive(Debug, Clone)]
-pub struct SpeakRequest {
-    pub text: String,
-    /// Voice display name; empty selects the SAPI default voice.
-    pub voice: String,
-    /// -10..=10.
-    pub rate: i32,
-    /// 0..=100.
-    pub volume: u32,
+pub struct SapiRequest {
+    pub synth: SynthRequest,
     /// Name of the TTS source in the audio engine to feed, when streaming.
     pub source_name: String,
     /// Also synthesize into the outgoing stream mix.
     pub to_stream: bool,
 }
 
-/// Handle to the speech thread. Dropping it stops the thread.
-pub struct Speaker {
-    sender: Sender<SpeakRequest>,
-}
-
-impl Speaker {
-    pub fn start(feeds: ExternalFeeds) -> Self {
-        let (sender, receiver) = crossbeam_channel::unbounded();
-        std::thread::Builder::new()
-            .name("sapi-speech".into())
-            .spawn(move || speech_thread(receiver, feeds))
-            .expect("spawning SAPI speech thread");
-        Self { sender }
+/// Starts the apartment thread and returns the queue that feeds it.
+pub fn start(feeds: ExternalFeeds) -> Queue<SapiRequest> {
+    let queue = Queue::new(super::speaker::QUEUE_DEPTH);
+    let worker = queue.clone();
+    let spawned = std::thread::Builder::new()
+        .name("sapi-speech".into())
+        .spawn(move || speech_thread(worker, feeds));
+    if let Err(error) = spawned {
+        log::error!("Could not start the SAPI speech thread: {error}");
     }
-
-    /// Queues text for speech; never blocks.
-    pub fn speak(&self, request: SpeakRequest) {
-        let _ = self.sender.send(request);
-    }
+    queue
 }
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn speech_thread(receiver: Receiver<SpeakRequest>, feeds: ExternalFeeds) {
+fn speech_thread(queue: Queue<SapiRequest>, feeds: ExternalFeeds) {
     unsafe {
         // SAPI wants an apartment; errors here leave TTS silently disabled.
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -116,28 +108,29 @@ fn speech_thread(receiver: Receiver<SpeakRequest>, feeds: ExternalFeeds) {
         // enumeration per chat message, which is exactly what this was written
         // to avoid.
         let mut current_token: Option<ISpObjectToken> = None;
-        while let Ok(request) = receiver.recv() {
-            if request.voice != current_voice {
-                current_token = find_voice_token(&request.voice);
+        while let Some(request) = queue.pop() {
+            let synth = &request.synth;
+            if synth.voice != current_voice {
+                current_token = find_voice_token(&synth.voice);
                 match &current_token {
                     Some(t) => {
                         if let Err(e) = voice.SetVoice(t) {
-                            log::warn!("Could not select voice {:?}: {e}", request.voice);
+                            log::warn!("Could not select voice {:?}: {e}", synth.voice);
                         }
                     }
-                    None if !request.voice.is_empty() => {
-                        log::warn!("Voice {:?} not found; keeping current voice", request.voice);
+                    None if !synth.voice.is_empty() => {
+                        log::warn!("Voice {:?} not found; keeping current voice", synth.voice);
                     }
                     None => {}
                 }
-                current_voice = request.voice.clone();
+                current_voice = synth.voice.clone();
             }
             let token = current_token.clone();
-            let _ = voice.SetRate(request.rate.clamp(-10, 10));
-            let _ = voice.SetVolume(request.volume.clamp(0, 100) as u16);
+            let _ = voice.SetRate(synth.rate.clamp(-10, 10));
+            let _ = voice.SetVolume(synth.volume.clamp(0, 100) as u16);
 
             // Local playback (async so queued messages stay responsive).
-            let text = wide(&request.text);
+            let text = wide(&synth.text);
             if let Err(e) = voice.Speak(PCWSTR(text.as_ptr()), SPF_ASYNC.0 as u32, None) {
                 log::error!("SAPI speak failed: {e}");
             }
@@ -145,7 +138,7 @@ fn speech_thread(receiver: Receiver<SpeakRequest>, feeds: ExternalFeeds) {
             // Stream synthesis: render the same text to PCM and feed the
             // engine while the local speech plays.
             if request.to_stream {
-                match synth_to_pcm(&request, token.as_ref()) {
+                match synth_to_pcm(synth, token.as_ref()) {
                     Ok(samples) => feeds.feed_all(&request.source_name, &samples, "TTS"),
                     Err(e) => log::error!("TTS stream synthesis failed: {e}"),
                 }
@@ -157,7 +150,7 @@ fn speech_thread(receiver: Receiver<SpeakRequest>, feeds: ExternalFeeds) {
 /// Renders text to 48 kHz stereo f32 samples using a dedicated voice bound
 /// to a memory stream.
 unsafe fn synth_to_pcm(
-    request: &SpeakRequest,
+    request: &SynthRequest,
     token: Option<&ISpObjectToken>,
 ) -> windows::core::Result<Vec<f32>> {
     unsafe {
@@ -251,13 +244,12 @@ mod tests {
     fn sapi_synthesizes_pcm() {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            let request = SpeakRequest {
+            let request = SynthRequest {
                 text: "Testing stream synthesis.".into(),
                 voice: String::new(),
                 rate: 0,
                 volume: 100,
-                source_name: String::new(),
-                to_stream: true,
+                pitch: 0,
             };
             let samples = synth_to_pcm(&request, None).expect("synthesis");
             // A couple of words should be at least half a second of audio.

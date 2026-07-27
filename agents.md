@@ -21,6 +21,10 @@ This file defines standard procedures every AI agent must follow when working on
 - The keyboard shortcut table must list every shortcut the app actually binds.
 - The README is converted to HTML and shipped with releases, so keep it self-contained (no relative links into the source tree).
 
+## Coding Strategy
+
+- Whenever a decision is reached to accomplish a task by polling, determine if the same task can be done via an event driven approach, if so, prefer it unless there's a good reason not to, then explain why it was done in the summary
+
 ## Other conventions
 
 - The app version shown in the About dialog comes from `Cargo.toml`; bump it as part of cutting a release.

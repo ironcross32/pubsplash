@@ -14,6 +14,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - Sources name themselves after what they capture â€” the microphone device, the running application's real name, the chosen speech voice â€” so the mixer's sliders say exactly what you are adjusting even with several of the same type in a scene
 - Sources reconnect on their own if their device is unplugged, resets, or is not ready yet when Pubsplash starts. A source that is retrying reads "(reconnecting)" on its mixer strip, and a source set to a particular microphone is never silently switched to a different one
 - Chat: read incoming messages in an accessible list, send outbound messages, and have chat read aloud automatically with text-to-speech (optionally spoken into the stream as well)
+- Nine speech engines: SAPI 5 and Microsoft Edge need no setup, and Google Translate, OpenAI, ElevenLabs, Azure, AWS Polly, Google Cloud, and a self-hosted Star server are available once you enter their credentials on the Speech tab of Preferences. Keys are encrypted for your Windows account
 - Loop-safe by design: Desktop Audio capture excludes Pubsplash's own audio, so text-to-speech and sound cues can never echo into your stream
 - Built-in startup and shutdown sounds, each able to be switched off, plus audio cues for stream events (listener changes, incoming and outgoing messages) that you can send to your listeners or keep to yourself
 - A fully keyboard-accessible mixer with per-source volume and mute, plus an optional per-strip volume boost for sources that are too quiet at 100%
@@ -49,6 +50,8 @@ To record locally without going live, use **Start recording** (`ALT+R`) next to 
 | `ALT+V` | View the focused chat message in a window (Chat tab) |
 | `Escape` | Clear the chat input box |
 | `CTRL+,` | Open Preferences |
+| `CTRL+M` | Toggle monitoring for the focused mixer strip |
+| `ALT+G` / `ALT+P` | Get available voices / preview the voice (Text-to-Speech source dialog) |
 | `CTRL+Up` / `CTRL+Down` | Move the focused scene, source, bus, or plugin |
 | `Delete` | Remove the focused scene, source, bus, send, or plugin |
 | `CTRL+Tab` / `CTRL+Shift+Tab` | Next / previous parameter (plugin parameter dialog) |
@@ -115,6 +118,44 @@ Open **File â†’ Preferences** (`CTRL+,`) and choose the **VST plugins** tab
 
 Press **Scan for new plugins** to scan only files that haven't been scanned before, or **Rescan all plugins** to start over. Scans are able to be canceled at any time. If a plugin is taking too long and you suspect it's not going to scan, you can skip it. If a scan runs to completion, a cache will be written alongside Pubsplash's configuration file and these plugins will become available to use immediately.
 
+## Text-to-speech
+
+A **Text-to-Speech** source reads incoming chat aloud. Add one from the Sources list on the **Scenes** tab, and its dialog lets you choose the engine, the voice, and the rate, volume, and pitch.
+
+Nine engines are available:
+
+| Engine | Setup needed | Notes |
+| --- | --- | --- |
+| SAPI 5 | None | The voices already installed on Windows. The default, and the only engine that works offline. |
+| Microsoft Edge | None | The Edge read-aloud voices. Needs an internet connection, but no account. |
+| Google Translate | None | Free, unofficial, and rate-limited. Choose a language rather than a voice. |
+| OpenAI | API key | |
+| ElevenLabs | API key | |
+| Azure | Subscription key and region | |
+| AWS Polly | Access key ID, secret access key, and region | |
+| Google Cloud | API key | |
+| Star | The address of your own Star server | |
+
+Credentials go on the **Speech** tab of **File → Preferences** (`CTRL+,`), once each, rather than on every source. They are encrypted for your Windows account, so copying `config.json` to another machine will not carry your keys with it.
+
+That tab starts with a **Speech engine** picker, and everything after it belongs to whichever engine the picker names — so tabbing to the ElevenLabs key does not take you past OpenAI, Azure, AWS and Google first. The three engines that need no setup say so. The tab reopens on the engine you were last looking at.
+
+Engines other than SAPI 5 and Google Translate publish their voice lists over the network, so their voice pickers start out holding only **Default voice**. The line under the picker says how many voices the selected engine has, or that they have not been fetched yet. Press **Get available voices** (`ALT+G`) to fill the list; it is remembered until you change the credentials or restart. Press **Preview voice** (`ALT+P`) to hear the current settings — this is the quickest way to find out whether a key is wrong, because it reports the reason rather than just going quiet.
+
+Changing the engine reloads the voice list, which takes a moment for the long ones, so it happens a fraction of a second after you stop moving through the picker — or immediately when you tab out of it. Arrowing through all nine engines to reach the one you want costs nothing.
+
+### Hearing it, and sending it
+
+SAPI 5 speaks to you directly, whatever else is going on. The other engines produce audio that goes through the mixer like any other source, so to hear those yourself, turn on monitoring for the TTS source's mixer strip with `CTRL+M`.
+
+**Send speech to the stream** controls whether your listeners hear it. With it unchecked, the speech stays off the stream but still reaches your monitor and any buses the source sends to.
+
+### Cost and flood control
+
+The Speech tab has two limits that apply to every network engine. **Longest message to speak** cuts over-long chat messages short rather than skipping them, so one wall of text cannot tie up the engine. **Shortest gap between requests** spreads out a burst of chat so a busy stream does not run up a bill or trip a rate limit. When messages still arrive faster than they can be spoken, the oldest queued ones are dropped, so what you hear stays current.
+
+If an engine fails — a wrong key, no network, a service outage — the reason appears in the chat list rather than in a dialog box, and repeats of the same failure are held down to one a minute.
+
 ## Configuration
 
 Pubsplash stores its configuration data in `C:\Users\<Your-user-name>\AppData\Local\pubsplash`.
@@ -149,7 +190,7 @@ A Sound Events source plays cues into its scene from the sound pack built into P
 
 Choosing a sound pack of your own is not wired up yet — it will live on the **Sound packs** tab in Preferences. You can still author packs today with the Sound Pack Manager described below.
 
-By default a Sound Events source's cues go out to your listeners. Clear **Send these sounds to the stream** in the edit dialog to keep them to yourself — they then play on the default Windows output device only, and never reach the stream mix or a recording. Cues kept local bypass the mixer, so the source's volume slider no longer affects them; muting the source still silences them.
+A Sound Events source's cues always play on your default Windows output device, so you hear them whatever else is going on. By default they also go out to your listeners; clear **Send these sounds to the stream** in the edit dialog to keep them to yourself, and they then never reach the stream mix or a recording. The copy you hear bypasses the mixer, so the source's volume slider only affects what your listeners hear; muting the source silences the cues everywhere.
 
 Pubsplash includes a default sound pack baked into the executable. Its startup and shutdown cues play locally on the default Windows output device; they do not enter the stream mix or local recordings. Either can be turned off under **File > Preferences** (`CTRL+,`) on the **Sound packs** tab, in the **Interface sounds** group. With the shut-down sound off, closing the window is immediate instead of waiting for the cue to finish.
 

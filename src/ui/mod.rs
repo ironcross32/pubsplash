@@ -327,7 +327,7 @@ pub struct App {
     pub run: RefCell<Runtime>,
     pub engine: AudioEngine,
     pub net: NetHandle,
-    pub speaker: crate::tts::sapi::Speaker,
+    pub speaker: crate::tts::speaker::Speaker,
     pub widgets: RefCell<Option<Widgets>>,
     pub connect_ui: RefCell<Option<ConnectUi>>,
     /// Plugins known from the last completed scan (vst_plugins.json).
@@ -393,9 +393,10 @@ pub struct FxRuntime {
 /// Plays an event through each enabled Sound Events source in the active scene.
 ///
 /// Every source uses the sound pack baked into the executable; per-source pack
-/// selection is not exposed yet. A source that sends to the stream feeds the
-/// mixer through `ExternalFeeds`; one that does not plays locally through
-/// `audio::cue`, so only the broadcaster hears it. The local path bypasses the
+/// selection is not exposed yet. The broadcaster always hears the cue locally
+/// through `audio::cue`; `output_to_stream` only decides whether the same
+/// samples are *also* fed to the mixer through `ExternalFeeds` so listeners hear
+/// them. (TTS works the same way - see `tts::sapi`.) The local path bypasses the
 /// strip, so it honours the source's mute (filtered below) but not its volume.
 fn play_sound_event(app: &Rc<App>, event: crate::soundpack::StreamEvent) {
     let targets: Vec<(String, bool)> = {
@@ -425,21 +426,20 @@ fn play_sound_event(app: &Rc<App>, event: crate::soundpack::StreamEvent) {
         return;
     };
     for (source_name, to_stream) in targets {
-        if !to_stream {
-            // `play_sound_kind_async` already picks a variant out of the same
-            // pack and owns the playback thread from here.
-            crate::audio::cue::play_sound_kind_async(sound);
-            continue;
-        }
         // Decoded on the pack's own cache, so a burst of chat messages costs
-        // one WAV parse per variant rather than one per message.
+        // one WAV parse per variant rather than one per message. Picking the
+        // variant here rather than inside each player means the copy the
+        // broadcaster hears is the same one the listeners get.
         let Some(samples) = pack.random_decoded(sound) else {
             continue;
         };
-        let feeds = app.engine.external_feeds.clone();
-        std::thread::spawn(move || {
-            feeds.feed_all(&source_name, &samples, "Sound events");
-        });
+        crate::audio::cue::play_samples_async(samples.clone());
+        if to_stream {
+            let feeds = app.engine.external_feeds.clone();
+            std::thread::spawn(move || {
+                feeds.feed_all(&source_name, &samples, "Sound events");
+            });
+        }
     }
 }
 
@@ -455,6 +455,48 @@ fn sound_event_enabled(
         crate::soundpack::StreamEvent::OutgoingChat => settings.outgoing_chat,
     }
 }
+/// Whether a source's audio should reach the master mix.
+///
+/// Only TTS sources can answer no. A network engine has no local voice of its
+/// own — the mixer is the only way its speech is ever heard — so it always
+/// feeds the strip, and "Send speech to the stream" is honoured here instead,
+/// by keeping the strip off master. The user still hears it by monitoring the
+/// strip (CTRL+M), and it still reaches any buses the source sends to.
+/// Surfaces speech failures the workers reported, into the chat log.
+///
+/// Not a dialog: these arrive while chat is flowing, and a modal per failed
+/// message would make a wrong API key unusable rather than merely annoying.
+/// The chat list is where the user is already reading, it persists, and a
+/// screen reader reaches it — and the worker has already rate-limited repeats
+/// to one a minute, so this cannot flood.
+/// Returns how many entries were added, so the caller refreshes the list.
+fn report_speech_problems(app: &Rc<App>) -> usize {
+    let problems = app.speaker.take_problems();
+    if problems.is_empty() {
+        return 0;
+    }
+    let mut run = app.run.borrow_mut();
+    let added = problems.len();
+    for problem in problems {
+        run.chat.push(ChatEntry::new(
+            "Speech".into(),
+            format!(
+                "{} could not speak: {}",
+                crate::tts::engines::display_name(&problem.engine),
+                problem.message
+            ),
+        ));
+    }
+    added
+}
+
+fn tts_reaches_the_stream(source: &crate::config::SourceConfig) -> bool {
+    match &source.kind {
+        SourceKindConfig::Tts(tts) => tts.output_to_stream,
+        _ => true,
+    }
+}
+
 /// Reads an incoming chat message through every unmuted TTS source in the
 /// active scene.
 fn speak_chat(app: &Rc<App>, user: &str, content: &str) {
@@ -469,17 +511,24 @@ fn speak_chat(app: &Rc<App>, user: &str, content: &str) {
         if source.muted {
             continue;
         }
-        // Only SAPI speaks in this version; other engines are upcoming.
-        if tts.engine == "sapi" {
-            app.speaker.speak(crate::tts::sapi::SpeakRequest {
+        app.speaker.speak(crate::tts::speaker::SpeakRequest {
+            engine: tts.engine.clone(),
+            synth: crate::tts::engine::SynthRequest {
                 text: format!("{user}: {content}"),
                 voice: tts.voice.clone(),
                 rate: tts.rate,
                 volume: tts.volume,
-                source_name: source.name.clone(),
-                to_stream: tts.output_to_stream,
-            });
-        }
+                pitch: tts.pitch,
+            },
+            source_name: source.name.clone(),
+            // A network engine has no local voice, so the mixer is its only
+            // path out — it always feeds, and the source's own routing decides
+            // whether that reaches the stream. SAPI speaks locally regardless,
+            // so for it this really is "also send it to the stream".
+            to_stream: tts.output_to_stream
+                || crate::tts::engines::is_network(&tts.engine),
+            speech: config.speech.clone(),
+        });
     }
 }
 
@@ -705,7 +754,7 @@ impl App {
                 volume: s.volume,
                 muted: s.muted,
                 monitor: monitors.source(index),
-                to_master: s.to_master,
+                to_master: s.to_master && tts_reaches_the_stream(s),
                 sends: s
                     .sends
                     .iter()
@@ -1568,14 +1617,46 @@ impl Drop for PumpGuard {
 /// of a call that is part-way through and may be holding an `App` borrow. The
 /// guard makes the nested call a no-op; the events are still there for the
 /// outer call (or the next tick) to drain.
+/// Callbacks waiting on a background thread, run from the pump.
+///
+/// wxdragon has no post-to-UI-thread primitive, so work that must touch
+/// widgets after a worker finishes parks a polling closure here instead. Each
+/// returns `true` when it is done and should be dropped. The UI thread owns
+/// this outright — hence `thread_local` rather than a lock.
+type PendingCallback = Box<dyn FnMut() -> bool>;
+
+thread_local! {
+    static PENDING: std::cell::RefCell<Vec<PendingCallback>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Runs `callback` on each pump tick until it returns `true`.
+///
+/// Must be called from the UI thread; the callback runs there too, so it may
+/// touch widgets freely.
+pub fn run_when_ready(callback: impl FnMut() -> bool + 'static) {
+    PENDING.with(|pending| pending.borrow_mut().push(Box::new(callback)));
+}
+
+/// Polls every parked callback, dropping the ones that report completion.
+fn run_pending() {
+    // Taken before running: a callback may park another (a fetch that leads to
+    // a preview), and appending to a borrowed vector would panic.
+    let mut callbacks = PENDING.with(|pending| std::mem::take(&mut *pending.borrow_mut()));
+    callbacks.retain_mut(|callback| !callback());
+    PENDING.with(|pending| pending.borrow_mut().extend(callbacks));
+}
+
 fn pump_events(app: &Rc<App>) {
     if app.pumping.replace(true) {
         return;
     }
     let _guard = PumpGuard(app.clone());
 
+    run_pending();
+
     let mut stream_ui_dirty = false;
-    let mut chat_arrived = 0usize;
+    let mut chat_arrived = report_speech_problems(app);
     let mut sound_events = Vec::new();
 
     while let Ok(event) = app.net.events.try_recv() {

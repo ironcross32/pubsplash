@@ -205,6 +205,96 @@ file = "src/ui/preferences.rs"
 message = "When checked, Pubsplash plays a short sound as it launches, so you know it is loading. Only you hear this sound; it is never sent to the stream."
 
 [[control]]
+id = "dialog.preferences.speech.awsEngine"
+label = "Polly engine"
+file = "src/ui/preferences.rs"
+message = "Which Polly voice engine to use. Neural sounds better; standard is cheaper and offers different voices."
+
+[[control]]
+id = "dialog.preferences.speech.awsId"
+label = "AWS access key ID"
+file = "src/ui/preferences.rs"
+message = "Your AWS access key ID, for Polly."
+
+[[control]]
+id = "dialog.preferences.speech.awsRegion"
+label = "AWS region"
+file = "src/ui/preferences.rs"
+message = "The AWS region to send Polly requests to, for example us-east-1."
+
+[[control]]
+id = "dialog.preferences.speech.awsSecret"
+label = "AWS secret access key"
+file = "src/ui/preferences.rs"
+message = "Your AWS secret access key. It is encrypted for your Windows account before being saved."
+
+[[control]]
+id = "dialog.preferences.speech.azureKey"
+label = "Azure subscription key"
+file = "src/ui/preferences.rs"
+message = "Type or paste your Azure Speech subscription key. It is encrypted for your Windows account before being saved."
+
+[[control]]
+id = "dialog.preferences.speech.azureRegion"
+label = "Azure region"
+file = "src/ui/preferences.rs"
+message = "The Azure region your Speech resource lives in, for example eastus. Azure will not answer without it."
+
+[[control]]
+id = "dialog.preferences.speech.elevenlabsKey"
+label = "ElevenLabs API key"
+file = "src/ui/preferences.rs"
+message = "Type or paste your ElevenLabs API key. It is encrypted for your Windows account before being saved."
+
+[[control]]
+id = "dialog.preferences.speech.elevenlabsModel"
+label = "ElevenLabs model"
+file = "src/ui/preferences.rs"
+message = "The ElevenLabs model id to synthesize with, for example eleven multilingual v2. Leave it as it is if you are not sure."
+
+[[control]]
+id = "dialog.preferences.speech.engine"
+label = "Speech engine choice"
+file = "src/ui/preferences.rs"
+message = "Choose which speech engine's settings to fill in. Everything below this box belongs to the engine named here, so you only tab through the one you are working on. SAPI 5, Microsoft Edge and Google Translate need nothing filled in. This is only about entering credentials; you pick the engine a source actually speaks with in that source's own dialog, on the Scenes tab. Pubsplash reopens this tab on whichever engine you were last looking at."
+
+[[control]]
+id = "dialog.preferences.speech.googleKey"
+label = "Google Cloud API key"
+file = "src/ui/preferences.rs"
+message = "Type or paste your Google Cloud Text to Speech API key. It is encrypted for your Windows account before being saved."
+
+[[control]]
+id = "dialog.preferences.speech.googleLanguage"
+label = "Google Cloud language code"
+file = "src/ui/preferences.rs"
+message = "The default language code for Google Cloud voices, for example en dash US. Choosing a voice overrides this."
+
+[[control]]
+id = "dialog.preferences.speech.maxChars"
+label = "Maximum message length"
+file = "src/ui/preferences.rs"
+message = "The longest chat message that will be spoken. Longer messages are cut short rather than skipped. This keeps one very long message from tying up the speech engine, and keeps costs down on the paid services."
+
+[[control]]
+id = "dialog.preferences.speech.minInterval"
+label = "Minimum request interval"
+file = "src/ui/preferences.rs"
+message = "The shortest gap between two requests to a speech service, in milliseconds. Raising it spreads out a burst of chat messages so a busy stream does not run up a bill or hit a rate limit."
+
+[[control]]
+id = "dialog.preferences.speech.openaiKey"
+label = "OpenAI API key"
+file = "src/ui/preferences.rs"
+message = "Type or paste your OpenAI API key. It is encrypted for your Windows account before being saved."
+
+[[control]]
+id = "dialog.preferences.speech.starHost"
+label = "Star server URL"
+file = "src/ui/preferences.rs"
+message = "The WebSocket address of your Star coagulator, for example ws colon slash slash localhost colon 4567."
+
+[[control]]
 id = "dialog.preferences.vst.addFolder"
 label = "Add plugin folder button"
 file = "src/ui/preferences.rs"
@@ -298,7 +388,7 @@ message = "When checked, this source plays a sound each time you send a chat mes
 id = "dialog.soundEventsSource.toStream"
 label = "Send these sounds to the stream checkbox"
 file = "src/ui/scenes.rs"
-message = "Checked by default, so your listeners hear these cues along with you. Uncheck it to keep them to yourself: the sounds then play on your own speakers only and never reach the stream or a recording. Note that with it unchecked the sounds bypass the mixer, so this source's volume slider no longer affects them, though muting the source still silences them."
+message = "This only controls whether your listeners hear these cues; you always hear them yourself either way. Checked by default, so the cues are mixed into the stream along with playing on your own speakers. Uncheck it to keep them to yourself: they then never reach the stream or a recording. Note that the copy you hear bypasses the mixer, so this source's volume slider only affects what your listeners hear, though muting the source silences the cues everywhere."
 
 [[control]]
 id = "dialog.streamInfo.archive"
@@ -334,7 +424,25 @@ message = "Type the title of your stream here."
 id = "dialog.ttsSource.engine"
 label = "TTS engine choice"
 file = "src/ui/scenes.rs"
-message = "use arrow keys and first letter navigation to select a TTS engine."
+message = "Use arrow keys and first letter navigation to select a TTS engine. Arrow through as fast as you like: the voice list is reloaded a moment after you stop, or straight away when you tab out of this box, so passing over engines on the way costs nothing."
+
+[[control]]
+id = "dialog.ttsSource.fetchVoices"
+label = "Get available voices button"
+file = "src/ui/scenes.rs"
+message = "Press to download the list of voices this engine offers. Engines that need an API key will report an error here if the key is missing or wrong. The voice list is remembered until you change the key or restart."
+
+[[control]]
+id = "dialog.ttsSource.pitch"
+label = "TTS voice pitch slider"
+file = "src/ui/scenes.rs"
+message = "Use arrows, page up, page down, home and end to set the pitch of this voice. Only Microsoft Edge, Azure, and Google Cloud support pitch; for other engines this control is announced as unsupported and has no effect."
+
+[[control]]
+id = "dialog.ttsSource.preview"
+label = "Preview voice button"
+file = "src/ui/scenes.rs"
+message = "Press to hear a test phrase with the current engine, voice, rate, volume, and pitch. The preview plays only to you and never reaches the stream. If synthesis fails, the reason is shown here, which is the quickest way to check an API key."
 
 [[control]]
 id = "dialog.ttsSource.rate"
@@ -346,13 +454,13 @@ message = "Use arrows, page up, page down, home and end to set the rate of the s
 id = "dialog.ttsSource.toStream"
 label = "Send speech to the stream checkbox"
 file = "src/ui/scenes.rs"
-message = "When this iss checked, speech is heard locally but also through the stream, otherwise, only you will hear it."
+message = "When this is checked, speech is mixed into the outgoing stream. When it is not, the speech stays off the stream; SAPI still speaks it locally, and for the other engines you hear it by turning on monitoring for this source in the mixer with control M."
 
 [[control]]
 id = "dialog.ttsSource.voice"
 label = "TTS voice choice"
 file = "src/ui/scenes.rs"
-message = "Use arrow keys and first letter navigation to choose the tts voice for this engine."
+message = "Use arrow keys and first letter navigation to choose the tts voice for this engine. This box reports how many voices are available, or says they have not been fetched yet; the same line appears below it. Default voice leaves the choice to the engine."
 
 [[control]]
 id = "dialog.ttsSource.volume"

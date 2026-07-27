@@ -4,9 +4,31 @@
 
 ### Additions
 
+- Text-to-speech now offers nine engines instead of one. **SAPI 5** and **Microsoft Edge** need no setup at all; **Google Translate**, **OpenAI**, **ElevenLabs**, **Azure**, **AWS Polly**, **Google Cloud**, and a self-hosted **Star** server become available once you enter their credentials.
+
+- A new **Speech** tab in **File > Preferences** holds those credentials, entered once each rather than on every source. Keys are encrypted for your Windows account, so a copied settings file is of no use on another machine. The tab starts with a **Speech engine** picker and shows only that engine's settings, so tabbing through it never walks past five services you do not use; it reopens on the engine you were last working on.
+
+- The Text-to-Speech source dialog now shows how many voices are available for the selected engine, right below the voice picker, and says so plainly when they have not been fetched yet.
+
+- The Text-to-Speech source dialog gained a **Get available voices** button (`ALT+G`), which downloads the voice list for engines that publish one, and a **Preview voice** button (`ALT+P`), which speaks a test phrase with your current settings. If synthesis fails, Preview tells you why - which is much the fastest way to find out that an API key is wrong.
+
+- Text-to-Speech sources gained a **pitch** control. SAPI 5, OpenAI, Google Translate, and AWS Polly have no pitch setting, and the slider says so when one of those is selected.
+
+- The Speech tab can cap how long a message will be spoken and how often a speech service is called, so a burst of chat cannot run up a bill or trip a rate limit. When messages arrive faster than they can be spoken, the oldest are now dropped rather than queued forever, so what you hear stays current.
+
+- When a speech engine fails, the reason now appears in the chat list. Repeats of the same failure are held down to one a minute, so a wrong API key cannot bury your chat.
+
 - **Help > View Changelog** opens the changelog in your default browser.
 
 ### Fixes
+
+- Arrowing through the engine list in the Text-to-Speech source dialog no longer stalls on every keypress. The voice list is now rebuilt shortly after you stop moving, or straight away when you tab out of the picker, instead of once per engine you pass over.
+
+- The voice count no longer reports the previous engine's figure after you change engines.
+
+- Passing over an engine on the way to another one no longer discards the voice you had already chosen for it.
+
+- **Send these sounds to the stream** no longer takes a Sound Events source's cues away from you. You now always hear them yourself, and the checkbox controls only whether your listeners hear them too — the same way the TTS sources already worked.
 
 - Deleting or reordering a bus no longer saves an open plugin's settings into the wrong bus.
 
@@ -29,6 +51,8 @@
 - When a helper program is missing, the error now names the file and the folder it was looked for in instead of reporting "os error 2".
 
 ### Changes
+
+- **Send speech to the stream** now means exactly that. Unchecking it keeps speech off the stream while still letting it reach your monitor and any buses the source sends to. SAPI 5 still speaks to you directly either way; to hear one of the other engines yourself, turn on monitoring for its mixer strip with `CTRL+M`.
 
 - Chat messages are now spoken as soon as they arrive rather than up to a tenth of a second later, and stream status changes and error messages appear immediately.
 

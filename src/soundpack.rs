@@ -1,6 +1,13 @@
 #![allow(dead_code)]
+// Sample-format conversion is shared with the audio engine and the TTS
+// engines. This file is `#[path]`-included into the standalone soundpack
+// binaries, which have no `crate::audio`, so the module is pulled in by path
+// too; `convert.rs` depends on nothing but `hound` for exactly that reason.
+#[path = "audio/convert.rs"]
+mod convert;
+
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-use hound::{SampleFormat, WavReader};
+use convert::decode_wav;
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -14,8 +21,6 @@ const MAGIC: &[u8; 4] = b"PSSP";
 const FORMAT_VERSION: u16 = 1;
 const MANIFEST_FILE: &str = "sound-pack.toml";
 const SOUNDS_DIR: &str = "sounds";
-const ENGINE_SAMPLE_RATE: u32 = 48_000;
-const ENGINE_CHANNELS: usize = 2;
 const EMBEDDED_DEFAULT_PACK: &[u8] = include_bytes!("../assets/sounds/default/default.pspack");
 
 // This is obfuscation, not a security boundary. Pubsplash must be able to decrypt packs locally.
@@ -423,105 +428,6 @@ pub fn remove_variant(
     renumber_variants(project, sound)
 }
 
-pub fn decode_wav(bytes: &[u8]) -> Result<Vec<f32>, String> {
-    let mut reader = WavReader::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
-    let spec = reader.spec();
-    let source_channels = usize::from(spec.channels);
-    if source_channels == 0 {
-        return Err("WAV files must have at least one channel".into());
-    }
-    if spec.sample_rate == 0 {
-        return Err("WAV files must have a non-zero sample rate".into());
-    }
-
-    let samples = read_wav_samples(&mut reader, spec)?;
-    let stereo = convert_to_stereo(&samples, source_channels)?;
-    if spec.sample_rate == ENGINE_SAMPLE_RATE {
-        Ok(stereo)
-    } else {
-        Ok(resample_stereo(
-            &stereo,
-            spec.sample_rate,
-            ENGINE_SAMPLE_RATE,
-        ))
-    }
-}
-
-fn read_wav_samples<R: std::io::Read>(
-    reader: &mut WavReader<R>,
-    spec: hound::WavSpec,
-) -> Result<Vec<f32>, String> {
-    if spec.sample_format == SampleFormat::Float {
-        reader
-            .samples::<f32>()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())
-    } else if spec.bits_per_sample <= 16 {
-        if spec.bits_per_sample == 0 {
-            return Err("integer WAV files must have at least one bit per sample".into());
-        }
-        let max = (1_i32 << (spec.bits_per_sample - 1)) as f32;
-        reader
-            .samples::<i16>()
-            .map(|x| x.map(|n| n as f32 / max))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())
-    } else {
-        let max = (1_i64 << (spec.bits_per_sample - 1)) as f32;
-        reader
-            .samples::<i32>()
-            .map(|x| x.map(|n| n as f32 / max))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())
-    }
-}
-
-fn convert_to_stereo(samples: &[f32], source_channels: usize) -> Result<Vec<f32>, String> {
-    if samples.len() % source_channels != 0 {
-        return Err("WAV data ended in the middle of a frame".into());
-    }
-
-    let frames = samples.len() / source_channels;
-    let mut stereo = Vec::with_capacity(frames * ENGINE_CHANNELS);
-    for frame in samples.chunks_exact(source_channels) {
-        stereo.push(frame[0]);
-        stereo.push(if source_channels == 1 {
-            frame[0]
-        } else {
-            frame[1]
-        });
-    }
-    Ok(stereo)
-}
-
-fn resample_stereo(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
-    if source_rate == target_rate || samples.is_empty() {
-        return samples.to_vec();
-    }
-
-    let source_frames = samples.len() / ENGINE_CHANNELS;
-    if source_frames <= 1 {
-        return samples.to_vec();
-    }
-
-    let target_frames =
-        ((source_frames as f64 * target_rate as f64 / source_rate as f64).round() as usize).max(1);
-    let mut resampled = Vec::with_capacity(target_frames * ENGINE_CHANNELS);
-    for target_frame in 0..target_frames {
-        let source_pos = target_frame as f64 * source_rate as f64 / target_rate as f64;
-        let left_frame = (source_pos.floor() as usize).min(source_frames - 1);
-        let right_frame = (left_frame + 1).min(source_frames - 1);
-        let fraction = (source_pos - left_frame as f64) as f32;
-
-        for channel in 0..ENGINE_CHANNELS {
-            let left = samples[left_frame * ENGINE_CHANNELS + channel];
-            let right = samples[right_frame * ENGINE_CHANNELS + channel];
-            resampled.push(left + (right - left) * fraction);
-        }
-    }
-    resampled
-}
-
 fn compile_with_revision(
     project: &Path,
     output: &Path,
@@ -744,7 +650,8 @@ fn write_manifest(path: &Path, manifest: &ProjectManifest) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hound::{WavSpec, WavWriter};
+    use convert::{ENGINE_CHANNELS, ENGINE_SAMPLE_RATE};
+    use hound::{SampleFormat, WavSpec, WavWriter};
 
     #[test]
     fn variants_parse() {
