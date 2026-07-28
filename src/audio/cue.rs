@@ -15,20 +15,9 @@ use wasapi::{Direction, SampleType, StreamMode, WaveFormat};
 
 const DRAIN_AFTER_CUE: Duration = Duration::from_millis(100);
 
-pub fn play_sound_kind_async(kind: SoundKind) {
-    std::thread::Builder::new()
-        .name("ui-sound-cue".into())
-        .spawn(move || {
-            if let Err(e) = play_sound_kind_blocking(kind) {
-                log::warn!("Could not play {:?} sound cue: {e}", kind);
-            }
-        })
-        .ok();
-}
-
 /// Plays an already-decoded buffer. Callers that also feed the same samples to
-/// the mixer use this rather than [`play_sound_kind_async`] so that both copies
-/// are the same randomly chosen variant.
+/// the mixer use this rather than [`play_sound_kind_blocking`] so that both
+/// copies are the same randomly chosen variant.
 pub fn play_samples_async(samples: std::sync::Arc<Vec<f32>>) {
     std::thread::Builder::new()
         .name("ui-sound-cue".into())
@@ -41,13 +30,13 @@ pub fn play_samples_async(samples: std::sync::Arc<Vec<f32>>) {
 }
 
 pub fn play_sound_kind_blocking(kind: SoundKind) -> Result<(), String> {
-    let pack = crate::soundpack::embedded_default()
+    let pack = crate::soundpack::active()
         .ok_or_else(|| "the built-in sound pack could not be loaded".to_string())?;
     // Decoded once per variant and remembered on the pack, so a burst of cues
     // is not a burst of WAV parses and resamples.
     let samples = pack
         .random_decoded(kind)
-        .ok_or_else(|| format!("embedded default sound pack has no {} cue", kind.label()))?;
+        .ok_or_else(|| format!("the active sound pack has no {} cue", kind.label()))?;
     play_samples(&samples)
 }
 

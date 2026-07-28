@@ -13,6 +13,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
+/// Shown when no application matches the current view. See [`super::list`].
+const NO_APPLICATIONS: &str = "No applications";
+
 /// What the user asked for.
 pub enum Pick {
     /// Capture this executable.
@@ -40,7 +43,7 @@ pub fn pick_application(frame: &Frame, current: &str) -> Pick {
         .with_label("Which application should this source capture?")
         .build();
     let list = ListBox::builder(&panel).build();
-    super::set_accessible_name(&list, "Running applications");
+    super::native_acc::install(&list, "Running applications");
     super::help::tag(&list, "dialog.appPicker.list", "Running applications list");
     let sound_only = CheckBox::builder(&panel)
         .with_label("Only show apps that have &played sound")
@@ -146,10 +149,8 @@ pub fn pick_application(frame: &Frame, current: &str) -> Pick {
                 ));
             }
 
-            list.clear();
-            for (_, label) in &rows {
-                list.append(label);
-            }
+            let labels: Vec<String> = rows.iter().map(|(_, label)| label.clone()).collect();
+            super::list::fill(&list, &labels, NO_APPLICATIONS);
             let keep = keep.or_else(|| (!current.is_empty()).then(|| current.clone()));
             let index = keep
                 .and_then(|want| {
@@ -176,8 +177,9 @@ pub fn pick_application(frame: &Frame, current: &str) -> Pick {
         let shown = shown.clone();
         let list = list.clone();
         move || -> Option<String> {
-            let index = list.get_selection()? as usize;
-            shown.borrow().get(index).cloned()
+            let shown = shown.borrow();
+            let index = super::list::selection(&list, shown.len())?;
+            shown.get(index).cloned()
         }
     };
 

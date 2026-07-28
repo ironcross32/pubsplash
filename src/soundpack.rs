@@ -162,6 +162,43 @@ impl LoadedPack {
         self.assets.get(&sound).map(Vec::as_slice)
     }
 
+    /// Decodes every variant of every sound up front, so no cue ever pays for
+    /// a WAV parse and resample. Called on the loader thread before a pack is
+    /// published as active; a variant that will not decode is logged and left
+    /// out, exactly as `random_decoded` would have done on first play.
+    pub fn decode_all(&self) {
+        let mut cache = self.lock_decoded();
+        for sound in SoundKind::ALL {
+            let Some(variants) = self.assets.get(&sound) else {
+                continue;
+            };
+            for (index, bytes) in variants.iter().enumerate() {
+                if cache.contains_key(&(sound, index)) {
+                    continue;
+                }
+                match decode_wav(bytes) {
+                    Ok(samples) => {
+                        cache.insert((sound, index), std::sync::Arc::new(samples));
+                    }
+                    Err(e) => log::warn!("Could not decode the {} cue: {e}", sound.label()),
+                }
+            }
+        }
+    }
+
+    fn lock_decoded(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<(SoundKind, usize), std::sync::Arc<Vec<f32>>>> {
+        match self.decoded.lock() {
+            Ok(cache) => cache,
+            // A decode that panicked must not disable every later cue.
+            Err(poisoned) => {
+                self.decoded.clear_poison();
+                poisoned.into_inner()
+            }
+        }
+    }
+
     /// One of `sound`'s variants at random, decoded to 48 kHz stereo f32.
     /// Returns `None` when the pack has no such sound; logs and returns `None`
     /// if the chosen variant will not decode.
@@ -169,14 +206,7 @@ impl LoadedPack {
         use rand::Rng;
         let count = self.variants(sound).filter(|v| !v.is_empty())?.len();
         let index = rand::thread_rng().gen_range(0..count);
-        let mut cache = match self.decoded.lock() {
-            Ok(cache) => cache,
-            // A decode that panicked must not disable every later cue.
-            Err(poisoned) => {
-                self.decoded.clear_poison();
-                poisoned.into_inner()
-            }
-        };
+        let mut cache = self.lock_decoded();
         if let Some(samples) = cache.get(&(sound, index)) {
             return Some(samples.clone());
         }
@@ -328,17 +358,148 @@ pub fn load_embedded_default() -> Result<LoadedPack, String> {
 /// Stream-event cues can fire in bursts (one per incoming chat message), so
 /// this must not re-run AES over the whole pack per event. `None` means the
 /// baked-in pack could not be read at all, which is logged once.
-pub fn embedded_default() -> Option<&'static LoadedPack> {
-    static CACHE: std::sync::OnceLock<Option<LoadedPack>> = std::sync::OnceLock::new();
+pub fn embedded_default() -> Option<std::sync::Arc<LoadedPack>> {
+    static CACHE: std::sync::OnceLock<Option<std::sync::Arc<LoadedPack>>> =
+        std::sync::OnceLock::new();
     CACHE
         .get_or_init(|| match load_embedded_default() {
-            Ok(pack) => Some(pack),
+            Ok(pack) => Some(std::sync::Arc::new(pack)),
             Err(e) => {
                 log::error!("Could not load the built-in sound pack: {e}");
                 None
             }
         })
-        .as_ref()
+        .clone()
+}
+
+/// The pack every cue plays from, or `None` when even the built-in one is
+/// unreadable. Selection is global: one pack serves the interface cues and
+/// every Sound Events source (see `SoundsConfig::pack`).
+static ACTIVE: std::sync::RwLock<Option<std::sync::Arc<LoadedPack>>> = std::sync::RwLock::new(None);
+
+pub fn active() -> Option<std::sync::Arc<LoadedPack>> {
+    match ACTIVE.read() {
+        Ok(active) => active.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
+    .or_else(embedded_default)
+}
+
+/// Installs `pack` as the active one, or falls back to the built-in pack with
+/// `None`. Dropping the previous `Arc` here is what frees the old pack's audio:
+/// both its encoded bytes and everything `decode_all` put in its cache go with
+/// it, so two packs are only ever resident during the swap itself.
+pub fn set_active(pack: Option<std::sync::Arc<LoadedPack>>) {
+    let mut active = match ACTIVE.write() {
+        Ok(active) => active,
+        Err(poisoned) => {
+            ACTIVE.clear_poison();
+            poisoned.into_inner()
+        }
+    };
+    *active = pack;
+}
+
+/// An imported pack, as the Preferences dropdown shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledPack {
+    /// What the user sees; the file name without its extension.
+    pub display_name: String,
+    /// The name under `packs_dir()`, which is what `SoundsConfig::pack` holds.
+    pub file_name: String,
+}
+
+/// Where imported packs are copied to. Deliberately derived from
+/// `dirs::data_local_dir()` rather than `crate::config::config_dir()`: this
+/// module is `#[path]`-included into the standalone soundpack binaries, which
+/// have no `crate::config`.
+pub fn packs_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("pubsplash")
+        .join("soundpacks")
+}
+
+/// Every `.pspack` in `packs_dir()`, sorted for a stable dropdown order. A
+/// missing folder is simply an empty list; the user has imported nothing yet.
+pub fn installed_packs() -> Vec<InstalledPack> {
+    installed_packs_in(&packs_dir())
+}
+
+fn installed_packs_in(dir: &Path) -> Vec<InstalledPack> {
+    let mut packs = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return packs;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("pspack") {
+            continue;
+        }
+        let (Some(file_name), Some(display_name)) = (
+            path.file_name().and_then(|n| n.to_str()),
+            path.file_stem().and_then(|n| n.to_str()),
+        ) else {
+            continue;
+        };
+        packs.push(InstalledPack {
+            display_name: display_name.to_string(),
+            file_name: file_name.to_string(),
+        });
+    }
+    packs.sort_by_key(|p| p.display_name.to_lowercase());
+    packs
+}
+
+/// The file name `source` would be installed under. The UI asks first so it can
+/// prompt before an import replaces a pack of the same name.
+pub fn installed_name(source: &Path) -> Result<String, String> {
+    let stem = source
+        .file_stem()
+        .and_then(|n| n.to_str())
+        .ok_or("that file has no name")?;
+    Ok(format!("{}.pspack", sanitize_pack_name(stem)?))
+}
+
+/// Copies `source` into `packs_dir()` and returns its installed file name.
+///
+/// The pack is decrypted and parsed first, so a truncated download or a file
+/// from a future format version is rejected before anything lands in the
+/// folder. `replace` is the caller's answer to the overwrite prompt; without
+/// it, an existing name is an error rather than a silent clobber.
+pub fn import(source: &Path, replace: bool) -> Result<String, String> {
+    import_into(&packs_dir(), source, replace)
+}
+
+fn import_into(dir: &Path, source: &Path, replace: bool) -> Result<String, String> {
+    load(source)?;
+    let file_name = installed_name(source)?;
+    let name = file_name.trim_end_matches(".pspack").to_string();
+    fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    let dest = dir.join(&file_name);
+    if dest.exists() && !replace {
+        return Err(format!("A sound pack named {name} is already installed."));
+    }
+    fs::copy(source, &dest).map_err(|e| format!("could not copy the sound pack: {e}"))?;
+    Ok(file_name)
+}
+
+/// Deletes an imported pack. A pack that is already gone is not an error.
+pub fn remove(file_name: &str) -> Result<(), String> {
+    let path = packs_dir().join(file_name);
+    if !path.exists() {
+        return Ok(());
+    }
+    fs::remove_file(&path).map_err(|e| format!("could not delete {}: {e}", path.display()))
+}
+
+/// Loads an imported pack by file name, fully decoded and ready to play.
+/// Slow enough (AES over the whole file, then every WAV) that callers run it
+/// off the UI thread.
+pub fn load_installed(file_name: &str) -> Result<std::sync::Arc<LoadedPack>, String> {
+    let pack = load(&packs_dir().join(file_name))?;
+    pack.decode_all();
+    Ok(std::sync::Arc::new(pack))
 }
 
 pub fn project_variants(project: &Path, sound: SoundKind) -> Result<Vec<PathBuf>, String> {
@@ -762,6 +923,101 @@ revision = 2
             assert!(!variants.is_empty(), "{sound:?} should have a variant");
             decode_wav(&variants[0]).unwrap();
         }
+    }
+
+    #[test]
+    fn decode_all_fills_the_cache_for_every_variant() {
+        let pack = load_embedded_default().unwrap();
+        let expected: usize = pack.assets.values().map(Vec::len).sum();
+        assert!(expected > 0);
+
+        pack.decode_all();
+
+        assert_eq!(pack.lock_decoded().len(), expected);
+        for sound in SoundKind::ALL {
+            for index in 0..pack.variants(sound).map_or(0, <[Vec<u8>]>::len) {
+                assert!(pack.lock_decoded().contains_key(&(sound, index)));
+            }
+        }
+    }
+
+    #[test]
+    fn active_falls_back_to_the_built_in_pack() {
+        set_active(None);
+
+        let pack = active().expect("the built-in pack should load");
+
+        assert!(pack.variants(SoundKind::Startup).is_some());
+    }
+
+    #[test]
+    fn import_rejects_a_file_that_is_not_a_pack() {
+        let dir = test_dir("import-bad");
+        let packs = dir.join("soundpacks");
+        let source = dir.join("not_a_pack.pspack");
+        fs::write(&source, b"this is not a sound pack").unwrap();
+
+        let error = import_into(&packs, &source, false).unwrap_err();
+
+        assert!(error.contains("not a Pubsplash sound pack"), "{error}");
+        assert!(!packs.join("not_a_pack.pspack").exists());
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn import_copies_a_pack_and_refuses_to_replace_it_unasked() {
+        let dir = test_dir("import-pack");
+        let packs = dir.join("soundpacks");
+        let source = compiled_pack(&dir, "My Pack");
+
+        let file_name = import_into(&packs, &source, false).unwrap();
+
+        assert_eq!(file_name, "My_Pack.pspack");
+        assert!(packs.join(&file_name).exists());
+        assert!(import_into(&packs, &source, false).is_err());
+        assert_eq!(import_into(&packs, &source, true).unwrap(), file_name);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn installed_packs_lists_only_pspack_files_by_stem() {
+        let dir = test_dir("installed-packs");
+        let packs = dir.join("soundpacks");
+        let source = compiled_pack(&dir, "beta");
+        import_into(&packs, &source, false).unwrap();
+        let source = compiled_pack(&dir, "Alpha");
+        import_into(&packs, &source, false).unwrap();
+        fs::write(packs.join("readme.txt"), b"ignore me").unwrap();
+
+        let listed = installed_packs_in(&packs);
+
+        assert_eq!(
+            listed,
+            vec![
+                InstalledPack {
+                    display_name: "Alpha".into(),
+                    file_name: "Alpha.pspack".into(),
+                },
+                InstalledPack {
+                    display_name: "beta".into(),
+                    file_name: "beta.pspack".into(),
+                },
+            ]
+        );
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// A real compiled `.pspack` named `name`, next to `dir`.
+    fn compiled_pack(dir: &Path, name: &str) -> PathBuf {
+        let project = dir.join(format!("{name}-project"));
+        let wav = dir.join(format!("{name}.wav"));
+        fs::write(&wav, test_wav_bytes(ENGINE_SAMPLE_RATE, 2, 16)).unwrap();
+        let mut assignments = HashMap::new();
+        assignments.insert(SoundKind::Startup, wav);
+        save_single_variants(&project, &assignments).unwrap();
+        let output = dir.join(format!("{name}.pspack"));
+        compile(&project, &output).unwrap();
+        output
     }
 
     fn asset_lengths(pack: &LoadedPack, sound: SoundKind) -> Vec<usize> {

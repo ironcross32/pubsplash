@@ -18,6 +18,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - Loop-safe by design: Desktop Audio capture excludes Pubsplash's own audio, so text-to-speech and sound cues can never echo into your stream
 - Built-in startup and shutdown sounds, each able to be switched off, plus audio cues for stream events (listener changes, incoming and outgoing messages) that you can send to your listeners or keep to yourself
 - A fully keyboard-accessible mixer with per-source volume and mute, plus an optional per-strip volume boost for sources that are too quiet at 100%
+- Empty lists say what they are: rather than leaving a screen reader with nothing to announce, a list with nothing in it holds a single row naming what belongs there ("No chats", "No sources", "No plugins")
 - Mixing buses with per-source sends, so sources can be routed through shared processing (see below)
 - VST2 effect chains on buses and the master output, with a screen-reader-friendly Osara-like parameter editor and shareable effect chains
 - Status bar shows your stream status, quality, and duration
@@ -39,23 +40,28 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 
 To record locally without going live, use **Start recording** (`ALT+R`) next to the streaming button; press **Stop recording** (`ALT+C`) to finish. It saves the same MP3 to your recording folder without connecting to the server. Recording and streaming can't run at the same time.
 
+The **Stream overview** at the top of the Home tab is a list you can arrow through, one fact per row. The status row is always there and says whether you're streaming, recording, or both; listener and listener peak rows appear while you're streaming; and a duration row shows how long the current stream or recording has been running. The duration counts up in the background, but the row you have selected is left alone until you go to it, so nothing in this list ever reads itself out at you. It's brought up to date the moment before you'd hear it: arrow onto the row, or tab into the list, and it reads the time as it is now, once.
+
 ## Keyboard shortcuts
 
 | Shortcut | Action |
 | --- | --- |
 | `F1` | Speak context-sensitive help for the focused control |
+| `F6` / `SHIFT+F6` | Move to the next / previous list on the current tab, and past the last one to the tab bar |
 | `ALT+S` / `ALT+T` | Start / stop streaming (Home tab) |
 | `ALT+R` / `ALT+C` | Start / stop recording without streaming (Home tab) |
 | `ALT+W` | Switch to the selected scene (Home tab) |
 | `ALT+V` | View the focused chat message in a window (Chat tab) |
-| `Escape` | Clear the chat input box |
+| `Escape` | Close the current dialog; in the chat input box, clear the box |
 | `CTRL+,` | Open Preferences |
 | `CTRL+M` | Toggle monitoring for the focused mixer strip |
 | `ALT+G` / `ALT+P` | Get available voices / preview the voice (Text-to-Speech source dialog) |
+| `ALT+I` / `ALT+K` | Import / remove a sound pack (Preferences, Sound packs tab) |
 | `CTRL+Up` / `CTRL+Down` | Move the focused scene, source, bus, or plugin |
 | `Delete` | Remove the focused scene, source, bus, send, or plugin |
 | `CTRL+Tab` / `CTRL+Shift+Tab` | Next / previous parameter (plugin parameter dialog) |
-| `F6` | Move focus out of a plugin's own interface back to the toolbar |
+| `F6` | Inside a plugin's own interface only: move focus back out to the toolbar |
+| `Escape` | Close a plugin's interface window (from its toolbar; inside the plugin's own interface, `Escape` goes to the plugin) |
 | `SHIFT+F10` / `Applications` | Open the context menu for the focused control (mixer volume sliders) |
 
 In the mixer, sliders respond to arrow keys for 1% steps, `Page Up` / `Page Down` for 10% steps, and `Home` / `End` for maximum / minimum volume. `Up`, `Right`, and `Page Up` always raise the volume; `Down`, `Left`, and `Page Down` always lower it.
@@ -186,9 +192,9 @@ See the repository for license details.
 
 ## Sound packs
 
-A Sound Events source plays cues into its scene from the sound pack built into Pubsplash. It can react to listener increases, listener decreases, listener-peak increases, incoming chat, and successfully sent chat messages; each of those five has its own checkbox in the source's edit dialog, and there is nothing else to set up. A stream begins with a silent listener baseline, so connecting does not play a count-change cue.
+A Sound Events source plays cues into its scene from the sound pack chosen on the **Sound packs** tab in Preferences. It can react to listener increases, listener decreases, listener-peak increases, incoming chat, and successfully sent chat messages; each of those five has its own checkbox in the source's edit dialog, and there is nothing else to set up. A stream begins with a silent listener baseline, so connecting does not play a count-change cue.
 
-Choosing a sound pack of your own is not wired up yet — it will live on the **Sound packs** tab in Preferences. You can still author packs today with the Sound Pack Manager described below.
+To use a pack of your own, open **File > Preferences** (`CTRL+,`) and go to the **Sound packs** tab. **Import pack** (`ALT+I`) asks for a compiled `.pspack` file and copies it into Pubsplash's own folder, so you can move or delete the file you imported from afterwards. Imported packs are listed in the **Sound pack** combo box alongside **Built-in default**; the one you choose there is used by everything — the startup and shut-down cues and every Sound Events source in every scene. Arrowing through the list is free: the pack you land on is loaded a moment after you stop, or immediately if you tab out of the list. A pack's sounds are all held in memory while it is the chosen one, so cues play without touching the disk, and they are released as soon as you change packs. **Remove pack** (`ALT+K`) deletes Pubsplash's copy of the chosen pack after asking you to confirm, and returns you to the built-in one.
 
 A Sound Events source's cues always play on your default Windows output device, so you hear them whatever else is going on. By default they also go out to your listeners; clear **Send these sounds to the stream** in the edit dialog to keep them to yourself, and they then never reach the stream mix or a recording. The copy you hear bypasses the mixer, so the source's volume slider only affects what your listeners hear; muting the source silences the cues everywhere.
 

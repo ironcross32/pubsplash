@@ -106,10 +106,7 @@ mod tests {
     #[test]
     fn stored_voices_come_back_for_the_engine_that_stored_them() {
         store_voices("openai", vec![Voice::plain("alloy")]);
-        assert_eq!(
-            cached_voices("openai"),
-            Some(vec![Voice::plain("alloy")])
-        );
+        assert_eq!(cached_voices("openai"), Some(vec![Voice::plain("alloy")]));
         forget_voices("openai");
         assert_eq!(cached_voices("openai"), None);
     }
@@ -152,7 +149,11 @@ mod tests {
     #[test]
     fn the_picker_list_carries_ids_and_display_names() {
         let names = engine_names();
-        assert!(names.iter().any(|(id, name)| *id == "sapi" && *name == "SAPI 5"));
+        assert!(
+            names
+                .iter()
+                .any(|(id, name)| *id == "sapi" && *name == "SAPI 5")
+        );
         assert_eq!(names.len(), engines::ALL.len());
     }
 }

@@ -7,6 +7,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
+/// Shown when the source sends to no buses. See [`super::list`].
+const NO_SENDS: &str = "No sends";
+
 /// Opens the sends dialog for one source of one scene.
 pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     let Some(frame) = app.widgets(|w| w.frame.clone()) else {
@@ -66,7 +69,7 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
 
     let list_label = StaticText::builder(&panel).with_label("Sends").build();
     let send_list = ListBox::builder(&panel).build();
-    super::set_accessible_name(&send_list, "Sends");
+    super::native_acc::install(&send_list, "Sends");
     super::help::tag(
         &send_list,
         "dialog.sends.sendList",
@@ -100,7 +103,11 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
 
     let ok_cancel = BoxSizer::builder(Orientation::Horizontal).build();
     let ok = Button::builder(&panel).with_label("OK").build();
-    let cancel = Button::builder(&panel).with_label("Cancel").build();
+    // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
+    let cancel = Button::builder(&panel)
+        .with_id(ID_CANCEL)
+        .with_label("Cancel")
+        .build();
     ok_cancel.add(&ok, 0, SizerFlag::All, 4);
     ok_cancel.add(&cancel, 0, SizerFlag::All, 4);
 
@@ -124,10 +131,12 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
         let send_list = send_list.clone();
         move |select: Option<usize>| {
             let previous = send_list.get_selection();
-            send_list.clear();
-            for send in working.borrow().iter() {
-                send_list.append(&format!("{}, level {}", send.bus, send.level));
-            }
+            let labels: Vec<String> = working
+                .borrow()
+                .iter()
+                .map(|send| format!("{}, level {}", send.bus, send.level))
+                .collect();
+            super::list::fill(&send_list, &labels, NO_SENDS);
             let target = select
                 .map(|i| i as u32)
                 .or(previous)
@@ -146,10 +155,11 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
         let send_list = send_list.clone();
         let level_slider = level_slider.clone();
         move || {
-            let Some(index) = send_list.get_selection() else {
+            let count = working.borrow().len();
+            let Some(index) = super::list::selection(&send_list, count) else {
                 return;
             };
-            if let Some(send) = working.borrow().get(index as usize) {
+            if let Some(send) = working.borrow().get(index) {
                 level_slider.set_value(send.level as i32);
                 super::set_accessible_name(&level_slider, &format!("Send level for {}", send.bus));
             }
@@ -170,14 +180,15 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
         let level_slider = level_slider.clone();
         let refresh_list = refresh_list.clone();
         level_slider.clone().on_slider(move |_| {
-            let Some(index) = send_list.get_selection() else {
+            let count = working.borrow().len();
+            let Some(index) = super::list::selection(&send_list, count) else {
                 return;
             };
             let value = level_slider.value().clamp(0, 100) as u32;
-            if let Some(send) = working.borrow_mut().get_mut(index as usize) {
+            if let Some(send) = working.borrow_mut().get_mut(index) {
                 send.level = value;
             }
-            refresh_list(Some(index as usize));
+            refresh_list(Some(index));
         });
     }
 
@@ -209,6 +220,7 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
             let chooser =
                 SingleChoiceDialog::builder(&dialog, "Send to which bus?", "Add send", &refs)
                     .build();
+            super::native_acc::install_in_dialog(&chooser, "Send to which bus?");
             if chooser.show_modal() == ID_OK {
                 let index = chooser.get_selection();
                 if let Some(name) = available.get(index as usize) {
@@ -231,17 +243,11 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
         let refresh_list = refresh_list.clone();
         let load_selected = load_selected.clone();
         move || {
-            let Some(index) = send_list.get_selection() else {
+            let count = working.borrow().len();
+            let Some(index) = super::list::selection(&send_list, count) else {
                 return;
             };
-            let index = index as usize;
-            {
-                let mut working = working.borrow_mut();
-                if index >= working.len() {
-                    return;
-                }
-                working.remove(index);
-            }
+            working.borrow_mut().remove(index);
             let remaining = working.borrow().len();
             refresh_list(Some(index.min(remaining.saturating_sub(1))));
             load_selected();

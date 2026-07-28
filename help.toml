@@ -193,6 +193,18 @@ file = "src/ui/preferences.rs"
 message = "Type the path where you'd like your local recordings to be saved to, or use the browse button to pick a folder using a standard Windows folder picker."
 
 [[control]]
+id = "dialog.preferences.sounds.importPack"
+label = "Import sound pack button"
+file = "src/ui/preferences.rs"
+message = "Opens a file dialog to pick a compiled sound pack, a dot pspack file. Pubsplash keeps its own copy, so you can move or delete the file you picked afterwards, and the pack is added to the sound pack list and becomes the one in use."
+
+[[control]]
+id = "dialog.preferences.sounds.pack"
+label = "Sound pack choice"
+file = "src/ui/preferences.rs"
+message = "The sound pack every cue plays from: the startup and shut-down sounds, and every Sound Events source. Built-in default is the pack that ships inside Pubsplash; anything else you have imported is listed after it. Arrow through the list freely, the pack you land on is loaded a moment after you stop, or straight away if you tab out of the list."
+
+[[control]]
 id = "dialog.preferences.sounds.playShutdown"
 label = "Play the shut-down sound checkbox"
 file = "src/ui/preferences.rs"
@@ -203,6 +215,12 @@ id = "dialog.preferences.sounds.playStartup"
 label = "Play the startup sound checkbox"
 file = "src/ui/preferences.rs"
 message = "When checked, Pubsplash plays a short sound as it launches, so you know it is loading. Only you hear this sound; it is never sent to the stream."
+
+[[control]]
+id = "dialog.preferences.sounds.removePack"
+label = "Remove sound pack button"
+file = "src/ui/preferences.rs"
+message = "Deletes Pubsplash's copy of the sound pack chosen in the list, after asking you to confirm. The cues go back to the built-in default pack. The dot pspack file you imported from is left alone. This button is unavailable while Built-in default is chosen."
 
 [[control]]
 id = "dialog.preferences.speech.awsEngine"
@@ -614,9 +632,9 @@ message = "Sets this strip's level, from 0 to 100 percent, where 100 is unity ga
 
 [[control]]
 id = "tab.home.overview"
-label = "Stream overview"
+label = "Stream overview list"
 file = "src/ui/home.rs"
-message = ""
+message = "A read-only list of the current state of your broadcast, one fact per row. The status row is always there and tells you whether you're streaming, recording, or both. While you're streaming, listener and listener peak rows appear below it. Whenever a stream or a recording is running, a duration row shows how long it has been going. That row counts up in the background, but the row you have selected is left alone until you go to it, so nothing in this list ever reads itself out at you. It's brought up to date the moment before you'd hear it: arrow onto the row, or tab into the list, and it reads the time as it is now, once."
 
 [[control]]
 id = "tab.home.recordButton"
@@ -713,6 +731,12 @@ id = "tab.scenes.sourceUp"
 label = "Move source up button"
 file = "src/ui/scenes.rs"
 message = "Move the selected source up in the list. CTRL+Up will also work as long as focus is on the list of sources."
+
+[[control]]
+id = "window.tabBar"
+label = "Main tab bar"
+file = "src/ui/mod.rs"
+message = "The tabs of the main window: Home, Chat, Scenes and Sources, and Buses. Use the left and right arrow keys to move between tabs, then TAB to go into the tab's contents. From anywhere in a tab, F6 jumps forward to the next list, and on past the last one back here to the tabs; SHIFT+F6 goes the other way."
 
 [[stale]]
 id = "dialog.soundEventsSource.browse"

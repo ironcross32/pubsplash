@@ -302,6 +302,11 @@ pub struct SoundsConfig {
     /// Whether the shut-down cue plays on exit. With it off, closing the
     /// window does not wait for a sound to finish.
     pub play_shutdown: bool,
+    /// The active sound pack: a file name (not a path) inside
+    /// `soundpack::packs_dir()`. Empty means the pack built into the
+    /// executable. One pack serves the interface cues and every Sound Events
+    /// source; there is no per-source selection.
+    pub pack: String,
 }
 
 impl Default for SoundsConfig {
@@ -309,6 +314,7 @@ impl Default for SoundsConfig {
         Self {
             play_startup: true,
             play_shutdown: true,
+            pack: String::new(),
         }
     }
 }
@@ -766,6 +772,10 @@ mod tests {
         let config = load_from(&path);
         assert!(config.sounds.play_startup, "startup cue must default on");
         assert!(config.sounds.play_shutdown, "shutdown cue must default on");
+        assert!(
+            config.sounds.pack.is_empty(),
+            "a config with no pack chosen must use the built-in one"
+        );
         let SourceKindConfig::SoundEvents(settings) = &config.scenes.scenes[0].sources[0].kind
         else {
             panic!("expected a Sound Events source");

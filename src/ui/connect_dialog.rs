@@ -6,6 +6,9 @@ use crate::net::NetCommand;
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
+/// Shown when no sites are configured. See [`super::list`].
+const NO_SITES: &str = "No sites";
+
 pub fn show(app: &Rc<App>, frame: &Frame) {
     let dialog = Dialog::builder(frame, "Configure Audio Pub")
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
@@ -16,7 +19,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
 
     let sites_label = StaticText::builder(&panel).with_label("Sites").build();
     let sites_list = ListBox::builder(&panel).build();
-    super::set_accessible_name(&sites_list, "Sites");
+    super::native_acc::install(&sites_list, "Sites");
     super::help::tag(
         &sites_list,
         "dialog.connect.siteList",
@@ -59,7 +62,12 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         "dialog.connect.connectButton",
         "Connect or disconnect button",
     );
-    let close_button = Button::builder(&panel).with_label("C&lose").build();
+    // `ID_CANCEL` is what wx maps Escape to, and it *emulates a click*, so
+    // Escape saves the fields just like pressing Close does.
+    let close_button = Button::builder(&panel)
+        .with_id(ID_CANCEL)
+        .with_label("C&lose")
+        .build();
 
     sizer.add(&sites_label, 0, SizerFlag::All, 4);
     sizer.add(&sites_list, 1, SizerFlag::Expand | SizerFlag::All, 4);
@@ -80,25 +88,29 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         let sites_list = sites_list.clone();
         move |select_url: Option<&str>| {
             let config = app.config.borrow();
-            sites_list.clear();
-            let mut select_index = 0u32;
-            for (i, site) in config.connection.sites.iter().enumerate() {
-                let connected =
-                    app.run.borrow().connected_site.as_deref() == Some(site.url.as_str());
-                let mut label = site.url.clone();
-                if site.url == MAIN_SITE_URL {
-                    label.push_str(" (main)");
-                }
-                if connected {
-                    label.push_str(" (connected)");
-                }
-                sites_list.append(&label);
-                if Some(site.url.as_str()) == select_url {
-                    select_index = i as u32;
-                }
-            }
-            if sites_list.get_count() > 0 {
-                sites_list.set_selection(select_index, true);
+            let sites = &config.connection.sites;
+            let labels: Vec<String> = sites
+                .iter()
+                .map(|site| {
+                    let connected =
+                        app.run.borrow().connected_site.as_deref() == Some(site.url.as_str());
+                    let mut label = site.url.clone();
+                    if site.url == MAIN_SITE_URL {
+                        label.push_str(" (main)");
+                    }
+                    if connected {
+                        label.push_str(" (connected)");
+                    }
+                    label
+                })
+                .collect();
+            super::list::fill(&sites_list, &labels, NO_SITES);
+            if !sites.is_empty() {
+                let select_index = sites
+                    .iter()
+                    .position(|site| Some(site.url.as_str()) == select_url)
+                    .unwrap_or(0);
+                sites_list.set_selection(select_index as u32, true);
             }
         }
     };
@@ -110,7 +122,8 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         let password_input = password_input.clone();
         move || {
             let config = app.config.borrow();
-            let Some(index) = sites_list.get_selection().map(|i| i as usize) else {
+            let Some(index) = super::list::selection(&sites_list, config.connection.sites.len())
+            else {
                 return;
             };
             if let Some(site) = config.connection.sites.get(index) {
@@ -159,7 +172,8 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         let email_input = email_input.clone();
         let password_input = password_input.clone();
         move || {
-            let Some(index) = sites_list.get_selection().map(|i| i as usize) else {
+            let count = app.config.borrow().connection.sites.len();
+            let Some(index) = super::list::selection(&sites_list, count) else {
                 return None;
             };
             let mut config = app.config.borrow_mut();
@@ -219,7 +233,8 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         let refresh_sites = refresh_sites.clone();
         let load_credentials = load_credentials.clone();
         remove_site.on_click(move |_| {
-            let Some(index) = sites_list_for_remove.get_selection().map(|i| i as usize) else {
+            let count = app.config.borrow().connection.sites.len();
+            let Some(index) = super::list::selection(&sites_list_for_remove, count) else {
                 return;
             };
             {

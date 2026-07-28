@@ -9,6 +9,7 @@
 //! toolbar's own buttons are ordinary Tab-reachable wx controls.
 
 use super::App;
+use super::WXK_ESCAPE;
 use super::fx::{self, ChainTarget};
 use crate::vst::host2::Vst2Plugin;
 use std::rc::Rc;
@@ -204,7 +205,7 @@ pub fn open_editor(
     {
         let app = app.clone();
         let plugin = plugin.clone();
-        params.on_click(move |_| {
+        params.clone().on_click(move |_| {
             super::fx_params::edit_parameters(&app, target, slot, plugin.clone());
         });
     }
@@ -218,13 +219,30 @@ pub fn open_editor(
     }
     {
         let host = host.clone();
-        focus_plugin.on_click(move |_| unsafe {
+        focus_plugin.clone().on_click(move |_| unsafe {
             let _ = SetFocus(Some(HWND(host.get_handle())));
         });
     }
     {
         let frame = frame.clone();
-        close.on_click(move |_| frame.close(false));
+        close.clone().on_click(move |_| frame.close(false));
+    }
+
+    // Escape closes the window, but only from our own toolbar: the plugin's
+    // native UI is a child HWND we don't own, and plenty of plugins use Escape
+    // themselves, so it must still reach them. F6 lands focus here first.
+    {
+        let esc_closes = {
+            let frame = frame.clone();
+            move |event: WindowEventData| match super::key_of(&event) {
+                Some((WXK_ESCAPE, _)) => frame.close(false),
+                _ => event.skip(true),
+            }
+        };
+        params.on_key_down(esc_closes.clone());
+        bypass.clone().on_key_down(esc_closes.clone());
+        focus_plugin.on_key_down(esc_closes.clone());
+        close.clone().on_key_down(esc_closes);
     }
 
     // Close: tear down the editor and persist state.

@@ -2,8 +2,8 @@
 
 use super::slider_uia;
 use super::{
-    App, ID_MIXER_BOOST, ID_MIXER_MONITOR, Monitors, WXK_DOWN, WXK_END, WXK_HOME, WXK_LEFT,
-    WXK_PAGEDOWN, WXK_PAGEUP, WXK_RIGHT, WXK_UP,
+    App, ID_MIXER_BOOST, ID_MIXER_MONITOR, Monitors, StreamState, WXK_DOWN, WXK_END, WXK_HOME,
+    WXK_LEFT, WXK_PAGEDOWN, WXK_PAGEUP, WXK_RIGHT, WXK_UP,
 };
 use crate::audio::EngineCommand;
 use crate::config::max_volume;
@@ -12,20 +12,30 @@ use std::rc::Rc;
 use wxdragon::event::{EventType, WxEvtHandler};
 use wxdragon::prelude::*;
 
-/// Builds the tab; returns (overview box, stream button, record button, scene
+/// Shown when there are no scenes. See [`super::list`].
+const NO_SCENES: &str = "No scenes";
+
+/// Placeholder for the overview list, which never actually empties: the Status
+/// row is always there. Present only to satisfy [`super::list`].
+const NO_OVERVIEW: &str = "No stream information";
+
+/// Builds the tab; returns (overview list, stream button, record button, scene
 /// list, mixer panel placeholder).
-pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, Button, ListBox, Panel) {
+pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, Button, Button, ListBox, Panel) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
-    // Overview.
+    // Overview. A list rather than a read-only text box: the Duration row is
+    // rewritten every second while a clock runs, and rewriting a `TextCtrl`
+    // resets its caret, so the arrow keys could never reach the end of it.
     let overview_label = StaticText::builder(panel)
         .with_label("Stream overview")
         .build();
-    let overview = TextCtrl::builder(panel)
-        .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly)
-        .build();
-    super::set_accessible_name(&overview, "Stream overview");
-    super::help::tag(&overview, "tab.home.overview", "Stream overview");
+    let overview = ListBox::builder(panel).build();
+    // `refresh_overview` fills this properly during `build`, but never leave a
+    // list at zero items — NVDA reads those as "Unknown".
+    super::list::fill(&overview, &[], NO_OVERVIEW);
+    super::native_acc::install(&overview, "Stream overview");
+    super::help::tag(&overview, "tab.home.overview", "Stream overview list");
     sizer.add(&overview_label, 0, SizerFlag::All, 4);
     sizer.add(&overview, 1, SizerFlag::Expand | SizerFlag::All, 4);
 
@@ -38,7 +48,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, Button, ListBox
     // Scenes.
     let scene_label = StaticText::builder(panel).with_label("Scenes").build();
     let scene_list = ListBox::builder(panel).build();
-    super::set_accessible_name(&scene_list, "Scenes");
+    super::native_acc::install(&scene_list, "Scenes");
     super::help::tag(&scene_list, "tab.home.sceneList", "Scenes list");
     let switch_button = Button::builder(panel)
         .with_label("S&witch to scene")
@@ -74,6 +84,30 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, Button, ListBox
     sizer.add(&record_button, 0, SizerFlag::All, 8);
 
     panel.set_sizer(sizer, true);
+
+    // The overview's clock rows are never rewritten while selected (see
+    // `refresh`), so they are brought up to date at the two moments the user is
+    // about to hear one instead.
+    //
+    // Arrowing within the list: the row just vacated is no longer selected, so
+    // it updates at once and stepping off the Duration row and back reads the
+    // current time rather than the value frozen when you arrived. The row being
+    // moved *onto* is still skipped, so this cannot talk over it.
+    {
+        let app = app.clone();
+        overview
+            .clone()
+            .on_selection_changed(move |_| refresh_overview(&app));
+    }
+    // Focus arriving on the list: whatever row it lands on is about to be read
+    // out, so this is the one refresh allowed to write the selected row.
+    {
+        let app = app.clone();
+        overview.clone().on_set_focus(move |event| {
+            refresh(&app, Selected::Write);
+            event.skip(true);
+        });
+    }
 
     // Scene switching: button, or Enter/double-click on the list.
     {
@@ -121,12 +155,13 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (TextCtrl, Button, Button, ListBox
 }
 
 fn switch_to_selected_scene(app: &Rc<App>, list: &ListBox) {
-    let Some(index) = list.get_selection() else {
+    let count = app.config.borrow().scenes.scenes.len();
+    let Some(index) = super::list::selection(list, count) else {
         return;
     };
     let name = {
         let config = app.config.borrow();
-        let Some(scene) = config.scenes.scenes.get(index as usize) else {
+        let Some(scene) = config.scenes.scenes.get(index) else {
             return;
         };
         scene.name.clone()
@@ -148,14 +183,20 @@ pub fn refresh_scene_list(app: &Rc<App>) {
     app.widgets(|w| {
         let config = app.config.borrow();
         let selected = w.home_scene_list.get_selection();
-        w.home_scene_list.clear();
-        for scene in &config.scenes.scenes {
-            let label = if scene.name == config.scenes.active_scene {
-                format!("{} (active)", scene.name)
-            } else {
-                scene.name.clone()
-            };
-            w.home_scene_list.append(&label);
+        let labels: Vec<String> = config
+            .scenes
+            .scenes
+            .iter()
+            .map(|scene| {
+                if scene.name == config.scenes.active_scene {
+                    format!("{} (active)", scene.name)
+                } else {
+                    scene.name.clone()
+                }
+            })
+            .collect();
+        if super::list::sync(&w.home_scene_list, &labels, NO_SCENES) == super::list::Synced::Kept {
+            return;
         }
         if let Some(index) = selected {
             if index < w.home_scene_list.get_count() {
@@ -163,6 +204,167 @@ pub fn refresh_scene_list(app: &Rc<App>) {
             }
         }
     });
+}
+
+/// Which fact a row of the overview list carries.
+///
+/// Rows come and go with the stream state, so the selection is restored by kind
+/// and not by index — see [`refresh_overview`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OverviewRow {
+    Status,
+    Listeners,
+    ListenerPeak,
+    Duration,
+}
+
+/// Everything the overview list shows, snapshotted out of `Runtime` so the rows
+/// can be built (and tested) without touching widgets or the clock.
+pub struct OverviewState {
+    pub stream: StreamState,
+    /// Whether a recording is running — either standalone or alongside the
+    /// stream. See `Runtime::recording_started`.
+    pub recording: bool,
+    pub listeners: u32,
+    pub listener_peak: u32,
+    /// Elapsed time on whichever clock is running: the stream's if streaming,
+    /// otherwise the recording's. `None` when neither is.
+    pub elapsed: Option<std::time::Duration>,
+}
+
+/// The rows to show, in order. Only the ones that apply exist: idle and not
+/// recording is a one-row list.
+fn overview_rows(state: &OverviewState) -> Vec<(OverviewRow, String)> {
+    let streaming = !matches!(state.stream, StreamState::Idle);
+    let status = match (&state.stream, state.recording) {
+        // "Not streaming and recording" would be nonsense, so the idle case
+        // says what is actually happening instead.
+        (StreamState::Idle, true) => "Recording".to_string(),
+        (StreamState::Idle, false) => "Not streaming".to_string(),
+        (state, recording) => {
+            let base = match state {
+                StreamState::Starting => "Starting",
+                StreamState::Live { .. } => "Streaming",
+                _ => "Stopping",
+            };
+            if recording {
+                format!("{base} and recording")
+            } else {
+                base.to_string()
+            }
+        }
+    };
+
+    let mut rows = vec![(OverviewRow::Status, format!("Status: {status}"))];
+    if streaming {
+        rows.push((
+            OverviewRow::Listeners,
+            format!("Listeners: {}", state.listeners),
+        ));
+        rows.push((
+            OverviewRow::ListenerPeak,
+            format!("Listener peak: {}", state.listener_peak),
+        ));
+    }
+    if let Some(elapsed) = state.elapsed {
+        rows.push((
+            OverviewRow::Duration,
+            format!("Duration: {}", super::format_duration(elapsed)),
+        ));
+    }
+    rows
+}
+
+/// Whether a row the user has selected may be rewritten.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Selected {
+    /// Leave it alone: this refresh was not prompted by the user.
+    Skip,
+    /// Write it: the row is about to be read out anyway.
+    Write,
+}
+
+/// Brings the overview list up to date.
+///
+/// Deliberately not [`super::list::sync`]: that rewrites every row whose text
+/// differs, and the Duration row differs every second. On MSW `set_string`
+/// deletes and reinserts the item and restores the selection, and a screen
+/// reader announces that — so **writing the selected row is audible, whether or
+/// not the list has focus**, while writing any other row is silent. (Both
+/// halves of that were learned the hard way: testing focus instead of selection
+/// gave a readout every second for as long as the user stood on some other
+/// control.)
+///
+/// So the once-a-second refresh never writes the selected row, whichever row it
+/// is, and nothing in this list can speak on its own. Currency instead comes
+/// from the two events that precede a read: moving within the list (the row
+/// just vacated updates at once, so arrowing off Duration and back reads the
+/// time as it is now) and focus arriving on the list, which is the one moment
+/// [`Selected::Write`] is passed.
+pub fn refresh_overview(app: &App) {
+    refresh(app, Selected::Skip);
+}
+
+fn refresh(app: &App, selected_rows: Selected) {
+    let state = {
+        let run = app.run.borrow();
+        let streaming = matches!(run.stream, StreamState::Live { .. });
+        OverviewState {
+            stream: run.stream.clone(),
+            recording: run.recording_started.is_some(),
+            listeners: run.listeners,
+            listener_peak: run.listener_peak,
+            elapsed: if streaming {
+                run.stream_started.map(|t| t.elapsed())
+            } else {
+                run.recording_started.map(|t| t.elapsed())
+            },
+        }
+    };
+    let mut rows = overview_rows(&state);
+
+    let Some(list) = app.widgets(|w| w.overview) else {
+        return;
+    };
+    // Nothing below touches a widget while `run` is borrowed: the list's own
+    // selection handler calls back into here, and a borrow held across a
+    // `set_string` or `set_selection` would be a panic waiting on whichever wx
+    // build decides to raise an event from one.
+    let mut shown = app.run.borrow().shown.overview.clone();
+
+    let selected = list.get_selection();
+
+    // The common case, every tick: the same rows, one of them re-timed.
+    if shown.len() == rows.len() && shown.iter().zip(&rows).all(|((a, _), (b, _))| a == b) {
+        for (index, (_, label)) in rows.into_iter().enumerate() {
+            if shown[index].1 == label {
+                continue;
+            }
+            if selected_rows == Selected::Skip && selected == Some(index as u32) {
+                // Leave the cache stale too, so this is retried the moment the
+                // row stops being the selected one.
+                continue;
+            }
+            list.set_string(index as u32, &label);
+            shown[index].1 = label;
+        }
+    } else {
+        // The row set itself changed, which only happens on a start or stop the
+        // user just performed. Refilling drops the selection, so put it back on
+        // the same *kind* of row rather than the same index — a user parked on
+        // Duration would otherwise land on Listeners.
+        let was_on = selected
+            .and_then(|index| shown.get(index as usize))
+            .map(|(kind, _)| *kind);
+        let labels: Vec<String> = rows.iter().map(|(_, label)| label.clone()).collect();
+        super::list::fill(&list, &labels, NO_OVERVIEW);
+        std::mem::swap(&mut shown, &mut rows);
+        if let Some(index) = was_on.and_then(|kind| shown.iter().position(|(k, _)| *k == kind)) {
+            list.set_selection(index as u32, true);
+        }
+    }
+
+    app.run.borrow_mut().shown.overview = shown;
 }
 
 /// Volume change per arrow key press, in percentage points.
@@ -763,4 +965,87 @@ pub fn on_sources_changed(app: &Rc<App>) {
     app.sync_engine_sources();
     rebuild_mixer(app);
     refresh_scene_list(app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OverviewRow, OverviewState, overview_rows};
+    use crate::ui::StreamState;
+    use std::time::Duration;
+
+    fn state(stream: StreamState, recording: bool, elapsed: Option<u64>) -> OverviewState {
+        OverviewState {
+            stream,
+            recording,
+            listeners: 4,
+            listener_peak: 7,
+            elapsed: elapsed.map(Duration::from_secs),
+        }
+    }
+
+    #[test]
+    fn idle_is_one_row() {
+        let rows = overview_rows(&state(StreamState::Idle, false, None));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0],
+            (OverviewRow::Status, "Status: Not streaming".into())
+        );
+    }
+
+    #[test]
+    fn standalone_recording_reports_itself_and_its_clock() {
+        let rows = overview_rows(&state(StreamState::Idle, true, Some(41)));
+        let kinds: Vec<_> = rows.iter().map(|(kind, _)| *kind).collect();
+        // No listener counts while not streaming.
+        assert_eq!(kinds, [OverviewRow::Status, OverviewRow::Duration]);
+        assert_eq!(rows[0].1, "Status: Recording");
+        assert_eq!(rows[1].1, "Duration: 00:00:41");
+    }
+
+    #[test]
+    fn streaming_and_recording_shows_everything() {
+        let rows = overview_rows(&state(
+            StreamState::Live {
+                stream_id: "1".into(),
+            },
+            true,
+            Some(3723),
+        ));
+        let kinds: Vec<_> = rows.iter().map(|(kind, _)| *kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                OverviewRow::Status,
+                OverviewRow::Listeners,
+                OverviewRow::ListenerPeak,
+                OverviewRow::Duration,
+            ]
+        );
+        assert_eq!(rows[0].1, "Status: Streaming and recording");
+        assert_eq!(rows[1].1, "Listeners: 4");
+        assert_eq!(rows[2].1, "Listener peak: 7");
+        assert_eq!(rows[3].1, "Duration: 01:02:03");
+    }
+
+    #[test]
+    fn starting_has_no_duration_row_until_a_clock_runs() {
+        let rows = overview_rows(&state(StreamState::Starting, false, None));
+        let kinds: Vec<_> = rows.iter().map(|(kind, _)| *kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                OverviewRow::Status,
+                OverviewRow::Listeners,
+                OverviewRow::ListenerPeak,
+            ]
+        );
+        assert_eq!(rows[0].1, "Status: Starting");
+    }
+
+    #[test]
+    fn stopping_while_recording_still_says_so() {
+        let rows = overview_rows(&state(StreamState::Stopping, true, Some(0)));
+        assert_eq!(rows[0].1, "Status: Stopping and recording");
+    }
 }

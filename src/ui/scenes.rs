@@ -9,13 +9,17 @@ use crate::state::{ListEdit, move_down, move_up};
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
+/// Shown when a list has nothing in it. See [`super::list`].
+const NO_SCENES: &str = "No scenes";
+const NO_SOURCES: &str = "No sources";
+
 pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     // --- Scenes ---
     let scenes_label = StaticText::builder(panel).with_label("Scenes").build();
     let scenes_list = ListBox::builder(panel).build();
-    super::set_accessible_name(&scenes_list, "Scenes");
+    super::native_acc::install(&scenes_list, "Scenes");
     super::help::tag(&scenes_list, "tab.scenes.sceneList", "Scenes list");
     let scenes_buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let scene_up = Button::builder(panel).with_label("Move &up").build();
@@ -47,7 +51,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
         .with_label("Sources in selected scene")
         .build();
     let sources_list = ListBox::builder(panel).build();
-    super::set_accessible_name(&sources_list, "Sources in selected scene");
+    super::native_acc::install(&sources_list, "Sources in selected scene");
     super::help::tag(
         &sources_list,
         "tab.scenes.sourceList",
@@ -151,10 +155,11 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
         let app = app.clone();
         let list = sources_list.clone();
         source_sends.on_click(move |_| {
-            let Some(index) = list.get_selection().map(|i| i as usize) else {
+            let scene_index = selected_scene_index(&app);
+            let Some(index) = super::list::selection(&list, source_count(&app, scene_index)) else {
                 return;
             };
-            super::sends::edit_sends(&app, selected_scene_index(&app), index);
+            super::sends::edit_sends(&app, scene_index, index);
         });
     }
     {
@@ -190,12 +195,25 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     (scenes_list, sources_list)
 }
 
+/// How many sources the scene at `scene_index` has, for the bounds check in
+/// [`super::list::selection`].
+fn source_count(app: &Rc<App>, scene_index: usize) -> usize {
+    app.config
+        .borrow()
+        .scenes
+        .scenes
+        .get(scene_index)
+        .map(|scene| scene.sources.len())
+        .unwrap_or(0)
+}
+
 /// The scene currently highlighted in the scenes-tab list (defaults to the
-/// active scene when nothing is selected).
+/// active scene when nothing is selected, or when the list is showing its
+/// placeholder).
 fn selected_scene_index(app: &Rc<App>) -> usize {
-    app.widgets(|w| w.scenes_list.get_selection())
+    let count = app.config.borrow().scenes.scenes.len();
+    app.widgets(|w| super::list::selection(&w.scenes_list, count))
         .flatten()
-        .map(|i| i as usize)
         .unwrap_or_else(|| {
             let config = app.config.borrow();
             config
@@ -211,15 +229,23 @@ pub fn refresh_scenes_list(app: &Rc<App>) {
     app.widgets(|w| {
         let config = app.config.borrow();
         let selected = w.scenes_list.get_selection();
-        w.scenes_list.clear();
-        for scene in &config.scenes.scenes {
-            let label = if scene.is_default {
-                format!("{} (default)", scene.name)
-            } else {
-                scene.name.clone()
-            };
-            w.scenes_list.append(&label);
+        let labels: Vec<String> = config
+            .scenes
+            .scenes
+            .iter()
+            .map(|scene| {
+                if scene.is_default {
+                    format!("{} (default)", scene.name)
+                } else {
+                    scene.name.clone()
+                }
+            })
+            .collect();
+        if super::list::sync(&w.scenes_list, &labels, NO_SCENES) == super::list::Synced::Kept {
+            return;
         }
+        // Falls back to the first scene, so the list starts out with one
+        // selected rather than making the user arrow into it.
         let index = selected.unwrap_or(0);
         if index < w.scenes_list.get_count() {
             w.scenes_list.set_selection(index, true);
@@ -232,10 +258,8 @@ pub fn refresh_scenes_list(app: &Rc<App>) {
 /// This is driven by the two-second application poll, so an application that
 /// comes and goes from the process table used to clear and rebuild the list
 /// every two seconds — restoring the selection each time, and interrupting
-/// anyone arrowing through it. The same in-place treatment
-/// `home::relabel_source_strips` gives the mixer strips applies here: the diff
-/// is what does the work, since `set_string` still raises a name change for
-/// the item it touches.
+/// anyone arrowing through it. `list::sync` is what keeps that quiet, the same
+/// in-place treatment `home::relabel_source_strips` gives the mixer strips.
 pub fn refresh_sources_list(app: &Rc<App>) {
     let scene_index = selected_scene_index(app);
     let labels = {
@@ -249,22 +273,11 @@ pub fn refresh_sources_list(app: &Rc<App>) {
         }
     };
     app.widgets(|w| {
-        if w.sources_list.get_count() as usize == labels.len() {
-            // Same sources, possibly renamed: touch only what differs.
-            for (index, label) in labels.iter().enumerate() {
-                let index = index as u32;
-                if w.sources_list.get_string(index).as_deref() != Some(label.as_str()) {
-                    w.sources_list.set_string(index, label);
-                }
-            }
+        let selected = w.sources_list.get_selection();
+        if super::list::sync(&w.sources_list, &labels, NO_SOURCES) == super::list::Synced::Kept {
             return;
         }
         // The list itself changed, so the focus context genuinely has too.
-        let selected = w.sources_list.get_selection();
-        w.sources_list.clear();
-        for label in &labels {
-            w.sources_list.append(label);
-        }
         if let Some(index) = selected {
             if index < w.sources_list.get_count() {
                 w.sources_list.set_selection(index, true);
@@ -284,7 +297,8 @@ fn after_scene_edit(app: &Rc<App>) {
 }
 
 fn move_scene(app: &Rc<App>, list: &ListBox, up: bool) {
-    let Some(index) = list.get_selection().map(|i| i as usize) else {
+    let count = app.config.borrow().scenes.scenes.len();
+    let Some(index) = super::list::selection(list, count) else {
         return;
     };
     let changed = {
@@ -304,7 +318,8 @@ fn move_scene(app: &Rc<App>, list: &ListBox, up: bool) {
 }
 
 fn delete_scene(app: &Rc<App>, list: &ListBox) {
-    let Some(index) = list.get_selection().map(|i| i as usize) else {
+    let count = app.config.borrow().scenes.scenes.len();
+    let Some(index) = super::list::selection(list, count) else {
         return;
     };
     let changed = app.config.borrow_mut().scenes.delete_scene(index);
@@ -335,7 +350,8 @@ fn add_scene(app: &Rc<App>) {
 }
 
 fn rename_scene(app: &Rc<App>, list: &ListBox) {
-    let Some(index) = list.get_selection().map(|i| i as usize) else {
+    let count = app.config.borrow().scenes.scenes.len();
+    let Some(index) = super::list::selection(list, count) else {
         return;
     };
     let Some(frame) = app.widgets(|w| w.frame.clone()) else {
@@ -362,10 +378,10 @@ fn rename_scene(app: &Rc<App>, list: &ListBox) {
 }
 
 fn move_source(app: &Rc<App>, list: &ListBox, up: bool) {
-    let Some(index) = list.get_selection().map(|i| i as usize) else {
+    let scene_index = selected_scene_index(app);
+    let Some(index) = super::list::selection(list, source_count(app, scene_index)) else {
         return;
     };
-    let scene_index = selected_scene_index(app);
     let changed = {
         let mut config = app.config.borrow_mut();
         let Some(scene) = config.scenes.scenes.get_mut(scene_index) else {
@@ -385,10 +401,10 @@ fn move_source(app: &Rc<App>, list: &ListBox, up: bool) {
 }
 
 fn remove_source(app: &Rc<App>, list: &ListBox) {
-    let Some(index) = list.get_selection().map(|i| i as usize) else {
+    let scene_index = selected_scene_index(app);
+    let Some(index) = super::list::selection(list, source_count(app, scene_index)) else {
         return;
     };
-    let scene_index = selected_scene_index(app);
     {
         let mut config = app.config.borrow_mut();
         let Some(scene) = config.scenes.scenes.get_mut(scene_index) else {
@@ -429,6 +445,7 @@ fn add_source(app: &Rc<App>) {
     ];
     let dialog =
         SingleChoiceDialog::builder(&frame, "What kind of source?", "Add source", &types).build();
+    super::native_acc::install_in_dialog(&dialog, "What kind of source?");
     if dialog.show_modal() != ID_OK {
         return;
     }
@@ -466,10 +483,10 @@ fn add_source(app: &Rc<App>) {
 }
 
 fn edit_source(app: &Rc<App>, list: &ListBox) {
-    let Some(index) = list.get_selection().map(|i| i as usize) else {
+    let scene_index = selected_scene_index(app);
+    let Some(index) = super::list::selection(list, source_count(app, scene_index)) else {
         return;
     };
-    let scene_index = selected_scene_index(app);
     let kind = {
         let config = app.config.borrow();
         let Some(source) = config
@@ -551,6 +568,7 @@ fn edit_microphone(
         &label_refs,
     )
     .build();
+    super::native_acc::install_in_dialog(&dialog, "Which microphone should this source use?");
     // Preselect the current device.
     let preselect = current
         .as_deref()
@@ -729,15 +747,15 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
 
     let preview = Button::builder(&panel).with_label("&Preview voice").build();
     super::set_accessible_name(&preview, "Preview voice");
-    super::help::tag(
-        &preview,
-        "dialog.ttsSource.preview",
-        "Preview voice button",
-    );
+    super::help::tag(&preview, "dialog.ttsSource.preview", "Preview voice button");
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let ok = Button::builder(&panel).with_label("OK").build();
-    let cancel = Button::builder(&panel).with_label("Cancel").build();
+    // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
+    let cancel = Button::builder(&panel)
+        .with_id(ID_CANCEL)
+        .with_label("Cancel")
+        .build();
     buttons.add(&ok, 0, SizerFlag::All, 4);
     buttons.add(&cancel, 0, SizerFlag::All, 4);
 
@@ -933,11 +951,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
                     Ok(fetched) if fetched.is_empty() => {
                         crate::tts::store_voices(engine, fetched);
                         update_voice_status(&voice_count_label, &voice_choice, engine);
-                        super::show_info(
-                            &panel,
-                            "Voices",
-                            "That engine reported no voices.",
-                        );
+                        super::show_info(&panel, "Voices", "That engine reported no voices.");
                     }
                     Ok(fetched) => {
                         crate::tts::store_voices(engine, fetched);
@@ -1146,11 +1160,9 @@ fn preview_voice(
             return false;
         };
         match result {
-            Ok(samples) if samples.is_empty() => super::show_error(
-                &parent,
-                "Preview voice",
-                "The engine returned no audio.",
-            ),
+            Ok(samples) if samples.is_empty() => {
+                super::show_error(&parent, "Preview voice", "The engine returned no audio.")
+            }
             Ok(samples) => {
                 // Played through the app's own cue output rather than a mixer
                 // source, so a preview works before the source exists and can
@@ -1239,7 +1251,11 @@ fn edit_sound_events(
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let ok = Button::builder(&panel).with_label("OK").build();
-    let cancel = Button::builder(&panel).with_label("Cancel").build();
+    // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
+    let cancel = Button::builder(&panel)
+        .with_id(ID_CANCEL)
+        .with_label("Cancel")
+        .build();
     buttons.add(&ok, 0, SizerFlag::All, 4);
     buttons.add(&cancel, 0, SizerFlag::All, 4);
 

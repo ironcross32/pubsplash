@@ -17,9 +17,15 @@
 //!    raised on the main frame's host provider — so NVDA/Narrator speak it,
 //!    interrupting whatever they were saying.
 //!
+//! The same hook also catches F6/SHIFT+F6 for [`super::panes`], since it is the
+//! one hook installed for the whole life of the app. That arm fires only while
+//! the *main frame itself* is foreground, so it can never collide with the
+//! editor-local F6 in `fx_editor` (whose gate is a plugin editor frame being
+//! foreground) or fire under a modal dialog.
+//!
 //! Threading: `tag`, `install_*`, `uninstall_*`, and `pump` all run on the UI
 //! thread (thread-locals below live there); only the hook proc runs in the OS
-//! hook context, and it touches nothing but two atomics.
+//! hook context, and it touches nothing but atomics.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -37,7 +43,7 @@ use windows::Win32::UI::Accessibility::{
     UiaDisconnectProvider, UiaHostProviderFromHwnd, UiaRaiseNotificationEvent,
     UiaReturnRawElementProvider, UiaRootObjectId,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::VK_F1;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_F1, VK_F6, VK_SHIFT};
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetPropW,
@@ -73,6 +79,10 @@ thread_local! {
 static HELP_HOOK: AtomicIsize = AtomicIsize::new(0);
 /// Set by the hook when F1 is pressed in our app; read and cleared by [`pump`].
 static HELP_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// The main frame's hwnd (as isize; 0 = not built yet), so the hook can tell it
+/// apart from our dialogs and plugin editor frames. Set by [`install_announcer`],
+/// which is handed the frame anyway.
+static MAIN_FRAME: AtomicIsize = AtomicIsize::new(0);
 
 fn intern(id: &str) -> usize {
     INTERN.with(|c| {
@@ -231,9 +241,11 @@ pub fn install_announcer(frame: &dyn WxWidget) {
         log::warn!("help: SetWindowSubclass failed for frame hwnd={key:#x}");
     }
     ANNOUNCER.with(|a| *a.borrow_mut() = Some((key, provider)));
+    MAIN_FRAME.store(key, Ordering::Relaxed);
 }
 
 pub fn uninstall_announcer() {
+    MAIN_FRAME.store(0, Ordering::Relaxed);
     let entry = ANNOUNCER.with(|a| a.borrow_mut().take());
     if let Some((key, provider)) = entry {
         unsafe {
@@ -291,6 +303,14 @@ fn foreground_is_ours() -> bool {
     }
 }
 
+/// True only while the main frame is the foreground window. Tighter than
+/// [`foreground_is_ours`] on purpose: it excludes our own modal dialogs and the
+/// plugin editor frames, which have their own F6 (see `fx_editor`).
+fn foreground_is_main_frame() -> bool {
+    let frame = MAIN_FRAME.load(Ordering::Relaxed);
+    frame != 0 && unsafe { GetForegroundWindow() }.0 as isize == frame
+}
+
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32
         && (wparam.0 as u32 == WM_KEYDOWN || wparam.0 as u32 == WM_SYSKEYDOWN)
@@ -302,6 +322,15 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
             // swallowed below, so nothing else would wake the loop to notice.
             wxdragon::wake_up_idle();
             // Swallow F1 so no underlying control pops its own help.
+            return LRESULT(1);
+        }
+        if kb.vkCode == VK_F6.0 as u32 && foreground_is_main_frame() {
+            // Physical shift state: `GetKeyState` here would report this
+            // thread's queued state, which is not what the user just held.
+            let shift = unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) } as u16 & 0x8000 != 0;
+            super::panes::request(shift);
+            wxdragon::wake_up_idle();
+            // Swallow it: MSW gives F6 its own pane-switching meaning.
             return LRESULT(1);
         }
     }

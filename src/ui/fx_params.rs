@@ -285,7 +285,13 @@ pub fn edit_parameters(app: &Rc<App>, target: ChainTarget, slot: usize, plugin: 
         "Show unnamed parameters checkbox",
     );
 
-    let close = Button::builder(&panel).with_label("&Close").build();
+    // `ID_CANCEL` is what wx maps Escape to. The per-control handlers below also
+    // close on Escape, but only on the controls they are attached to; this covers
+    // the rest of the dialog.
+    let close = Button::builder(&panel)
+        .with_id(ID_CANCEL)
+        .with_label("&Close")
+        .build();
 
     sizer.add(&filter_label, 0, SizerFlag::All, 4);
     sizer.add(&filter_box, 0, SizerFlag::Expand | SizerFlag::All, 4);

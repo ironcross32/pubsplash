@@ -393,10 +393,7 @@ fn engine_loop(
     let mut master = ChannelStrip::new(100, false);
     let mut master_monitor = false;
     let mut monitor_out: Option<MonitorOutput> = None;
-    let mut encoder: Option<(
-        encoder::Mp3Encoder,
-        tokio::sync::mpsc::Sender<Vec<u8>>,
-    )> = None;
+    let mut encoder: Option<(encoder::Mp3Encoder, tokio::sync::mpsc::Sender<Vec<u8>>)> = None;
     // Consecutive blocks dropped because the outgoing stream buffer was full,
     // so the log says so once a second rather than a hundred times.
     let mut dropped_blocks: u64 = 0;
@@ -455,7 +452,11 @@ fn engine_loop(
         // happens *per block* — the disk write for recording used to be, and is
         // now on `RecorderHandle`'s own thread.
         loop {
-            match parked_command.take().map(Ok).unwrap_or_else(|| commands.try_recv()) {
+            match parked_command
+                .take()
+                .map(Ok)
+                .unwrap_or_else(|| commands.try_recv())
+            {
                 Ok(EngineCommand::SetRouting(update)) => {
                     let RoutingUpdate {
                         sources: new_sources,

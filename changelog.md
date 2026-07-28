@@ -4,82 +4,59 @@
 
 ### Additions
 
-- Text-to-speech now offers nine engines instead of one. **SAPI 5** and **Microsoft Edge** need no setup at all; **Google Translate**, **OpenAI**, **ElevenLabs**, **Azure**, **AWS Polly**, **Google Cloud**, and a self-hosted **Star** server become available once you enter their credentials.
-
-- A new **Speech** tab in **File > Preferences** holds those credentials, entered once each rather than on every source. Keys are encrypted for your Windows account, so a copied settings file is of no use on another machine. The tab starts with a **Speech engine** picker and shows only that engine's settings, so tabbing through it never walks past five services you do not use; it reopens on the engine you were last working on.
-
-- The Text-to-Speech source dialog now shows how many voices are available for the selected engine, right below the voice picker, and says so plainly when they have not been fetched yet.
-
-- The Text-to-Speech source dialog gained a **Get available voices** button (`ALT+G`), which downloads the voice list for engines that publish one, and a **Preview voice** button (`ALT+P`), which speaks a test phrase with your current settings. If synthesis fails, Preview tells you why - which is much the fastest way to find out that an API key is wrong.
-
-- Text-to-Speech sources gained a **pitch** control. SAPI 5, OpenAI, Google Translate, and AWS Polly have no pitch setting, and the slider says so when one of those is selected.
-
-- The Speech tab can cap how long a message will be spoken and how often a speech service is called, so a burst of chat cannot run up a bill or trip a rate limit. When messages arrive faster than they can be spoken, the oldest are now dropped rather than queued forever, so what you hear stays current.
-
-- When a speech engine fails, the reason now appears in the chat list. Repeats of the same failure are held down to one a minute, so a wrong API key cannot bury your chat.
-
-- **Help > View Changelog** opens the changelog in your default browser.
+- Added `F6`/`SHIFT+F6` to cycle between lists on the current tab and the tab bar.
+- Added eight more TTS engines: Microsoft Edge, Google Translate, OpenAI, ElevenLabs, Azure, AWS Polly, Google Cloud, and self-hosted Star.
+- Added a Speech tab in Preferences for per-engine credentials (DPAPI-encrypted).
+- Added an available-voices count to the TTS source dialog.
+- Added Get available voices (`ALT+G`) and Preview voice (`ALT+P`) buttons to the TTS source dialog.
+- Added a pitch control to TTS sources.
+- Added per-engine message length and rate limits to the Speech tab; oldest queued chat messages are now dropped instead of piling up.
+- Added TTS failure reporting to the chat list, rate-limited to one per minute.
+- Added custom sound pack import/removal (Preferences > Sound packs).
+- Sound pack audio is now decoded and held in memory instead of read from disk on each cue.
+- The sound pack picker no longer loads a pack on every arrow key, only once you stop or tab away.
+- Added Help > View Changelog, opening the changelog in the browser.
+- The Home tab overview now reports recording state and counts recording duration.
 
 ### Fixes
 
-- Arrowing through the engine list in the Text-to-Speech source dialog no longer stalls on every keypress. The voice list is now rebuilt shortly after you stop moving, or straight away when you tab out of the picker, instead of once per engine you pass over.
-
-- The voice count no longer reports the previous engine's figure after you change engines.
-
-- Passing over an engine on the way to another one no longer discards the voice you had already chosen for it.
-
-- **Send these sounds to the stream** no longer takes a Sound Events source's cues away from you. You now always hear them yourself, and the checkbox controls only whether your listeners hear them too — the same way the TTS sources already worked.
-
-- Deleting or reordering a bus no longer saves an open plugin's settings into the wrong bus.
-
-- Settings files are now written safely, so a crash or power loss while saving can no longer wipe your scenes, sources, buses and effect chains.
-
-- Exiting Pubsplash while recording now finishes the recording instead of truncating the file.
-
-- Closing Preferences while a plugin scan is running no longer crashes, including when the scan found no plugins.
-
-- Reordering a bus no longer briefly routes a source's send to the wrong bus.
-
-- Two sources that resolve to the same name are always told apart now, even when another source already carries the numbered name that would have been generated.
-
-- A corrupt settings file no longer overwrites the backup of an earlier one.
-
-- The portable ZIP now includes the Sound Pack Manager and the VST plugin scanner, which previously failed to start for anyone who used the ZIP instead of the installer.
-
-- The Sound Pack Manager no longer opens a console window alongside its own window.
-
-- When a helper program is missing, the error now names the file and the folder it was looked for in instead of reporting "os error 2".
+- The Home tab overview is now a list instead of a text box, fixing arrow keys not being able to reach past rows rewritten each second.
+- Fixed the overview's selected row being re-announced by its own per-second refresh.
+- Empty lists now show a placeholder row ("No chats", "No sources", etc.) instead of announcing "Unknown".
+- Fixed lists re-announcing themselves on unrelated refreshes (Scenes list on source delete, bus list on plugin add).
+- Fixed the TTS engine list stalling on every keypress; the voice list now rebuilds after you stop moving or tab away.
+- Fixed the voice count showing the previous engine's figure after switching engines.
+- Fixed the selected voice being discarded when passing over other engines.
+- Fixed "Send these sounds to the stream" muting local playback of Sound Events cues.
+- Fixed reordering/deleting a bus saving an open plugin's settings to the wrong bus.
+- Settings files are now written atomically, preventing corruption on crash or power loss.
+- Fixed exiting while recording truncating the file.
+- Fixed a crash closing Preferences during a plugin scan.
+- Fixed `Escape` not closing several dialogs (Preferences, Configure Audio Pub, Set stream info, TTS/Sound Events source dialogs, Sends, Load chain, Missing plugins, chat message window) and not working on all controls in the plugin parameter dialog.
+- `Escape` now also closes a plugin's interface window when focus is on its toolbar.
+- Fixed reordering a bus briefly misrouting a source's send.
+- Fixed duplicate-name collisions when a numbered name was already taken.
+- Fixed a corrupt settings file overwriting its own backup.
+- Fixed the Sound Pack Manager and VST plugin scanner not starting from the portable ZIP.
+- Fixed the Sound Pack Manager opening a console window alongside its own.
+- Missing helper program errors now name the file and folder instead of "os error 2".
 
 ### Changes
 
-- **Send speech to the stream** now means exactly that. Unchecking it keeps speech off the stream while still letting it reach your monitor and any buses the source sends to. SAPI 5 still speaks to you directly either way; to hear one of the other engines yourself, turn on monitoring for its mixer strip with `CTRL+M`.
-
-- Chat messages are now spoken as soon as they arrive rather than up to a tenth of a second later, and stream status changes and error messages appear immediately.
-
-- Pubsplash uses noticeably less power when left open, especially before any sources are set up.
-
-- With an Application source configured, the mixer and Sources list no longer hitch every couple of seconds.
-
-- Recordings are written on their own thread, so recording to a slow USB stick or a network drive can no longer put gaps in what listeners hear.
-
-- If the connection to the server stalls, Pubsplash now drops audio rather than building up an ever-growing backlog of it.
-
-- The stream and record buttons are no longer re-announced by screen readers once a second while streaming.
-
-- The chat list is no longer rebuilt every time a message arrives, so long chat sessions stay responsive and no longer interrupt you while you read back through them.
-
-- Moving a volume slider, or typing in the recording folder box, no longer writes the settings file on every step; settings are saved once a second and on exit instead.
-
-- Arrowing through a bus's effects list, and typing in the plugin parameter filter, no longer stall on plugins with large presets or many parameters.
-
-- Log writing no longer happens on the audio mixing thread.
-
-- **Help > Open Readme** now opens the copy installed with Pubsplash, and falls back to GitHub if that copy is unavailable. It no longer flashes a console window.
-
+- "Send speech to the stream" now only affects the stream mix; monitoring (`CTRL+M`) still lets you hear other engines locally.
+- Chat messages are now spoken immediately instead of after up to a 0.1s delay; status/error messages also appear immediately.
+- Reduced idle power usage.
+- Fixed the mixer and Sources list hitching every couple of seconds with an Application source configured.
+- Recording now happens on its own thread, avoiding gaps from slow disks.
+- Pubsplash now drops audio instead of buffering it when the server connection stalls.
+- The stream/record buttons are no longer re-announced once a second while streaming.
+- The chat list no longer rebuilds on every incoming message.
+- Settings are now saved once a second and on exit instead of on every slider/text change.
+- Fixed the bus effects list and plugin parameter filter stalling on large presets.
+- Moved log writing off the audio mixing thread.
+- Help > Open Readme now opens the local copy (falling back to GitHub) without flashing a console window.
 - The changelog now ships as a web page instead of a Markdown file.
-
-- The command-line pack compiler `soundpack.exe` is now installed alongside Pubsplash.
-
+- `soundpack.exe` is now installed alongside Pubsplash.
 - The installer no longer includes `gen-help.exe`.
 
 ## 0.1.1

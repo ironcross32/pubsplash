@@ -217,7 +217,6 @@ unsafe fn synth_to_pcm(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

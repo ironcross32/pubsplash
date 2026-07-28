@@ -214,7 +214,11 @@ mod tests {
     #[test]
     fn repeated_labels_still_count_up_normally() {
         assert_eq!(
-            dedup(vec!["Mic".to_string(), "Mic".to_string(), "Mic".to_string()]),
+            dedup(vec![
+                "Mic".to_string(),
+                "Mic".to_string(),
+                "Mic".to_string()
+            ]),
             vec!["Mic", "Mic 2", "Mic 3"]
         );
     }

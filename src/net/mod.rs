@@ -140,10 +140,7 @@ fn icecast_host_for(site_url: &str) -> String {
     format!("live.{host}:8000")
 }
 
-async fn net_loop(
-    mut commands: tokio_mpsc::UnboundedReceiver<NetCommand>,
-    events: EventSender,
-) {
+async fn net_loop(mut commands: tokio_mpsc::UnboundedReceiver<NetCommand>, events: EventSender) {
     let mut connection: Option<Connection> = None;
     let mut stream: Option<ActiveStream> = None;
 

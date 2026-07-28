@@ -16,13 +16,18 @@ use wxdragon::prelude::*;
 /// Rows before a bus in the list (the pinned "Master output" row).
 const MASTER_ROWS: u32 = 1;
 
+/// Shown when a list has nothing in it. See [`super::list`]. The bus list
+/// needs no such row: "Master output" is always there.
+const NO_PLUGINS: &str = "No plugins";
+const NO_SAVED_CHAINS: &str = "No saved chains";
+
 pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     // --- Buses ---
     let label = StaticText::builder(panel).with_label("Buses").build();
     let bus_list = ListBox::builder(panel).build();
-    super::set_accessible_name(&bus_list, "Buses");
+    super::native_acc::install(&bus_list, "Buses");
     super::help::tag(
         &bus_list,
         "tab.buses.busList",
@@ -52,7 +57,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
         .with_label("Effects on selected bus")
         .build();
     let fx_list = ListBox::builder(panel).build();
-    super::set_accessible_name(&fx_list, "Effects on selected bus");
+    super::native_acc::install(&fx_list, "Effects on selected bus");
     super::help::tag(
         &fx_list,
         "tab.buses.fxList",
@@ -306,10 +311,13 @@ pub fn refresh_bus_list(app: &Rc<App>) {
     app.widgets(|w| {
         let config = app.config.borrow();
         let selected = w.bus_list.get_selection();
-        w.bus_list.clear();
-        w.bus_list.append("Master output");
-        for bus in &config.buses.buses {
-            w.bus_list.append(&bus.name);
+        let labels: Vec<String> = std::iter::once("Master output".to_string())
+            .chain(config.buses.buses.iter().map(|bus| bus.name.clone()))
+            .collect();
+        // The placeholder is unreachable: the pinned Master row means `labels`
+        // is never empty.
+        if super::list::sync(&w.bus_list, &labels, "") == super::list::Synced::Kept {
+            return;
         }
         let target = selected.filter(|&i| i < w.bus_list.get_count());
         if let Some(index) = target {
@@ -342,9 +350,8 @@ pub fn refresh_fx_list(app: &Rc<App>) {
     .unwrap_or_default();
     app.widgets(|w| {
         let previous = w.fx_list.get_selection();
-        w.fx_list.clear();
-        for label in &labels {
-            w.fx_list.append(label);
+        if super::list::sync(&w.fx_list, &labels, NO_PLUGINS) == super::list::Synced::Kept {
+            return;
         }
         if let Some(index) = previous.filter(|&i| i < w.fx_list.get_count()) {
             w.fx_list.set_selection(index, true);
@@ -481,6 +488,7 @@ fn add_plugin(app: &Rc<App>) {
     let labels: Vec<&str> = choices.iter().map(|(name, _)| name.as_str()).collect();
     let dialog =
         SingleChoiceDialog::builder(&frame, "Add which plugin?", "Add plugin", &labels).build();
+    super::native_acc::install_in_dialog(&dialog, "Add which plugin?");
     if dialog.show_modal() == ID_OK {
         let index = dialog.get_selection() as usize;
         if let Some((name, plugin)) = choices.get(index) {
@@ -502,9 +510,16 @@ fn add_plugin(app: &Rc<App>) {
     dialog.destroy();
 }
 
+/// The FX-list row currently selected, as a chain slot index. `None` when
+/// nothing is selected or the list is showing its placeholder row.
+fn selected_slot(app: &Rc<App>, target: ChainTarget, list: &ListBox) -> Option<usize> {
+    let count = fx::with_slots(app, target, |slots| slots.len()).unwrap_or(0);
+    super::list::selection(list, count)
+}
+
 fn remove_plugin(app: &Rc<App>, list: &ListBox) {
     let target = selected_target(app);
-    let Some(slot) = list.get_selection().map(|i| i as usize) else {
+    let Some(slot) = selected_slot(app, target, list) else {
         return;
     };
     fx::remove_plugin(app, target, slot);
@@ -513,7 +528,7 @@ fn remove_plugin(app: &Rc<App>, list: &ListBox) {
 
 fn move_plugin(app: &Rc<App>, list: &ListBox, towards_start: bool) {
     let target = selected_target(app);
-    let Some(slot) = list.get_selection().map(|i| i as usize) else {
+    let Some(slot) = selected_slot(app, target, list) else {
         return;
     };
     if fx::move_plugin(app, target, slot, towards_start) {
@@ -526,7 +541,7 @@ fn move_plugin(app: &Rc<App>, list: &ListBox, towards_start: bool) {
 /// Applies the Bypass checkbox state to the selected plugin.
 fn set_bypass(app: &Rc<App>, list: &ListBox, bypass: bool) {
     let target = selected_target(app);
-    let Some(slot) = list.get_selection().map(|i| i as usize) else {
+    let Some(slot) = selected_slot(app, target, list) else {
         return;
     };
     fx::set_bypass(app, target, slot, bypass);
@@ -540,10 +555,13 @@ fn sync_bypass_check(app: &Rc<App>) {
     // Bound to the FX list's selection-changed event, so this runs on every
     // arrow key: project to the one flag it needs rather than cloning the
     // chain (and every plugin's serialized state with it).
-    let selected = app.widgets(|w| w.fx_list.get_selection()).flatten();
+    let count = fx::with_slots(app, target, |slots| slots.len()).unwrap_or(0);
+    let selected = app
+        .widgets(|w| super::list::selection(&w.fx_list, count))
+        .flatten();
     let bypassed = selected.and_then(|i| {
         fx::with_slots(app, target, |slots| {
-            slots.get(i as usize).map(|s| s.bypass).unwrap_or(false)
+            slots.get(i).map(|s| s.bypass).unwrap_or(false)
         })
     });
     app.widgets(|w| match bypassed {
@@ -560,7 +578,7 @@ fn sync_bypass_check(app: &Rc<App>) {
 
 fn edit_parameters(app: &Rc<App>, list: &ListBox) {
     let target = selected_target(app);
-    let Some(slot) = list.get_selection().map(|i| i as usize) else {
+    let Some(slot) = selected_slot(app, target, list) else {
         return;
     };
     let Some(instance) = fx::instance_at(app, target, slot) else {
@@ -578,7 +596,7 @@ fn edit_parameters(app: &Rc<App>, list: &ListBox) {
 
 fn open_interface(app: &Rc<App>, list: &ListBox) {
     let target = selected_target(app);
-    let Some(slot) = list.get_selection().map(|i| i as usize) else {
+    let Some(slot) = selected_slot(app, target, list) else {
         return;
     };
     let Some(instance) = fx::instance_at(app, target, slot) else {
@@ -687,18 +705,20 @@ fn pick_chain(app: &Rc<App>, frame: &Frame, names: &[String]) -> Option<usize> {
         .with_label("Saved chains")
         .build();
     let list = ListBox::builder(&panel).build();
-    super::set_accessible_name(&list, "Saved chains");
+    super::native_acc::install(&list, "Saved chains");
     super::help::tag(&list, "dialog.loadChain.list", "Saved FX chains list");
-    for name in names {
-        list.append(name);
-    }
+    super::list::fill(&list, names, NO_SAVED_CHAINS);
     if !names.is_empty() {
         list.set_selection(0, true);
     }
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let load = Button::builder(&panel).with_label("&Load").build();
     let delete = Button::builder(&panel).with_label("&Delete").build();
-    let cancel = Button::builder(&panel).with_label("&Cancel").build();
+    // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
+    let cancel = Button::builder(&panel)
+        .with_id(ID_CANCEL)
+        .with_label("&Cancel")
+        .build();
     super::help::tag(&load, "dialog.loadChain.load", "Load selected chain button");
     super::help::tag(
         &delete,
@@ -729,19 +749,22 @@ fn pick_chain(app: &Rc<App>, frame: &Frame, names: &[String]) -> Option<usize> {
         let app = app.clone();
         let list = list.clone();
         delete.on_click(move |_| {
-            if let Some(index) = list.get_selection() {
+            let count = app.chain_library.borrow().chains.len();
+            if let Some(index) = super::list::selection(&list, count) {
                 {
                     let mut library = app.chain_library.borrow_mut();
-                    if (index as usize) < library.chains.len() {
-                        library.chains.remove(index as usize);
-                        crate::fx::save_library(&library);
-                    }
+                    library.chains.remove(index);
+                    crate::fx::save_library(&library);
                 }
-                list.clear();
-                for chain in &app.chain_library.borrow().chains {
-                    list.append(&chain.name);
-                }
-                if list.get_count() > 0 {
+                let names: Vec<String> = app
+                    .chain_library
+                    .borrow()
+                    .chains
+                    .iter()
+                    .map(|chain| chain.name.clone())
+                    .collect();
+                super::list::fill(&list, &names, NO_SAVED_CHAINS);
+                if !names.is_empty() {
                     list.set_selection(0, true);
                 }
             }
@@ -749,7 +772,10 @@ fn pick_chain(app: &Rc<App>, frame: &Frame, names: &[String]) -> Option<usize> {
     }
 
     let result = if dialog.show_modal() == ID_OK {
-        list.get_selection().map(|i| i as usize)
+        // Deleting the last chain leaves only the placeholder row, which must
+        // not come back as an index into `chain_library.chains`.
+        let count = app.chain_library.borrow().chains.len();
+        super::list::selection(&list, count)
     } else {
         None
     };
@@ -877,7 +903,7 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
         ))
         .build();
     let list = ListBox::builder(&panel).build();
-    super::set_accessible_name(&list, "Missing plugins");
+    super::native_acc::install(&list, "Missing plugins");
     super::help::tag(&list, "dialog.missingPlugins.list", "Missing plugins list");
     for plugin in &resolution.missing {
         list.append(&plugin.display());
@@ -895,7 +921,11 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
                 if resolution.valid.len() == 1 { "" } else { "s" }
             ))
             .build();
-        let cancel = Button::builder(&panel).with_label("&Cancel").build();
+        // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
+        let cancel = Button::builder(&panel)
+            .with_id(ID_CANCEL)
+            .with_label("&Cancel")
+            .build();
         super::help::tag(
             &apply,
             "dialog.missingPlugins.apply",
@@ -916,7 +946,12 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
             .with_label("None of the chain's plugins are available, so it cannot be applied.")
             .build();
         sizer.add(&note, 0, SizerFlag::All, 8);
-        let ok = Button::builder(&panel).with_label("&OK").build();
+        // Dismiss-only, so it carries `ID_CANCEL` despite the label: that id is
+        // what wx maps Escape to, and it matches the `end_modal` below.
+        let ok = Button::builder(&panel)
+            .with_id(ID_CANCEL)
+            .with_label("&OK")
+            .build();
         buttons.add(&ok, 0, SizerFlag::All, 4);
         let dialog = dialog.clone();
         ok.on_click(move |_| dialog.end_modal(ID_CANCEL));

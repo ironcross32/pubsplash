@@ -11,6 +11,9 @@ mod fx_editor;
 mod fx_params;
 mod help;
 mod home;
+mod list;
+mod native_acc;
+mod panes;
 mod preferences;
 mod scenes;
 mod sends;
@@ -142,7 +145,13 @@ pub struct Runtime {
     /// Whether the user has confirmed the stream info dialog this session.
     pub stream_info_set: bool,
     /// Whether a standalone (non-streaming) local recording is in progress.
+    /// Drives the record button and its mutual exclusion with streaming; a
+    /// recording running alongside a stream does *not* set it.
     pub recording: bool,
+    /// When the current recording started, whichever way it was started —
+    /// standalone or alongside a stream. The one signal for "a recording is
+    /// underway", and the clock the overview list shows when not streaming.
+    pub recording_started: Option<Instant>,
     /// Running processes matched to the active scene's Application sources,
     /// keyed by the configured process name (lowercased). Refreshed by the
     /// pump; drives both the labels and the pid an Application source captures.
@@ -175,6 +184,12 @@ pub struct ShownStreamUi {
     stream_enabled: Option<bool>,
     record_label: String,
     record_enabled: Option<bool>,
+    /// The rows currently in the overview list, with the text each one actually
+    /// holds. Cached rather than read back through `get_string` because
+    /// `home::refresh_overview` deliberately skips writing the Duration row
+    /// while it is selected, and the cache is what makes that row still count
+    /// as out of date on the next tick.
+    pub overview: Vec<(home::OverviewRow, String)>,
 }
 
 /// Which mixer strips are monitored, by the same indices the mixer and engine
@@ -221,6 +236,7 @@ impl Default for Runtime {
             stream_info: StreamInfo::default(),
             stream_info_set: false,
             recording: false,
+            recording_started: None,
             apps: HashMap::new(),
             failing: HashSet::new(),
             monitors: Monitors::default(),
@@ -234,6 +250,27 @@ impl Default for Runtime {
 struct NameOnlyAccessible(String);
 
 impl wxdragon::accessible::AccessibleImpl for NameOnlyAccessible {
+    /// Delegates the child count, which is what "name only" is supposed to mean
+    /// for every method but this one.
+    ///
+    /// `AccessibleImpl::get_child_count` is the single trait method whose
+    /// default body answers `WXD_ACC_OK` with 0 rather than
+    /// `WXD_ACC_NOT_IMPLEMENTED`, and `Accessible::new` registers all eighteen
+    /// callbacks unconditionally, so the "no callback, fall through" path in the
+    /// C++ shim never runs. wxWidgets' `wxIAccessible::get_accChildCount` hands
+    /// off to the control's standard `IAccessible` *only* on
+    /// `wxACC_NOT_IMPLEMENTED` and takes any other status at face value, so
+    /// without this the answer would be a flat 0 for every control.
+    ///
+    /// It happens to make no audible difference today, because everything still
+    /// using this has no MSAA children and 0 was already the true answer:
+    /// controls that do have children are list boxes, and those go through
+    /// [`native_acc`] instead. Keep it anyway — the next control with children
+    /// would otherwise inherit a silent lie.
+    fn get_child_count(&self) -> (wxdragon::accessible::AccStatus, i32) {
+        (wxdragon::ffi::wxd_AccStatus_WXD_ACC_NOT_IMPLEMENTED, 0)
+    }
+
     fn get_name(&self, child_id: i32) -> (wxdragon::accessible::AccStatus, Option<String>) {
         // Child id 0 is the control itself (MSAA CHILDID_SELF). Ids 1..n are
         // the control's children (e.g. list box items) â€” those must fall
@@ -252,6 +289,11 @@ impl wxdragon::accessible::AccessibleImpl for NameOnlyAccessible {
 
 /// Gives a control an explicit accessible name for screen readers. Needed
 /// where the visual label (or adjacent StaticText) is not announced.
+///
+/// Not for list boxes: replacing wx's accessible leaves the control's MSAA
+/// object split across two unrelated COM object graphs, which made every list
+/// announce its selected row twice on focus. Lists use [`native_acc::install`],
+/// which takes wx out of the loop entirely.
 pub fn set_accessible_name(widget: &dyn WxWidget, name: &str) {
     widget.set_accessible(wxdragon::accessible::Accessible::new(
         widget,
@@ -271,8 +313,11 @@ pub fn key_of(event: &WindowEventData) -> Option<(i32, bool)> {
 /// Widgets that need updating after events. Populated during `build`.
 pub struct Widgets {
     pub frame: Frame,
+    /// The tab bar. Kept so [`panes`] can reach the current page and focus the
+    /// tabs themselves.
+    pub notebook: Notebook,
     pub status_bar: StatusBar,
-    pub overview: TextCtrl,
+    pub overview: ListBox,
     pub stream_button: Button,
     pub record_button: Button,
     pub home_scene_list: ListBox,
@@ -392,8 +437,8 @@ pub struct FxRuntime {
 
 /// Plays an event through each enabled Sound Events source in the active scene.
 ///
-/// Every source uses the sound pack baked into the executable; per-source pack
-/// selection is not exposed yet. The broadcaster always hears the cue locally
+/// Every source uses the one pack chosen on the Preferences "Sound packs" tab;
+/// per-source pack selection is not exposed. The broadcaster always hears the cue locally
 /// through `audio::cue`; `output_to_stream` only decides whether the same
 /// samples are *also* fed to the mixer through `ExternalFeeds` so listeners hear
 /// them. (TTS works the same way - see `tts::sapi`.) The local path bypasses the
@@ -422,7 +467,7 @@ fn play_sound_event(app: &Rc<App>, event: crate::soundpack::StreamEvent) {
         return;
     }
     let sound = crate::soundpack::SoundKind::from_stream_event(event);
-    let Some(pack) = crate::soundpack::embedded_default() else {
+    let Some(pack) = crate::soundpack::active() else {
         return;
     };
     for (source_name, to_stream) in targets {
@@ -525,8 +570,7 @@ fn speak_chat(app: &Rc<App>, user: &str, content: &str) {
             // path out — it always feeds, and the source's own routing decides
             // whether that reaches the stream. SAPI speaks locally regardless,
             // so for it this really is "also send it to the stream".
-            to_stream: tts.output_to_stream
-                || crate::tts::engines::is_network(&tts.engine),
+            to_stream: tts.output_to_stream || crate::tts::engines::is_network(&tts.engine),
             speech: config.speech.clone(),
         });
     }
@@ -634,10 +678,7 @@ impl App {
     }
 
     /// Stores a fresh snapshot, reporting what it changed.
-    fn absorb_apps(
-        &self,
-        apps: HashMap<String, crate::audio::device::AppProcess>,
-    ) -> (bool, bool) {
+    fn absorb_apps(&self, apps: HashMap<String, crate::audio::device::AppProcess>) -> (bool, bool) {
         // Read the active scene now, not when the snapshot was requested: the
         // user may have switched scenes in between.
         let active_names = self.application_source_names(true);
@@ -798,6 +839,13 @@ impl App {
         !matches!(self.run.borrow().stream, StreamState::Idle)
     }
 
+    /// Whether the overview list has a clock that needs re-rendering every
+    /// second. A standalone recording has one even though nothing is streaming.
+    pub fn overview_ticking(&self) -> bool {
+        let run = self.run.borrow();
+        !matches!(run.stream, StreamState::Idle) || run.recording_started.is_some()
+    }
+
     /// The public page of the current live stream, once it is live.
     #[allow(dead_code)]
     pub fn stream_url(&self) -> Option<String> {
@@ -819,6 +867,7 @@ impl App {
         }
         self.engine.send(EngineCommand::StopEncoding);
         self.engine.send(EngineCommand::StopRecording);
+        self.run.borrow_mut().recording_started = None;
         self.net.send(NetCommand::StopStream);
         self.refresh_stream_ui();
     }
@@ -844,7 +893,11 @@ impl App {
             bitrate_kbps: bitrate,
             path,
         });
-        self.run.borrow_mut().recording = true;
+        {
+            let mut run = self.run.borrow_mut();
+            run.recording = true;
+            run.recording_started = Some(Instant::now());
+        }
         self.refresh_stream_ui();
     }
 
@@ -855,12 +908,13 @@ impl App {
                 return;
             }
             run.recording = false;
+            run.recording_started = None;
         }
         self.engine.send(EngineCommand::StopRecording);
         self.refresh_stream_ui();
     }
 
-    /// Repaints everything that depends on stream state: overview box,
+    /// Repaints everything that depends on stream state: overview list,
     /// stream button, status bar.
     pub fn refresh_stream_ui(&self) {
         let run = self.run.borrow();
@@ -887,7 +941,6 @@ impl App {
             StreamState::Stopping => ("Stopping...".to_string(), "S&top streaming".to_string()),
         };
 
-        let streaming = matches!(run.stream, StreamState::Live { .. });
         let streaming_or_starting = !matches!(run.stream, StreamState::Idle);
         let recording = run.recording;
         let record_label = if recording {
@@ -895,24 +948,6 @@ impl App {
         } else {
             "Start &recording"
         };
-        let overview = format!(
-            "Status: {}\nListeners: {}\nListener peak: {}\nDuration: {}",
-            match &run.stream {
-                StreamState::Idle => "Not streaming",
-                StreamState::Starting => "Starting...",
-                StreamState::Live { .. } => "Streaming",
-                StreamState::Stopping => "Stopping...",
-            },
-            run.listeners,
-            run.listener_peak,
-            if streaming {
-                run.stream_started
-                    .map(|t| format_duration(t.elapsed()))
-                    .unwrap_or_default()
-            } else {
-                "-".to_string()
-            }
-        );
         drop(run);
         drop(config);
 
@@ -924,9 +959,6 @@ impl App {
             if shown.status_text != status_text {
                 w.status_bar.set_status_text(&status_text, 0);
                 shown.status_text = status_text;
-            }
-            if w.overview.get_value() != overview {
-                w.overview.set_value(&overview);
             }
             if shown.stream_label != button_label {
                 w.stream_button.set_label(&button_label);
@@ -946,6 +978,9 @@ impl App {
                 shown.record_enabled = Some(!streaming_or_starting);
             }
         });
+        // Outside the closure above: it holds a borrow of `run`, and this takes
+        // its own.
+        home::refresh_overview(self);
     }
 }
 
@@ -1014,6 +1049,10 @@ pub fn start_streaming(app: &Rc<App>) {
             bitrate_kbps: bitrate,
             path,
         });
+        // Not `run.recording`: that flag means a *standalone* recording and
+        // disables the stream button. This is the clock and the overview's
+        // "a recording is underway" signal.
+        app.run.borrow_mut().recording_started = Some(Instant::now());
     }
     app.net.send(NetCommand::StartStream {
         title: info.title,
@@ -1073,6 +1112,7 @@ pub fn build(app: Rc<App>) {
     notebook.add_page(&chat_panel, "Chat", false, None);
     notebook.add_page(&scenes_panel, "Scenes and Sources", false, None);
     notebook.add_page(&buses_panel, "Buses", false, None);
+    help::tag(&notebook, "window.tabBar", "Main tab bar");
 
     let frame_sizer = BoxSizer::builder(Orientation::Vertical).build();
     frame_sizer.add(&notebook, 1, SizerFlag::Expand | SizerFlag::All, 0);
@@ -1095,6 +1135,7 @@ pub fn build(app: Rc<App>) {
 
     *app.widgets.borrow_mut() = Some(Widgets {
         frame: frame.clone(),
+        notebook: notebook.clone(),
         status_bar,
         overview,
         stream_button,
@@ -1242,7 +1283,7 @@ pub fn build(app: Rc<App>) {
             }
             // Durations, relative chat times, and the config write that slider
             // and text edits deferred to here.
-            if app.is_streaming_or_starting() {
+            if app.overview_ticking() {
                 app.refresh_stream_ui();
             }
             chat::refresh_chat_times(&app);
@@ -1733,6 +1774,7 @@ fn pump_events(app: &Rc<App>) {
                 let mut run = app.run.borrow_mut();
                 run.stream = StreamState::Idle;
                 run.stream_started = None;
+                run.recording_started = None;
                 drop(run);
                 stream_ui_dirty = true;
             }
@@ -1742,6 +1784,7 @@ fn pump_events(app: &Rc<App>) {
                 let mut run = app.run.borrow_mut();
                 run.stream = StreamState::Idle;
                 run.stream_started = None;
+                run.recording_started = None;
                 drop(run);
                 stream_ui_dirty = true;
                 if let Some(frame) = app.widgets(|w| w.frame.clone()) {
@@ -1823,8 +1866,9 @@ fn pump_events(app: &Rc<App>) {
     }
 
     // F1 help: one relaxed atomic unless F1 was actually pressed, and the hook
-    // rings the idle doorbell when it was.
+    // rings the idle doorbell when it was. F6 pane cycling arrives the same way.
     help::pump();
+    panes::pump(app);
     // Scans and plugin editors are serviced by the fast timer, which only runs
     // while one of them exists; settle that here so no transition can leave it
     // running with nothing to do (or stopped with something waiting).
@@ -1964,6 +2008,36 @@ fn pump_scan_events(app: &Rc<App>) {
                 let _ = progress.update_with_skip(progress.get_value(), None);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod accessible_tests {
+    use super::NameOnlyAccessible;
+    use wxdragon::accessible::AccessibleImpl;
+    use wxdragon::ffi::{wxd_AccStatus_WXD_ACC_NOT_IMPLEMENTED, wxd_AccStatus_WXD_ACC_OK};
+
+    #[test]
+    fn child_count_is_delegated() {
+        // Answering "0 children" is taken at face value by wxWidgets, so any
+        // control that grows real MSAA children would be published as empty.
+        let (status, _) = NameOnlyAccessible("Bypass selected plugin".into()).get_child_count();
+        assert_eq!(status, wxd_AccStatus_WXD_ACC_NOT_IMPLEMENTED);
+    }
+
+    #[test]
+    fn name_answers_only_for_self() {
+        let acc = NameOnlyAccessible("Speech engine".into());
+        assert_eq!(
+            acc.get_name(0),
+            (wxd_AccStatus_WXD_ACC_OK, Some("Speech engine".to_string()))
+        );
+        // Children must keep their own text; naming them would announce every
+        // one of them as the control's name.
+        assert_eq!(
+            acc.get_name(1),
+            (wxd_AccStatus_WXD_ACC_NOT_IMPLEMENTED, None)
+        );
     }
 }
 

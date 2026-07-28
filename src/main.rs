@@ -41,9 +41,32 @@ fn main() {
     let speaker = tts::speaker::Speaker::start(engine.external_feeds.clone());
     tts::prewarm_voices();
     // Fired before the UI is built so the cue overlaps plugin instantiation and
-    // window construction rather than trailing them.
-    if config.sounds.play_startup {
-        audio::cue::play_sound_kind_async(soundpack::SoundKind::Startup);
+    // window construction rather than trailing them. The chosen pack is loaded
+    // on the same thread and before the cue, so the first sound the user hears
+    // is already theirs; a pack that has been deleted or corrupted since it was
+    // chosen logs and leaves the built-in one active rather than opening a
+    // dialog over a window that does not exist yet.
+    {
+        let pack = config.sounds.pack.clone();
+        let play_startup = config.sounds.play_startup;
+        std::thread::Builder::new()
+            .name("soundpack-load".into())
+            .spawn(move || {
+                if !pack.is_empty() {
+                    match soundpack::load_installed(&pack) {
+                        Ok(loaded) => soundpack::set_active(Some(loaded)),
+                        Err(e) => log::warn!("Could not load the sound pack {pack}: {e}"),
+                    }
+                }
+                if play_startup {
+                    if let Err(e) =
+                        audio::cue::play_sound_kind_blocking(soundpack::SoundKind::Startup)
+                    {
+                        log::warn!("Could not play the startup sound: {e}");
+                    }
+                }
+            })
+            .ok();
     }
     let _ = wxdragon::main(move |_| {
         let (apps_tx, apps_rx) = crossbeam_channel::unbounded();

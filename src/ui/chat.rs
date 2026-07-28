@@ -6,12 +6,18 @@ use crate::state::relative_time;
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
+/// Shown when there are no messages. See [`super::list`].
+const NO_CHATS: &str = "No chats";
+
 pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     let list_label = StaticText::builder(panel).with_label("Messages").build();
     let chat_list = ListBox::builder(panel).build();
-    super::set_accessible_name(&chat_list, "Messages");
+    // Nothing refreshes this list until a stream starts, so seed the
+    // placeholder here rather than leaving it empty (and unannounceable).
+    super::list::fill(&chat_list, &[], NO_CHATS);
+    super::native_acc::install(&chat_list, "Messages");
     super::help::tag(&chat_list, "tab.chat.messageList", "Chat message list");
     let view_button = Button::builder(panel).with_label("&View message").build();
     super::help::tag(
@@ -105,14 +111,14 @@ fn send_message(app: &Rc<App>, input: &TextCtrl) {
 }
 
 fn view_selected(app: &Rc<App>, list: &ListBox) {
-    let Some(index) = list.get_selection() else {
+    let Some(index) = super::list::selection(list, app.run.borrow().chat.len()) else {
         return;
     };
     let Some((user, content)) = app
         .run
         .borrow()
         .chat
-        .get(index as usize)
+        .get(index)
         .map(|entry| (entry.user.clone(), entry.content.clone()))
     else {
         return;
@@ -132,7 +138,11 @@ fn view_selected(app: &Rc<App>, list: &ListBox) {
         .with_value(&format!("{user}: {content}"))
         .build();
     super::help::tag(&text, "dialog.chatView.text", "Full chat message text");
-    let close = Button::builder(&panel).with_label("Close").build();
+    // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
+    let close = Button::builder(&panel)
+        .with_id(ID_CANCEL)
+        .with_label("Close")
+        .build();
     {
         let dialog = dialog.clone();
         close.on_click(move |_| dialog.end_modal(ID_CANCEL));
@@ -161,11 +171,15 @@ pub fn refresh_chat_list(app: &App) {
     app.widgets(|w| {
         let mut run = app.run.borrow_mut();
         let selected = w.chat_list.get_selection();
-        w.chat_list.clear();
-        for entry in run.chat.iter_mut() {
-            entry.shown_age = relative_time(entry.received.elapsed());
-            w.chat_list.append(&label_for(entry, &entry.shown_age));
-        }
+        let labels: Vec<String> = run
+            .chat
+            .iter_mut()
+            .map(|entry| {
+                entry.shown_age = relative_time(entry.received.elapsed());
+                label_for(entry, &entry.shown_age)
+            })
+            .collect();
+        super::list::fill(&w.chat_list, &labels, NO_CHATS);
         if let Some(index) = selected {
             if index < w.chat_list.get_count() {
                 w.chat_list.set_selection(index, true);
@@ -188,6 +202,11 @@ pub fn append_new_messages(app: &App, count: usize) {
         let mut run = app.run.borrow_mut();
         let total = run.chat.len();
         let start = total.saturating_sub(count);
+        if start == 0 {
+            // These are the first messages, so the list is still holding the
+            // placeholder row — that one has to go before anything is added.
+            w.chat_list.clear();
+        }
         for entry in run.chat[start..].iter_mut() {
             entry.shown_age = relative_time(entry.received.elapsed());
             w.chat_list.append(&label_for(entry, &entry.shown_age));
@@ -209,12 +228,15 @@ pub fn append_new_messages(app: &App, count: usize) {
 pub fn refresh_chat_times(app: &App) {
     app.widgets(|w| {
         let mut run = app.run.borrow_mut();
+        // Indexing rows by position is safe here: the placeholder row exists
+        // only while `run.chat` is empty, and then this loop does not run.
         for (index, entry) in run.chat.iter_mut().enumerate() {
             let age = relative_time(entry.received.elapsed());
             if age == entry.shown_age {
                 continue;
             }
-            w.chat_list.set_string(index as u32, &label_for(entry, &age));
+            w.chat_list
+                .set_string(index as u32, &label_for(entry, &age));
             entry.shown_age = age;
         }
     });

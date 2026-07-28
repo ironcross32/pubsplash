@@ -9,6 +9,9 @@ use crate::vst::scan::{self, ScanMode};
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
+/// Shown when no plugin folders are configured. See [`super::list`].
+const NO_PLUGIN_FOLDERS: &str = "No plugin folders";
+
 pub fn show(app: &Rc<App>, frame: &Frame) {
     let dialog = Dialog::builder(frame, "Preferences")
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
@@ -24,12 +27,16 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     build_speech_tab(app, &speech_panel);
     let sounds_panel = Panel::builder(&notebook).build();
     notebook.add_page(&sounds_panel, "Sound packs", false, None);
-    build_sounds_tab(app, &sounds_panel);
+    let sounds = build_sounds_tab(app, &dialog, &sounds_panel);
     let vst_panel = Panel::builder(&notebook).build();
     notebook.add_page(&vst_panel, "VST plugins", false, None);
     build_vst_tab(app, &dialog, &vst_panel);
 
-    let close_button = Button::builder(&dialog).with_label("C&lose").build();
+    // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
+    let close_button = Button::builder(&dialog)
+        .with_id(ID_CANCEL)
+        .with_label("C&lose")
+        .build();
     {
         let dialog = dialog.clone();
         close_button.on_click(move |_| dialog.end_modal(ID_CANCEL));
@@ -41,6 +48,11 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     dialog.set_sizer(dialog_sizer, true);
 
     dialog.show_modal();
+    // Closing the dialog is also "settling": apply whatever the pack picker is
+    // showing, then make sure its timer cannot outlive the window it belongs to.
+    (sounds.apply)();
+    sounds.alive.set(false);
+    sounds.settle.stop();
     // A scan can still be running: `ScanEvent::Started` only builds a progress
     // dialog when the folders actually held plugins, so scanning an empty
     // folder leaves the scan alive with this dialog fully interactive. Its
@@ -301,8 +313,7 @@ fn build_speech_tab(app: &Rc<App>, panel: &Panel) {
         let app = app.clone();
         let interval = interval.clone();
         interval.clone().on_value_changed(move |_| {
-            app.config.borrow_mut().speech.min_request_interval_ms =
-                interval.value().max(0) as u64;
+            app.config.borrow_mut().speech.min_request_interval_ms = interval.value().max(0) as u64;
             app.save_config();
         });
     }
@@ -340,64 +351,176 @@ fn build_engine_page(app: &Rc<App>, page: &Panel, sizer: &BoxSizer, engine: &str
 
     match engine {
         engines::OPENAI => {
-            let key = secret_row(app, page, sizer, "OpenAI API key", engines::OPENAI, |s| {
-                s.openai_api_key.as_str().to_string()
-            }, |s, v| s.openai_api_key = Secret::new(v));
-            super::help::tag(&key, "dialog.preferences.speech.openaiKey", "OpenAI API key");
+            let key = secret_row(
+                app,
+                page,
+                sizer,
+                "OpenAI API key",
+                engines::OPENAI,
+                |s| s.openai_api_key.as_str().to_string(),
+                |s, v| s.openai_api_key = Secret::new(v),
+            );
+            super::help::tag(
+                &key,
+                "dialog.preferences.speech.openaiKey",
+                "OpenAI API key",
+            );
         }
         engines::ELEVENLABS => {
-            let key = secret_row(app, page, sizer, "ElevenLabs API key", engines::ELEVENLABS, |s| {
-                s.elevenlabs_api_key.as_str().to_string()
-            }, |s, v| s.elevenlabs_api_key = Secret::new(v));
-            super::help::tag(&key, "dialog.preferences.speech.elevenlabsKey", "ElevenLabs API key");
-            let model = text_row(app, page, sizer, "ElevenLabs model", engines::ELEVENLABS, |s| {
-                s.elevenlabs_model.clone()
-            }, |s, v| s.elevenlabs_model = v);
-            super::help::tag(&model, "dialog.preferences.speech.elevenlabsModel", "ElevenLabs model");
+            let key = secret_row(
+                app,
+                page,
+                sizer,
+                "ElevenLabs API key",
+                engines::ELEVENLABS,
+                |s| s.elevenlabs_api_key.as_str().to_string(),
+                |s, v| s.elevenlabs_api_key = Secret::new(v),
+            );
+            super::help::tag(
+                &key,
+                "dialog.preferences.speech.elevenlabsKey",
+                "ElevenLabs API key",
+            );
+            let model = text_row(
+                app,
+                page,
+                sizer,
+                "ElevenLabs model",
+                engines::ELEVENLABS,
+                |s| s.elevenlabs_model.clone(),
+                |s, v| s.elevenlabs_model = v,
+            );
+            super::help::tag(
+                &model,
+                "dialog.preferences.speech.elevenlabsModel",
+                "ElevenLabs model",
+            );
         }
         engines::AZURE => {
-            let key = secret_row(app, page, sizer, "Azure subscription key", engines::AZURE, |s| {
-                s.azure_key.as_str().to_string()
-            }, |s, v| s.azure_key = Secret::new(v));
-            super::help::tag(&key, "dialog.preferences.speech.azureKey", "Azure subscription key");
-            let region = text_row(app, page, sizer, "Azure region, for example eastus", engines::AZURE, |s| {
-                s.azure_region.clone()
-            }, |s, v| s.azure_region = v);
-            super::help::tag(&region, "dialog.preferences.speech.azureRegion", "Azure region");
+            let key = secret_row(
+                app,
+                page,
+                sizer,
+                "Azure subscription key",
+                engines::AZURE,
+                |s| s.azure_key.as_str().to_string(),
+                |s, v| s.azure_key = Secret::new(v),
+            );
+            super::help::tag(
+                &key,
+                "dialog.preferences.speech.azureKey",
+                "Azure subscription key",
+            );
+            let region = text_row(
+                app,
+                page,
+                sizer,
+                "Azure region, for example eastus",
+                engines::AZURE,
+                |s| s.azure_region.clone(),
+                |s, v| s.azure_region = v,
+            );
+            super::help::tag(
+                &region,
+                "dialog.preferences.speech.azureRegion",
+                "Azure region",
+            );
         }
         engines::AWS => {
-            let id = text_row(app, page, sizer, "AWS access key ID", engines::AWS, |s| {
-                s.aws_access_key_id.clone()
-            }, |s, v| s.aws_access_key_id = v);
+            let id = text_row(
+                app,
+                page,
+                sizer,
+                "AWS access key ID",
+                engines::AWS,
+                |s| s.aws_access_key_id.clone(),
+                |s, v| s.aws_access_key_id = v,
+            );
             super::help::tag(&id, "dialog.preferences.speech.awsId", "AWS access key ID");
-            let key = secret_row(app, page, sizer, "AWS secret access key", engines::AWS, |s| {
-                s.aws_secret_access_key.as_str().to_string()
-            }, |s, v| s.aws_secret_access_key = Secret::new(v));
-            super::help::tag(&key, "dialog.preferences.speech.awsSecret", "AWS secret access key");
-            let region = text_row(app, page, sizer, "AWS region, for example us-east-1", engines::AWS, |s| {
-                s.aws_region.clone()
-            }, |s, v| s.aws_region = v);
+            let key = secret_row(
+                app,
+                page,
+                sizer,
+                "AWS secret access key",
+                engines::AWS,
+                |s| s.aws_secret_access_key.as_str().to_string(),
+                |s, v| s.aws_secret_access_key = Secret::new(v),
+            );
+            super::help::tag(
+                &key,
+                "dialog.preferences.speech.awsSecret",
+                "AWS secret access key",
+            );
+            let region = text_row(
+                app,
+                page,
+                sizer,
+                "AWS region, for example us-east-1",
+                engines::AWS,
+                |s| s.aws_region.clone(),
+                |s, v| s.aws_region = v,
+            );
             super::help::tag(&region, "dialog.preferences.speech.awsRegion", "AWS region");
-            let polly_engine = text_row(app, page, sizer, "Polly engine, neural or standard", engines::AWS, |s| {
-                s.aws_engine.clone()
-            }, |s, v| s.aws_engine = v);
-            super::help::tag(&polly_engine, "dialog.preferences.speech.awsEngine", "Polly engine");
+            let polly_engine = text_row(
+                app,
+                page,
+                sizer,
+                "Polly engine, neural or standard",
+                engines::AWS,
+                |s| s.aws_engine.clone(),
+                |s, v| s.aws_engine = v,
+            );
+            super::help::tag(
+                &polly_engine,
+                "dialog.preferences.speech.awsEngine",
+                "Polly engine",
+            );
         }
         engines::GOOGLE => {
-            let key = secret_row(app, page, sizer, "Google Cloud API key", engines::GOOGLE, |s| {
-                s.google_api_key.as_str().to_string()
-            }, |s, v| s.google_api_key = Secret::new(v));
-            super::help::tag(&key, "dialog.preferences.speech.googleKey", "Google Cloud API key");
-            let language = text_row(app, page, sizer, "Google Cloud language code, for example en-US", engines::GOOGLE, |s| {
-                s.google_language_code.clone()
-            }, |s, v| s.google_language_code = v);
-            super::help::tag(&language, "dialog.preferences.speech.googleLanguage", "Google Cloud language code");
+            let key = secret_row(
+                app,
+                page,
+                sizer,
+                "Google Cloud API key",
+                engines::GOOGLE,
+                |s| s.google_api_key.as_str().to_string(),
+                |s, v| s.google_api_key = Secret::new(v),
+            );
+            super::help::tag(
+                &key,
+                "dialog.preferences.speech.googleKey",
+                "Google Cloud API key",
+            );
+            let language = text_row(
+                app,
+                page,
+                sizer,
+                "Google Cloud language code, for example en-US",
+                engines::GOOGLE,
+                |s| s.google_language_code.clone(),
+                |s, v| s.google_language_code = v,
+            );
+            super::help::tag(
+                &language,
+                "dialog.preferences.speech.googleLanguage",
+                "Google Cloud language code",
+            );
         }
         engines::STAR => {
-            let host = text_row(app, page, sizer, "Star server URL", engines::STAR, |s| {
-                s.star_host.clone()
-            }, |s, v| s.star_host = v);
-            super::help::tag(&host, "dialog.preferences.speech.starHost", "Star server URL");
+            let host = text_row(
+                app,
+                page,
+                sizer,
+                "Star server URL",
+                engines::STAR,
+                |s| s.star_host.clone(),
+                |s, v| s.star_host = v,
+            );
+            super::help::tag(
+                &host,
+                "dialog.preferences.speech.starHost",
+                "Star server URL",
+            );
         }
         // SAPI, Microsoft Edge and Google Translate. Nothing focusable here, so
         // the tab order runs straight from the picker to the limits below —
@@ -481,8 +604,318 @@ fn speech_row(
 
 /// The Sound packs tab. Unlike the other two it opens no sub-dialogs, so it
 /// takes no `dialog` argument.
-fn build_sounds_tab(app: &Rc<App>, panel: &Panel) {
+/// The live parts of the Sound packs tab that `show` has to tear down: the
+/// pack picker's debounce timer must be stopped, and its pending selection
+/// applied, before the dialog is destroyed.
+struct SoundsTab {
+    apply: Rc<dyn Fn()>,
+    settle: Rc<Timer<Dialog>>,
+    alive: Rc<std::cell::Cell<bool>>,
+}
+
+/// How long the pack picker waits after the last keypress before loading.
+/// Same reasoning as the speech-engine picker in `ui/scenes.rs` (see the long
+/// comment there): a `Choice` fires a selection change on every arrow key, and
+/// loading a pack means AES over the whole file plus a decode of every sound,
+/// so arrowing through the list must not do the work per key.
+const SETTLE_MS: i32 = 300;
+
+fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
+
+    let pack_group =
+        StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, panel, "Sound pack").build();
+
+    let pack_choice = Choice::builder(panel).build();
+    super::set_accessible_name(&pack_choice, "Sound pack");
+    super::help::tag(
+        &pack_choice,
+        "dialog.preferences.sounds.pack",
+        "Sound pack choice",
+    );
+    pack_group.add(&pack_choice, 0, SizerFlag::Expand | SizerFlag::All, 4);
+
+    let pack_buttons = BoxSizer::builder(Orientation::Horizontal).build();
+    let import_pack = Button::builder(panel).with_label("&Import pack...").build();
+    // ALT+K, not ALT+M: the VST tab's "Re&move folder" already claims that
+    // mnemonic in this dialog.
+    let remove_pack = Button::builder(panel).with_label("Remove pac&k").build();
+    super::help::tag(
+        &import_pack,
+        "dialog.preferences.sounds.importPack",
+        "Import sound pack button",
+    );
+    super::help::tag(
+        &remove_pack,
+        "dialog.preferences.sounds.removePack",
+        "Remove sound pack button",
+    );
+    pack_buttons.add(&import_pack, 0, SizerFlag::All, 4);
+    pack_buttons.add(&remove_pack, 0, SizerFlag::All, 4);
+    pack_group.add_sizer(&pack_buttons, 0, SizerFlag::Expand, 0);
+
+    // Index 0 is always the built-in pack, so a choice index maps to
+    // `packs[index - 1]`.
+    let packs: Rc<std::cell::RefCell<Vec<crate::soundpack::InstalledPack>>> =
+        Rc::new(std::cell::RefCell::new(Vec::new()));
+
+    let selected_pack: Rc<dyn Fn() -> String> = {
+        let pack_choice = pack_choice.clone();
+        let packs = packs.clone();
+        Rc::new(move || match pack_choice.get_selection() {
+            Some(0) | None => String::new(),
+            Some(index) => packs
+                .borrow()
+                .get(index as usize - 1)
+                .map(|p| p.file_name.clone())
+                .unwrap_or_default(),
+        })
+    };
+
+    // Refills the list from disk and selects `select` by file name, falling
+    // back to the built-in pack when it is gone.
+    let refresh_packs: Rc<dyn Fn(&str)> = {
+        let pack_choice = pack_choice.clone();
+        let remove_pack = remove_pack.clone();
+        let packs = packs.clone();
+        Rc::new(move |select: &str| {
+            let installed = crate::soundpack::installed_packs();
+            pack_choice.clear();
+            pack_choice.append("Built-in default");
+            let mut selection = 0u32;
+            for (i, pack) in installed.iter().enumerate() {
+                pack_choice.append(&pack.display_name);
+                if pack.file_name == select {
+                    selection = i as u32 + 1;
+                }
+            }
+            *packs.borrow_mut() = installed;
+            pack_choice.set_selection(selection);
+            remove_pack.enable(selection > 0);
+        })
+    };
+    refresh_packs(&app.config.borrow().sounds.pack.clone());
+
+    // What is actually loaded, so passing back through the current selection on
+    // the way to another one costs a string compare and nothing else.
+    let applied = Rc::new(std::cell::RefCell::new(
+        app.config.borrow().sounds.pack.clone(),
+    ));
+    let alive = Rc::new(std::cell::Cell::new(true));
+    // Bumped per apply so a second switch made while the first is still loading
+    // wins, however the two loads finish relative to each other.
+    let generation = Rc::new(std::cell::Cell::new(0u64));
+
+    let apply_pack: Rc<dyn Fn()> = {
+        let app = app.clone();
+        let dialog = dialog.clone();
+        let pack_choice = pack_choice.clone();
+        let selected_pack = selected_pack.clone();
+        let applied = applied.clone();
+        let alive = alive.clone();
+        let generation = generation.clone();
+        Rc::new(move || {
+            let wanted = selected_pack();
+            if wanted == *applied.borrow() {
+                return;
+            }
+            *applied.borrow_mut() = wanted.clone();
+            app.config.borrow_mut().sounds.pack = wanted.clone();
+            app.save_config();
+
+            let this = generation.get().wrapping_add(1);
+            generation.set(this);
+            if wanted.is_empty() {
+                crate::soundpack::set_active(None);
+                return;
+            }
+
+            // Decrypting and decoding a whole pack on the UI thread would
+            // freeze the dialog, so the work goes to a thread and the result
+            // comes back on the idle pump.
+            let (sender, receiver) = crossbeam_channel::bounded(1);
+            let loading = wanted.clone();
+            std::thread::Builder::new()
+                .name("soundpack-load".into())
+                .spawn(move || {
+                    let _ = sender.send(crate::soundpack::load_installed(&loading));
+                })
+                .ok();
+
+            let app = app.clone();
+            let dialog = dialog.clone();
+            let pack_choice = pack_choice.clone();
+            let applied = applied.clone();
+            let alive = alive.clone();
+            let generation = generation.clone();
+            super::run_when_ready(move || {
+                let result = match receiver.try_recv() {
+                    Ok(result) => result,
+                    Err(crossbeam_channel::TryRecvError::Empty) => return false,
+                    Err(_) => return true,
+                };
+                // A later selection has already been applied; this pack is
+                // stale and must not replace it.
+                if generation.get() != this {
+                    return true;
+                }
+                match result {
+                    Ok(pack) => crate::soundpack::set_active(Some(pack)),
+                    Err(e) => {
+                        // Fall back rather than leave the user with a pack that
+                        // is chosen but silent.
+                        crate::soundpack::set_active(None);
+                        *applied.borrow_mut() = String::new();
+                        app.config.borrow_mut().sounds.pack = String::new();
+                        app.save_config();
+                        if alive.get() {
+                            pack_choice.set_selection(0);
+                            show_error(
+                                &dialog,
+                                "Sound pack",
+                                &format!("That sound pack could not be loaded: {e}"),
+                            );
+                        } else {
+                            log::warn!("Could not load the sound pack {wanted}: {e}");
+                        }
+                    }
+                }
+                true
+            });
+        })
+    };
+
+    // Owned here so it dies with the dialog: a timer whose owner window has
+    // been destroyed keeps firing into freed memory. `show` stops it before
+    // `destroy()`.
+    let settle = Rc::new(Timer::new(dialog));
+    {
+        let apply_pack = apply_pack.clone();
+        let alive = alive.clone();
+        settle.on_tick(move |_| {
+            if alive.get() {
+                apply_pack();
+            }
+        });
+    }
+
+    {
+        let settle = settle.clone();
+        let remove_pack = remove_pack.clone();
+        let pack_choice_for_event = pack_choice.clone();
+        pack_choice.clone().on_selection_changed(move |_| {
+            // Immediate, because it is only the button's own state: the load
+            // itself waits for the timer.
+            remove_pack.enable(pack_choice_for_event.get_selection().unwrap_or(0) > 0);
+            settle.start(SETTLE_MS, true);
+        });
+    }
+
+    {
+        // A user who has tabbed away should not have to wait out the timer.
+        let apply_pack = apply_pack.clone();
+        let alive = alive.clone();
+        pack_choice.clone().on_kill_focus(move |event| {
+            if alive.get() {
+                apply_pack();
+            }
+            event.skip(true);
+        });
+    }
+
+    {
+        let dialog = dialog.clone();
+        let apply_pack = apply_pack.clone();
+        let refresh_packs = refresh_packs.clone();
+        import_pack.on_click(move |_| {
+            // Flush a pending debounce first: importing while a half-made
+            // selection is still parked would apply it afterwards.
+            apply_pack();
+            let picker = FileDialog::builder(&dialog)
+                .with_message("Import a sound pack")
+                .with_wildcard("Pubsplash sound packs (*.pspack)|*.pspack")
+                .with_style(FileDialogStyle::Open | FileDialogStyle::FileMustExist)
+                .build();
+            if picker.show_modal() != ID_OK {
+                return;
+            }
+            let Some(path) = picker.get_path().map(std::path::PathBuf::from) else {
+                return;
+            };
+            let mut replace = false;
+            match crate::soundpack::installed_name(&path) {
+                Ok(name) => {
+                    if crate::soundpack::packs_dir().join(&name).exists() {
+                        let confirm = MessageDialog::builder(
+                            &dialog,
+                            &format!(
+                                "A sound pack named {} is already installed. Replace it?",
+                                name.trim_end_matches(".pspack")
+                            ),
+                            "Import pack",
+                        )
+                        .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
+                        .build();
+                        if confirm.show_modal() != ID_YES {
+                            return;
+                        }
+                        replace = true;
+                    }
+                }
+                Err(e) => {
+                    show_error(&dialog, "Import pack", &e);
+                    return;
+                }
+            }
+            match crate::soundpack::import(&path, replace) {
+                Ok(file_name) => {
+                    refresh_packs(&file_name);
+                    // An import is an explicit act, so it takes effect now
+                    // rather than after the settle timer.
+                    apply_pack();
+                }
+                Err(e) => show_error(&dialog, "Import pack", &e),
+            }
+        });
+    }
+
+    {
+        let dialog = dialog.clone();
+        let apply_pack = apply_pack.clone();
+        let refresh_packs = refresh_packs.clone();
+        let selected_pack = selected_pack.clone();
+        let pack_choice = pack_choice.clone();
+        remove_pack.clone().on_click(move |_| {
+            apply_pack();
+            let file_name = selected_pack();
+            if file_name.is_empty() {
+                return;
+            }
+            let confirm = MessageDialog::builder(
+                &dialog,
+                &format!(
+                    "Remove the sound pack {}?",
+                    file_name.trim_end_matches(".pspack")
+                ),
+                "Remove pack",
+            )
+            .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
+            .build();
+            if confirm.show_modal() != ID_YES {
+                return;
+            }
+            // Selecting the built-in pack first drops the removed pack's
+            // samples, so nothing is left holding a pack that no longer exists.
+            pack_choice.set_selection(0);
+            apply_pack();
+            if let Err(e) = crate::soundpack::remove(&file_name) {
+                show_error(&dialog, "Remove pack", &e);
+            }
+            refresh_packs("");
+        });
+    }
+
+    sizer.add_sizer(&pack_group, 0, SizerFlag::Expand | SizerFlag::All, 4);
 
     let interface_group =
         StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, panel, "Interface sounds")
@@ -530,6 +963,12 @@ fn build_sounds_tab(app: &Rc<App>, panel: &Panel) {
 
     sizer.add_sizer(&interface_group, 0, SizerFlag::Expand | SizerFlag::All, 4);
     panel.set_sizer(sizer, true);
+
+    SoundsTab {
+        apply: apply_pack,
+        settle,
+        alive,
+    }
 }
 
 fn build_vst_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
@@ -539,7 +978,7 @@ fn build_vst_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         .with_label("Plugin folders")
         .build();
     let folders_list = ListBox::builder(panel).build();
-    super::set_accessible_name(&folders_list, "Plugin folders");
+    super::native_acc::install(&folders_list, "Plugin folders");
     super::help::tag(
         &folders_list,
         "dialog.preferences.vst.folderList",
@@ -593,16 +1032,14 @@ fn build_vst_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         let folders_list = folders_list.clone();
         move |select: Option<&str>| {
             let config = app.config.borrow();
-            folders_list.clear();
-            let mut select_index = 0u32;
-            for (i, folder) in config.plugins.folders.iter().enumerate() {
-                folders_list.append(folder);
-                if Some(folder.as_str()) == select {
-                    select_index = i as u32;
-                }
-            }
-            if folders_list.get_count() > 0 {
-                folders_list.set_selection(select_index, true);
+            let folders = &config.plugins.folders;
+            super::list::fill(&folders_list, folders, NO_PLUGIN_FOLDERS);
+            if !folders.is_empty() {
+                let select_index = folders
+                    .iter()
+                    .position(|folder| Some(folder.as_str()) == select)
+                    .unwrap_or(0);
+                folders_list.set_selection(select_index as u32, true);
             }
         }
     };
@@ -650,16 +1087,11 @@ fn build_vst_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         let folders_list = folders_list.clone();
         let refresh_folders = refresh_folders.clone();
         move || {
-            let Some(index) = folders_list.get_selection().map(|i| i as usize) else {
+            let count = app.config.borrow().plugins.folders.len();
+            let Some(index) = super::list::selection(&folders_list, count) else {
                 return;
             };
-            {
-                let mut config = app.config.borrow_mut();
-                if index >= config.plugins.folders.len() {
-                    return;
-                }
-                config.plugins.folders.remove(index);
-            }
+            app.config.borrow_mut().plugins.folders.remove(index);
             app.save_config();
             refresh_folders(None);
         }
