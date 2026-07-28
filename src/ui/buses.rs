@@ -337,14 +337,23 @@ pub fn refresh_fx_list(app: &Rc<App>) {
     let count = fx::with_slots(app, target, |slots| slots.len()).unwrap_or(0);
     // Whether each instance actually loaded lives in `app.fx`, not the config,
     // and is gathered separately so neither borrow spans the other.
-    let loaded: Vec<bool> = (0..count)
-        .map(|i| fx::instance_at(app, target, i).is_some())
+    let statuses: Vec<fx::SlotStatus> = (0..count)
+        .map(|i| {
+            let loaded = fx::instance_at(app, target, i).is_some();
+            fx::slot_status(app, target, i, loaded)
+        })
         .collect();
     let labels = fx::with_slots(app, target, |slots| {
         slots
             .iter()
             .enumerate()
-            .map(|(i, slot)| fx::slot_label(i, slot, loaded.get(i).copied().unwrap_or(false)))
+            .map(|(i, slot)| {
+                let status = statuses
+                    .get(i)
+                    .copied()
+                    .unwrap_or(fx::SlotStatus::NotInstalled);
+                fx::slot_label(i, slot, status)
+            })
             .collect::<Vec<_>>()
     })
     .unwrap_or_default();
@@ -467,21 +476,24 @@ fn add_plugin(app: &Rc<App>) {
     let Some(frame) = app.widgets(|w| w.frame.clone()) else {
         return;
     };
-    // Only VST2 plugins can be hosted in this version.
     let choices: Vec<(String, crate::config::PluginRef)> = {
         let cache = app.plugins.borrow();
         cache
             .plugins
             .iter()
-            .filter(|p| p.format == crate::vst::PluginFormat::Vst2)
-            .map(|p| (p.name.clone(), crate::config::PluginRef::from_info(p)))
+            .map(|p| {
+                (
+                    format!("{} ({})", p.name, p.format.display_name()),
+                    crate::config::PluginRef::from_info(p),
+                )
+            })
             .collect()
     };
     if choices.is_empty() {
         show_info(
             &frame,
             "Add plugin",
-            "No VST2 plugins are available. Scan for plugins in Preferences first (VST3 hosting is coming in a later version).",
+            "No compatible VST plugins are available. Scan for plugins in Preferences first.",
         );
         return;
     }
@@ -492,16 +504,23 @@ fn add_plugin(app: &Rc<App>) {
     if dialog.show_modal() == ID_OK {
         let index = dialog.get_selection() as usize;
         if let Some((name, plugin)) = choices.get(index) {
-            let loaded = fx::add_plugin(app, target, plugin.clone());
+            let outcome = fx::add_plugin(app, target, plugin.clone());
             refresh_bus_list(app);
             refresh_fx_list(app);
             super::home::rebuild_mixer(app);
-            if !loaded {
+            if let Err(error) = outcome {
+                let reason = match error {
+                    fx::SlotError::NotInstalled => {
+                        "it is no longer in the plugin cache. Rescan for plugins in Preferences."
+                            .to_string()
+                    }
+                    fx::SlotError::LoadFailed(reason) => reason,
+                };
                 show_error(
                     &frame,
                     "Add plugin",
                     &format!(
-                        "{name} was added but could not be loaded, so it will not process audio."
+                        "{name} was added but could not be loaded, so it will not process audio: {reason}"
                     ),
                 );
             }

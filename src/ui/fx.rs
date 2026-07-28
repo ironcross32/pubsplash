@@ -2,7 +2,7 @@
 //! live instances (`App.fx`) in lockstep with `config.buses`, and pushing the
 //! resulting chains to the audio engine.
 //!
-//! Plugin instances are `Arc<Vst2Plugin>`. The UI registry holds one Arc per
+//! Plugin instances are format-neutral `PluginInstance`s. The UI registry holds one Arc per
 //! live instance; the engine holds clones inside its chains. Because a plugin
 //! must be destroyed on the UI thread, removals move the Arc into
 //! `FxRuntime.retiring` and it is dropped only after the engine acknowledges
@@ -12,8 +12,9 @@ use super::App;
 use crate::audio::fx_chain::{FxChain, FxUnit};
 use crate::audio::{BusSpec, EngineCommand, RoutingUpdate};
 use crate::config::{FxSlotConfig, PluginRef};
-use crate::vst::PluginFormat;
 use crate::vst::host2::Vst2Plugin;
+use crate::vst::host3::Vst3Plugin;
+use crate::vst::{PluginFormat, PluginInstance};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -24,31 +25,67 @@ pub enum ChainTarget {
     Master,
 }
 
-/// Instantiates one slot's plugin, or returns `None` if it can't be hosted
-/// here (missing from the cache, or a format we don't process yet).
-fn load_slot(app: &Rc<App>, slot: &FxSlotConfig) -> Option<Arc<Vst2Plugin>> {
-    if slot.plugin.format != PluginFormat::Vst2 {
-        // VST3 processing is a later milestone; identity is still stored.
-        return None;
-    }
-    let cache = app.plugins.borrow();
-    let info = slot.plugin.resolve(&cache)?.clone();
-    drop(cache);
-    match Vst2Plugin::load(&info, slot) {
-        Ok(plugin) => Some(Arc::new(plugin)),
-        Err(e) => {
-            log::error!("Failed to load plugin {}: {e}", info.path);
-            None
+/// Why a configured slot has no live plugin. "Not installed" and "installed
+/// but would not load" want different words in front of the user: telling
+/// someone to install a plugin they already have, when the real problem is
+/// that its output bus is 5.1, sends them looking in the wrong place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlotError {
+    /// Nothing in the plugin cache matches this reference.
+    NotInstalled,
+    /// The plugin was found but could not be hosted, with the reason.
+    LoadFailed(String),
+}
+
+/// One slot that could not be filled, for the summary dialogs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SlotFailure {
+    pub plugin: PluginRef,
+    pub error: SlotError,
+}
+
+impl SlotFailure {
+    /// A single bullet naming the plugin and, when we know it, why.
+    pub fn describe(&self) -> String {
+        match &self.error {
+            SlotError::NotInstalled => self.plugin.display(),
+            SlotError::LoadFailed(reason) => format!("{}: {reason}", self.plugin.display()),
         }
     }
 }
 
+/// Instantiates one slot's plugin.
+fn load_slot(app: &Rc<App>, slot: &FxSlotConfig) -> Result<Arc<PluginInstance>, SlotError> {
+    let info = {
+        let cache = app.plugins.borrow();
+        match slot.plugin.resolve(&cache) {
+            Some(info) => info.clone(),
+            None => {
+                log::warn!("Plugin {} is not in the scan cache", slot.plugin.display());
+                return Err(SlotError::NotInstalled);
+            }
+        }
+    };
+    let instance = match info.format {
+        PluginFormat::Vst2 => {
+            Vst2Plugin::load(&info, slot).map(|plugin| PluginInstance::Vst2(Arc::new(plugin)))
+        }
+        PluginFormat::Vst3 => {
+            Vst3Plugin::load(&info, slot).map(|plugin| PluginInstance::Vst3(Arc::new(plugin)))
+        }
+    };
+    instance.map(Arc::new).map_err(|e| {
+        log::error!("Failed to load plugin {}: {e}", info.path);
+        SlotError::LoadFailed(e)
+    })
+}
+
 /// Instantiates every configured chain at startup, filling `App.fx`. Returns
-/// the plugin references that could not be loaded, for a single summary
-/// dialog. Config is never rewritten â€” missing plugins stay as gaps and come
-/// back when installed and rescanned.
-pub fn instantiate_all(app: &Rc<App>) -> Vec<PluginRef> {
-    let mut missing = Vec::new();
+/// the slots that could not be filled, de-duplicated, for a single summary
+/// dialog. Config is never rewritten — failed slots stay as gaps and come back
+/// when the problem is fixed and the plugins are rescanned.
+pub fn instantiate_all(app: &Rc<App>) -> Vec<SlotFailure> {
+    let mut failures: Vec<SlotFailure> = Vec::new();
     let (bus_chains, master_chain) = {
         let config = app.config.borrow();
         (
@@ -62,15 +99,22 @@ pub fn instantiate_all(app: &Rc<App>) -> Vec<PluginRef> {
         )
     };
 
-    let load_chain = |app: &Rc<App>, slots: &[FxSlotConfig], missing: &mut Vec<PluginRef>| {
+    let load_chain = |app: &Rc<App>, slots: &[FxSlotConfig], failures: &mut Vec<SlotFailure>| {
         slots
             .iter()
-            .map(|slot| {
-                let instance = load_slot(app, slot);
-                if instance.is_none() {
-                    missing.push(slot.plugin.clone());
+            .map(|slot| match load_slot(app, slot) {
+                Ok(instance) => Some(instance),
+                Err(error) => {
+                    let failure = SlotFailure {
+                        plugin: slot.plugin.clone(),
+                        error,
+                    };
+                    // The same plugin on two buses is one problem, not two.
+                    if !failures.contains(&failure) {
+                        failures.push(failure);
+                    }
+                    None
                 }
-                instance
             })
             .collect::<Vec<_>>()
     };
@@ -78,25 +122,24 @@ pub fn instantiate_all(app: &Rc<App>) -> Vec<PluginRef> {
     let mut fx = app.fx.borrow_mut();
     fx.buses = bus_chains
         .iter()
-        .map(|slots| load_chain(app, slots, &mut missing))
+        .map(|slots| load_chain(app, slots, &mut failures))
         .collect();
-    fx.master = load_chain(app, &master_chain, &mut missing);
+    fx.master = load_chain(app, &master_chain, &mut failures);
     drop(fx);
 
-    missing
+    failures
 }
 
 /// Builds an engine `FxChain` from the live instances and the config's
 /// bypass flags. Skips `None` (missing) slots.
-fn build_chain(instances: &[Option<Arc<Vst2Plugin>>], slots: &[FxSlotConfig]) -> FxChain {
+fn build_chain(instances: &[Option<Arc<PluginInstance>>], slots: &[FxSlotConfig]) -> FxChain {
     let units = instances
         .iter()
         .zip(slots.iter())
         .filter_map(|(instance, slot)| {
-            instance.as_ref().map(|plugin| FxUnit {
-                plugin: plugin.clone(),
-                bypass: slot.bypass,
-            })
+            instance
+                .as_ref()
+                .map(|plugin| FxUnit::new(plugin.clone(), slot.bypass))
         })
         .collect();
     FxChain::new(units)
@@ -169,7 +212,7 @@ pub fn on_bus_moved(app: &Rc<App>, a: usize, b: usize) {
 fn instances_mut<'a>(
     fx: &'a mut super::FxRuntime,
     target: ChainTarget,
-) -> Option<&'a mut Vec<Option<Arc<Vst2Plugin>>>> {
+) -> Option<&'a mut Vec<Option<Arc<PluginInstance>>>> {
     match target {
         ChainTarget::Bus(i) => fx.buses.get_mut(i),
         ChainTarget::Master => Some(&mut fx.master),
@@ -202,22 +245,23 @@ fn with_slots_mut<R>(
     }
 }
 
-/// Adds a plugin to the end of a chain, loading it immediately. Returns true
-/// if the plugin loaded (else it's still added as a config slot but won't
-/// process). Saves, re-syncs the engine, and rebuilds the mixer.
-pub fn add_plugin(app: &Rc<App>, target: ChainTarget, plugin: PluginRef) -> bool {
+/// Adds a plugin to the end of a chain, loading it immediately. On failure the
+/// slot is still added as a config entry (so the user can see and remove it)
+/// but will not process, and the reason comes back for the caller to show.
+/// Saves, re-syncs the engine, and rebuilds the mixer.
+pub fn add_plugin(app: &Rc<App>, target: ChainTarget, plugin: PluginRef) -> Result<(), SlotError> {
     let slot = FxSlotConfig {
         plugin,
         ..Default::default()
     };
-    let instance = load_slot(app, &slot);
-    let loaded = instance.is_some();
+    let loaded = load_slot(app, &slot);
+    let outcome = loaded.as_ref().map(|_| ()).map_err(Clone::clone);
     with_slots_mut(app, target, |slots| slots.push(slot));
     if let Some(list) = instances_mut(&mut app.fx.borrow_mut(), target) {
-        list.push(instance);
+        list.push(loaded.ok());
     }
     after_chain_edit(app);
-    loaded
+    outcome
 }
 
 pub fn remove_plugin(app: &Rc<App>, target: ChainTarget, slot: usize) {
@@ -280,8 +324,24 @@ pub fn set_bypass(app: &Rc<App>, target: ChainTarget, slot: usize, bypass: bool)
         ChainTarget::Bus(i) => Some(i),
         ChainTarget::Master => None,
     };
-    app.engine
-        .send(EngineCommand::SetFxBypass { bus, slot, bypass });
+    if let Some(instance) = instance_at(app, target, slot) {
+        // Order matters. Un-bypassing must start the plugin before the engine
+        // is told to bring it back, or the first blocks fail; bypassing tells
+        // the engine first so the chain's fade-out runs while the plugin is
+        // still processing.
+        if bypass {
+            app.engine
+                .send(EngineCommand::SetFxBypass { bus, slot, bypass });
+            instance.set_processing(false);
+        } else {
+            instance.set_processing(true);
+            app.engine
+                .send(EngineCommand::SetFxBypass { bus, slot, bypass });
+        }
+    } else {
+        app.engine
+            .send(EngineCommand::SetFxBypass { bus, slot, bypass });
+    }
     app.save_config();
 }
 
@@ -298,7 +358,16 @@ pub fn snapshot_slot(app: &Rc<App>, target: ChainTarget, slot: usize) {
     let Some(instance) = instance else {
         return;
     };
-    let (chunk, params) = instance.snapshot();
+    // No snapshot means the plugin could not tell us anything this time.
+    // Writing a placeholder here would replace the user's tuned settings in
+    // config.json with defaults, so leave what is already stored alone.
+    let Some((chunk, params)) = instance.snapshot() else {
+        log::warn!(
+            "Keeping the stored settings for {}: it reported no state to save",
+            instance.info().display()
+        );
+        return;
+    };
     with_slots_mut(app, target, |slots| {
         if let Some(s) = slots.get_mut(slot) {
             s.chunk = chunk;
@@ -329,7 +398,10 @@ pub fn replace_chain(app: &Rc<App>, target: ChainTarget, slots: Vec<FxSlotConfig
             fx.retiring.extend(old.into_iter().flatten());
         }
     }
-    let instances: Vec<_> = slots.iter().map(|slot| load_slot(app, slot)).collect();
+    let instances: Vec<_> = slots
+        .iter()
+        .map(|slot| load_slot(app, slot).ok())
+        .collect();
     with_slots_mut(app, target, |c| *c = slots);
     if let Some(list) = instances_mut(&mut app.fx.borrow_mut(), target) {
         *list = instances;
@@ -338,7 +410,7 @@ pub fn replace_chain(app: &Rc<App>, target: ChainTarget, slots: Vec<FxSlotConfig
 }
 
 /// Reads the live instance for a slot, if loaded.
-pub fn instance_at(app: &Rc<App>, target: ChainTarget, slot: usize) -> Option<Arc<Vst2Plugin>> {
+pub fn instance_at(app: &Rc<App>, target: ChainTarget, slot: usize) -> Option<Arc<PluginInstance>> {
     let fx = app.fx.borrow();
     let list = match target {
         ChainTarget::Bus(i) => fx.buses.get(i),
@@ -352,16 +424,48 @@ fn after_chain_edit(app: &Rc<App>) {
     sync_engine_buses(app);
 }
 
-/// The label for a chain entry in the FX list: "1. Name", with bypass/missing
-/// annotations. `loaded` is whether the live instance exists.
-pub fn slot_label(index: usize, slot: &FxSlotConfig, loaded: bool) -> String {
-    let mut label = format!("{}. {}", index + 1, slot.plugin.name);
-    if !loaded {
-        label.push_str(" (missing)");
-    } else if slot.bypass {
-        label.push_str(" (bypassed)");
+/// What a chain entry's live instance is doing, for its list row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotStatus {
+    Loaded,
+    NotInstalled,
+    LoadFailed,
+}
+
+/// The label for a chain entry in the FX list: "1. Name (VST3)", with bypass
+/// and failure annotations. The format is part of the name because a plugin
+/// commonly ships as both a VST2 and a VST3, and a screen-reader user has no
+/// other way to tell which one is in the chain.
+pub fn slot_label(index: usize, slot: &FxSlotConfig, status: SlotStatus) -> String {
+    let mut label = format!("{}. {}", index + 1, slot.plugin.display());
+    match status {
+        SlotStatus::NotInstalled => label.push_str(" (not installed)"),
+        SlotStatus::LoadFailed => label.push_str(" (failed to load)"),
+        SlotStatus::Loaded if slot.bypass => label.push_str(" (bypassed)"),
+        SlotStatus::Loaded => {}
     }
     label
+}
+
+/// Whether a slot's plugin exists in the scan cache. Distinguishes "you don't
+/// have this plugin" from "you have it and it would not load" without keeping
+/// a parallel error list in sync with the chains.
+pub fn slot_status(app: &Rc<App>, target: ChainTarget, slot: usize, loaded: bool) -> SlotStatus {
+    if loaded {
+        return SlotStatus::Loaded;
+    }
+    let installed = with_slots(app, target, |slots| {
+        let cache = app.plugins.borrow();
+        slots
+            .get(slot)
+            .is_some_and(|s| s.plugin.resolve(&cache).is_some())
+    })
+    .unwrap_or(false);
+    if installed {
+        SlotStatus::LoadFailed
+    } else {
+        SlotStatus::NotInstalled
+    }
 }
 
 /// Clones a target's chain. Prefer [`with_slots`] — `FxSlotConfig` owns

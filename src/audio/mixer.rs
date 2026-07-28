@@ -10,7 +10,7 @@ pub const BLOCK_FRAMES: usize = 480;
 pub const BLOCK_SAMPLES: usize = BLOCK_FRAMES * CHANNELS;
 
 /// Duration of the mute/unmute fade, in seconds.
-const FADE_SECONDS: f32 = 0.05;
+pub const FADE_SECONDS: f32 = 0.05;
 
 /// Pulls up to `dest.len()` samples out of `ring`, zero-filling whatever the
 /// ring could not supply.

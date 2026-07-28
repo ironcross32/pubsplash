@@ -20,7 +20,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - A fully keyboard-accessible mixer with per-source volume and mute, plus an optional per-strip volume boost for sources that are too quiet at 100%
 - Empty lists say what they are: rather than leaving a screen reader with nothing to announce, a list with nothing in it holds a single row naming what belongs there ("No chats", "No sources", "No plugins")
 - Mixing buses with per-source sends, so sources can be routed through shared processing (see below)
-- VST2 effect chains on buses and the master output, with a screen-reader-friendly Osara-like parameter editor and shareable effect chains
+- VST2 and VST3 effect chains on buses and the master output — mono or stereo, and instruments too — with a screen-reader-friendly Osara-like parameter editor and shareable effect chains
 - Status bar shows your stream status, quality, and duration
 
 ## Requirements
@@ -90,22 +90,25 @@ To route a source into a bus, select the source on the **Scenes and Sources** ta
 
 ## Effects (VST plugins on buses)
 
-Each bus â€” and the master output â€” can run a chain of VST2 effects. On the **Buses** tab, select a bus (or the pinned **Master output** row) and use the effects list below it:
+Each bus and the master output can run a chain of VST2 and VST3 plugins. On the **Buses** tab, select a bus (or the pinned **Master output** row) and use the effects list below it:
 
-- **Add plugin** inserts a scanned VST2 plugin at the end of the chain.
+- **Add plugin** inserts a scanned plugin at the end of the chain. Mono and stereo plugins are both supported — a mono effect is fed a centre downmix and its output is placed centrally. A plugin whose output is wider than stereo (surround) cannot be used, and Pubsplash says so.
 - **Move plugin up** / **down** (or `CTRL+Up` / `CTRL+Down`) reorder the chain; effects are applied top to bottom.
 - **Bypass** turns an effect off without removing it; **Remove plugin** (or `Delete`) takes it out.
 
-Effects process live, including while you are streaming. Each plugin's settings are remembered between sessions.
+Each row names the plugin and its format, so a plugin you have installed as both a VST2 and a VST3 can be told apart: `1. Compressor (VST3)`. A plugin that could not be loaded says whether it is missing from this machine or failed to start.
 
-(Only VST2 plugins can be inserted in this version. VST3 plugins are still catalogued by the scanner and will become insertable in a later release.)
+Effects process live, including while you are streaming. Turning bypass on or off, and opening a VST3 plugin's own interface, fade the effect out of and back into the signal path over 50 ms, so neither one clicks on air. Each plugin's settings are remembered between sessions.
+
+**Instruments.** A VST3 instrument — or any plugin with no audio input, such as a tone or noise generator — can also go in a chain. Its sound is *added* to whatever the bus is already carrying rather than replacing it, so it sits alongside your microphone instead of silencing it. Pubsplash sends no MIDI, so an instrument plays only from its own interface (an on-screen keyboard, arpeggiator, or generative patch).
+
 
 ### Adjusting plugin parameters
 
 Two ways to control a plugin, both reachable from the effects list:
 
 - **Edit parameters** opens a dialog that works with every plugin and is designed for screen readers. Type in the **Filter** box to narrow the parameter list, choose a parameter, and adjust its **Value** with the arrow keys (Page Up/Down for larger steps, Home/End for maximum/minimum). Press `CTRL+Tab` / `CTRL+Shift+Tab` to move to the next or previous parameter from anywhere in the dialog. The parameter's name and its formatted value are announced as you change it. Turn on **Show unnamed parameters** to reveal parameters the plugin didn't give proper names.
-- **Open interface** shows the plugin's own window, for plugins that have one (many do not). Because a plugin's own interface can trap the keyboard, press **F6** at any time to move focus back to the window's toolbar (Parameters, Bypass, Plugin interface, Close), from which you can Tab normally or return to the plugin.
+- **Open interface** shows the plugin's own window, for VST2 and VST3 plugins that provide one (many do not). Because a plugin's own interface can trap the keyboard, press **F6** at any time to move focus back to the window's toolbar (Parameters, Bypass, Plugin interface, Close), from which you can Tab normally or return to the plugin.
 
 ### Sharing effect chains
 

@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "pubsplash"
 version = "0.1.1"
 edition = "2024"
@@ -72,6 +72,7 @@ wasapi = "0.23"
 mp3lame-encoder = "0.2"
 rtrb = "0.3"
 hound = "3.5"
+vst3-host = { version = "0.7", default-features = false }
 aes-gcm = "0.10"
 rand = "0.8"
 bincode = "1.3"
@@ -87,7 +88,7 @@ formats = ["nsis"]
 icons = ["assets/icon/pubsplash.ico"]
 # Extra files copied next to the exe in the install directory, which is where
 # the Help menu looks for them. Both are generated from the Markdown sources at
-# package time (see the release workflow's "Convert docs to HTML" step) â€”
+# package time (see the release workflow's "Convert docs to HTML" step) —
 # a local `cargo packager` run needs them produced first.
 resources = ["readme.html", "changelog.html"]
 

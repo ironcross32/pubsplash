@@ -8,7 +8,7 @@
 use super::fx::{self, ChainTarget};
 use super::slider_uia::{self, SliderAnnouncer};
 use super::{App, WXK_END, WXK_ESCAPE, WXK_HOME, WXK_PAGEDOWN, WXK_PAGEUP, WXK_TAB};
-use crate::vst::host2::Vst2Plugin;
+use crate::vst::PluginInstance;
 use std::rc::Rc;
 use std::sync::Arc;
 use wxdragon::prelude::*;
@@ -53,14 +53,13 @@ pub trait ParamSource {
     fn label(&self, index: i32) -> String;
     fn automatable(&self, index: i32) -> bool;
     /// Parses `text` in the parameter's own display units (e.g. "-6 dB") and
-    /// applies it, returning whether the plugin supported the conversion. This
-    /// VST2 opcode is optional and many plugins do not implement it.
+    /// applies it, returning whether the plugin supported the conversion. VST2 exposes this as an optional opcode; VST3 typed entry is disabled until a parse API is available.
     fn set_from_string(&self, index: i32, text: &str) -> bool;
 }
 
-impl ParamSource for Arc<Vst2Plugin> {
+impl ParamSource for Arc<PluginInstance> {
     fn count(&self) -> i32 {
-        self.num_params
+        self.num_params()
     }
     fn name(&self, index: i32) -> String {
         self.param_name(index)
@@ -85,16 +84,34 @@ impl ParamSource for Arc<Vst2Plugin> {
     }
 }
 
+/// What happened to a typed value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TypedValue {
+    /// The plugin parsed the text; the new normalized value is attached.
+    Applied(f32),
+    /// The field was blank, so there was nothing to apply.
+    Blank,
+    /// The plugin cannot convert display text back to a value.
+    Unsupported,
+}
+
 /// Applies `text` (in the parameter's display units) via the plugin's optional
-/// string-to-parameter conversion. Returns the new normalized value if the
-/// plugin accepted it, or `None` if the text is blank or the plugin does not
-/// support the conversion.
-pub fn apply_typed_value(src: &dyn ParamSource, index: i32, text: &str) -> Option<f32> {
+/// string-to-parameter conversion.
+///
+/// The three outcomes are deliberately distinct: silently reverting the field
+/// is indistinguishable from success to a screen-reader user, and for VST3 —
+/// where no parameter supports this — that would make the field a dead control
+/// that swallows everything typed into it.
+pub fn apply_typed_value(src: &dyn ParamSource, index: i32, text: &str) -> TypedValue {
     let text = text.trim();
     if text.is_empty() {
-        return None;
+        return TypedValue::Blank;
     }
-    src.set_from_string(index, text).then(|| src.get(index))
+    if src.set_from_string(index, text) {
+        TypedValue::Applied(src.get(index))
+    } else {
+        TypedValue::Unsupported
+    }
 }
 
 /// The human-readable value: the plugin's formatted text plus its unit, or a
@@ -210,10 +227,22 @@ pub fn set_param(src: &dyn ParamSource, index: i32, value: f32) -> f32 {
 
 /// Opens the parameter dialog for a plugin instance. On close, the slot's
 /// state is snapshotted back into config.
-pub fn edit_parameters(app: &Rc<App>, target: ChainTarget, slot: usize, plugin: Arc<Vst2Plugin>) {
+pub fn edit_parameters(
+    app: &Rc<App>,
+    target: ChainTarget,
+    slot: usize,
+    plugin: Arc<PluginInstance>,
+) {
     let Some(frame) = app.widgets(|w| w.frame.clone()) else {
         return;
     };
+    // Re-read the parameter list before showing it. A plugin may change its
+    // parameter set at runtime — loading a preset in its own interface is
+    // enough — and VST3 gives us no notification when it does. A stale
+    // index-to-id map would have the dialog announce one parameter's name
+    // while an arrow key edits a different parameter, which a screen-reader
+    // user has no way to notice.
+    plugin.refresh_params();
     let src: Rc<dyn ParamSource> = Rc::new(plugin);
     if src.count() == 0 {
         super::show_info(
@@ -473,8 +502,12 @@ pub fn edit_parameters(app: &Rc<App>, target: ChainTarget, slot: usize, plugin: 
 
     // The value-entry field: reads the current value (kept in sync by
     // `announce_value`), and on tab-away or Enter parses what was typed, in the
-    // parameter's own display units, and applies it. If the plugin can't convert
-    // the text (or it's blank), the field reverts to the real value.
+    // parameter's own display units, and applies it.
+    //
+    // A plugin that can't convert the text gets *said so*. `set_value` alone
+    // announces nothing, so reverting the field in silence is indistinguishable
+    // from the edit having worked — and for VST3 that is every parameter, since
+    // `IEditController::getParamValueByString` has no wrapper in the crate.
     let apply_typed = {
         let src = src.clone();
         let visible = visible.clone();
@@ -489,8 +522,9 @@ pub fn edit_parameters(app: &Rc<App>, target: ChainTarget, slot: usize, plugin: 
             let Some(&index) = visible.borrow().get(sel as usize) else {
                 return;
             };
+            let current = formatted_value(src.as_ref(), index);
             match apply_typed_value(src.as_ref(), index, &value_text.get_value()) {
-                Some(new_value) => {
+                TypedValue::Applied(new_value) => {
                     let text = formatted_value(src.as_ref(), index);
                     announce_value(
                         &announcer,
@@ -501,7 +535,14 @@ pub fn edit_parameters(app: &Rc<App>, target: ChainTarget, slot: usize, plugin: 
                         &text,
                     );
                 }
-                None => value_text.set_value(&formatted_value(src.as_ref(), index)),
+                TypedValue::Blank => value_text.set_value(&current),
+                TypedValue::Unsupported => {
+                    value_text.set_value(&current);
+                    announcer.update(
+                        &src.name(index),
+                        &format!("this plugin does not accept typed values, still {current}"),
+                    );
+                }
             }
         }
     };
@@ -683,12 +724,13 @@ mod tests {
         let p = sample();
         // Gain supports conversion: "-6" dB → 0.25 normalized, and re-displays.
         let applied = apply_typed_value(&p, 0, "-6");
-        assert_eq!(applied, Some(0.25));
+        assert_eq!(applied, TypedValue::Applied(0.25));
         assert_eq!(formatted_value(&p, 0), "-6.0 dB");
-        // Blank input is ignored.
-        assert_eq!(apply_typed_value(&p, 0, "   "), None);
-        // Mode does not support conversion → None, value unchanged.
-        assert_eq!(apply_typed_value(&p, 1, "High"), None);
+        // Blank input is ignored — distinct from a refusal, so the dialog can
+        // stay quiet for one and speak up for the other.
+        assert_eq!(apply_typed_value(&p, 0, "   "), TypedValue::Blank);
+        // Mode does not support conversion; the value is left alone.
+        assert_eq!(apply_typed_value(&p, 1, "High"), TypedValue::Unsupported);
         assert_eq!(*p.params[1].value.borrow(), 0.0);
     }
 

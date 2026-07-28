@@ -427,12 +427,12 @@ pub struct ShutdownCue {
 #[derive(Default)]
 pub struct FxRuntime {
     /// `buses[bus][slot]`, matching `config.buses.buses[bus].chain[slot]`.
-    pub buses: Vec<Vec<Option<Arc<crate::vst::host2::Vst2Plugin>>>>,
+    pub buses: Vec<Vec<Option<Arc<crate::vst::PluginInstance>>>>,
     /// Matching `config.buses.master_chain`.
-    pub master: Vec<Option<Arc<crate::vst::host2::Vst2Plugin>>>,
+    pub master: Vec<Option<Arc<crate::vst::PluginInstance>>>,
     /// Instances removed from a chain, dropped once the engine acknowledges
     /// the swap (so the audio thread never holds the last reference).
-    pub retiring: Vec<Arc<crate::vst::host2::Vst2Plugin>>,
+    pub retiring: Vec<Arc<crate::vst::PluginInstance>>,
 }
 
 /// Plays an event through each enabled Sound Events source in the active scene.
@@ -1155,8 +1155,8 @@ pub fn build(app: Rc<App>) {
     });
 
     // Instantiate the configured FX chains before syncing the engine; collect
-    // any plugins missing on this machine for a single summary.
-    let missing = fx::instantiate_all(&app);
+    // any slot that could not be filled for a single summary.
+    let failures = fx::instantiate_all(&app);
 
     // Populate dynamic content now that widgets exist. Application sources are
     // resolved first so the very first labels name the running apps.
@@ -1172,14 +1172,33 @@ pub fn build(app: Rc<App>) {
     fx::sync_engine_buses(&app);
     app.sync_engine_sources();
 
-    if !missing.is_empty() {
-        let mut message = String::from(
-            "Some plugins used by your buses are not installed on this machine and will be skipped until you install them and rescan:\n",
-        );
-        for plugin in &missing {
-            message.push_str(&format!("\n- {}", plugin.display()));
+    if !failures.is_empty() {
+        // Two different problems with two different answers: install the
+        // plugin, or find out why the one you have would not start.
+        let (uninstalled, failed): (Vec<_>, Vec<_>) = failures
+            .iter()
+            .partition(|f| f.error == fx::SlotError::NotInstalled);
+        let mut message = String::new();
+        if !uninstalled.is_empty() {
+            message.push_str(
+                "Some plugins used by your buses are not installed on this machine and will be skipped until you install them and rescan:\n",
+            );
+            for failure in &uninstalled {
+                message.push_str(&format!("\n- {}", failure.describe()));
+            }
         }
-        show_info(&frame, "Missing plugins", &message);
+        if !failed.is_empty() {
+            if !message.is_empty() {
+                message.push_str("\n\n");
+            }
+            message.push_str(
+                "These plugins are installed but could not be loaded, so they will be skipped:\n",
+            );
+            for failure in &failed {
+                message.push_str(&format!("\n- {}", failure.describe()));
+            }
+        }
+        show_info(&frame, "Plugins skipped", &message);
     }
 
     // Exit confirmation while streaming (menu Exit and ALT+F4 both arrive here).

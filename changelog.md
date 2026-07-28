@@ -4,6 +4,11 @@
 
 ### Additions
 
+- Added native interface windows for VST3 plugins that provide one.
+- Added VST3 effect insertion, processing, parameters, and state restore for scanned plugins, including plugins with mono input or mono output.
+- VST3 instruments and other plugins with no audio input can now be added to a chain; their output is mixed into the bus rather than replacing it. They are played from their own interface — Pubsplash sends no MIDI.
+- Effects now fade in and out of the signal path over 50 ms instead of switching instantly, so bypassing an effect, or opening a VST3 plugin's interface while streaming, no longer clicks or drops the effect out of the stream.
+- The effects list now names each plugin's format ("1. Compressor (VST3)"), so a plugin installed in both formats can be told apart.
 - Added `F6`/`SHIFT+F6` to cycle between lists on the current tab and the tab bar.
 - Added eight more TTS engines: Microsoft Edge, Google Translate, OpenAI, ElevenLabs, Azure, AWS Polly, Google Cloud, and self-hosted Star.
 - Added a Speech tab in Preferences for per-engine credentials (DPAPI-encrypted).
@@ -20,6 +25,12 @@
 
 ### Fixes
 
+- Plugins that are installed but fail to load are no longer reported as "not installed"; both the startup summary and the Add plugin error now say what actually went wrong.
+- Fixed a plugin's saved settings being replaced with defaults in `config.json` when it could not report its state.
+- Fixed the plugin parameter dialog being able to announce one parameter's name while editing a different one, after a preset was loaded in the plugin's own interface.
+- Typed values in the plugin parameter dialog are now spoken as rejected when the plugin cannot parse them, instead of being discarded silently.
+- Fixed mono-input VST2 effects being fed the left channel alone instead of a centre downmix.
+- Fixed a failing VST3 plugin writing a log line every 10 ms; the failure is now reported once.
 - The Home tab overview is now a list instead of a text box, fixing arrow keys not being able to reach past rows rewritten each second.
 - Fixed the overview's selected row being re-announced by its own per-second refresh.
 - Empty lists now show a placeholder row ("No chats", "No sources", etc.) instead of announcing "Unknown".

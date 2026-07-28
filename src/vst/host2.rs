@@ -549,6 +549,7 @@ impl Vst2Plugin {
         let params = (0..self.num_params)
             .map(|index| ParamValue {
                 index,
+                id: None,
                 value: self.get_parameter(index),
             })
             .collect();

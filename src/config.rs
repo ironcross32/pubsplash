@@ -130,6 +130,8 @@ pub struct FxSlotConfig {
 #[serde(default)]
 pub struct ParamValue {
     pub index: i32,
+    /// VST3 parameter id. Older configs and VST2 snapshots leave this empty.
+    pub id: Option<u32>,
     /// Normalized 0..1.
     pub value: f32,
 }
@@ -839,6 +841,7 @@ mod tests {
                 chunk: Some("AAECAw==".into()),
                 params: vec![ParamValue {
                     index: 3,
+                    id: None,
                     value: 0.25,
                 }],
             }],

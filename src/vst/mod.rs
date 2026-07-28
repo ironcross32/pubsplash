@@ -8,11 +8,14 @@
 
 pub mod discover;
 pub mod host2;
+pub mod host3;
+mod instance;
 mod moduleinfo;
 mod pe;
 pub mod scan;
 mod types;
 
+pub use instance::{MixMode, PluginInstance, Processed, PtrScratch};
 pub use types::*;
 
 use std::path::{Path, PathBuf};
