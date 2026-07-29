@@ -4,6 +4,14 @@
 
 ### Additions
 
+### Fixes
+
+### Changes
+
+## 0.1.2
+
+### Additions
+
 - Added streaming service profiles with Audiopub and direct Icecast service types.
 - Added Icecast server, port, mount point, username, and password settings for direct source streaming.
 - Added native interface windows for VST3 plugins that provide one.
@@ -189,5 +197,3 @@
 - The plugin parameter dialog's value field is now an editable type-in box instead of a read-only display. It still shows the selected parameter's current value in the plugin's own units (e.g. "-6.0 dB") and updates as you adjust the slider; now you can also type a value and press Enter or Tab away to set it. This uses the plugin's optional string-to-value conversion — for plugins that don't support it, the typed text can't be applied and the field simply reverts to the actual value (the slider and arrow keys still work as before).
 - Mute and Bypass controls are now checkboxes instead of buttons, so their on/off state is directly announced by screen readers: each mixer strip's Mute checkbox (Home tab) is checked when muted, the Buses tab's Bypass checkbox reflects the selected plugin (and updates as you move through the chain), and the plugin interface window's Bypass checkbox reflects that plugin.
 - The stream title is no longer remembered between sessions; it is part of the per-session stream info instead.
-
-
