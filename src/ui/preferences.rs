@@ -1,5 +1,5 @@
-//! Preferences dialog. Tabbed: "Archiving", "Speech", "Sound packs", and
-//! "VST plugins".
+//! Preferences dialog. Tabbed: "Archiving", "Speech", "Sound packs",
+//! "VST plugins", and "Keybinds" (whose body lives in `ui/keybinds_ui.rs`).
 //! The VST tab manages the plugin folder list and starts scans; scan progress
 //! arrives on the pump (see `pump_scan_events` in `ui/mod.rs`). Every tab saves
 //! as the user changes a control, so the dialog only needs a Close button.
@@ -31,6 +31,9 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     let vst_panel = Panel::builder(&notebook).build();
     notebook.add_page(&vst_panel, "VST plugins", false, None);
     build_vst_tab(app, &dialog, &vst_panel);
+    let keybinds_panel = Panel::builder(&notebook).build();
+    notebook.add_page(&keybinds_panel, "Keybinds", false, None);
+    super::keybinds_ui::build_tab(app, &dialog, &keybinds_panel);
 
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
     let close_button = Button::builder(&dialog)

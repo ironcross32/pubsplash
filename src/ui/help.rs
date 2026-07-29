@@ -17,8 +17,9 @@
 //!    raised on the main frame's host provider — so NVDA/Narrator speak it,
 //!    interrupting whatever they were saying.
 //!
-//! The same hook also catches F6/SHIFT+F6 for [`super::panes`], since it is the
-//! one hook installed for the whole life of the app. That arm fires only while
+//! The same hook also catches F6/SHIFT+F6 for [`super::panes`] and every user
+//! keybinding for [`super::keybinds`], since it is the one hook installed for
+//! the whole life of the app. The F6 arm fires only while
 //! the *main frame itself* is foreground, so it can never collide with the
 //! editor-local F6 in `fx_editor` (whose gate is a plugin editor frame being
 //! foreground) or fire under a modal dialog.
@@ -291,7 +292,7 @@ pub fn announce(text: &str) {
 
 // --- F1 hook ---------------------------------------------------------------
 
-fn foreground_is_ours() -> bool {
+pub(super) fn foreground_is_ours() -> bool {
     unsafe {
         let fg = GetForegroundWindow();
         if fg.0.is_null() {
@@ -306,7 +307,7 @@ fn foreground_is_ours() -> bool {
 /// True only while the main frame is the foreground window. Tighter than
 /// [`foreground_is_ours`] on purpose: it excludes our own modal dialogs and the
 /// plugin editor frames, which have their own F6 (see `fx_editor`).
-fn foreground_is_main_frame() -> bool {
+pub(super) fn foreground_is_main_frame() -> bool {
     let frame = MAIN_FRAME.load(Ordering::Relaxed);
     frame != 0 && unsafe { GetForegroundWindow() }.0 as isize == frame
 }
@@ -316,6 +317,13 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
         && (wparam.0 as u32 == WM_KEYDOWN || wparam.0 as u32 == WM_SYSKEYDOWN)
     {
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+        // First refusal goes to the Add-binding dialog's shortcut box: while it
+        // has focus every key belongs to it, F1 and F6 included, which is the
+        // only way they could ever be typed into it.
+        if super::keybinds::capture_key(kb.vkCode) {
+            wxdragon::wake_up_idle();
+            return LRESULT(1);
+        }
         if kb.vkCode == VK_F1.0 as u32 && foreground_is_ours() {
             HELP_REQUESTED.store(true, Ordering::Relaxed);
             // Ring the doorbell: `pump` runs from the idle handler, and F1 is
@@ -331,6 +339,12 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
             super::panes::request(shift);
             wxdragon::wake_up_idle();
             // Swallow it: MSW gives F6 its own pane-switching meaning.
+            return LRESULT(1);
+        }
+        // Last, so the two built-ins above can never be shadowed by a user
+        // binding. `keybinds_ui` refuses F1 and F6 for that reason.
+        if super::keybinds::hook_key(kb.vkCode) {
+            wxdragon::wake_up_idle();
             return LRESULT(1);
         }
     }

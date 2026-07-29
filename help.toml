@@ -1,4 +1,4 @@
-﻿# Context-sensitive help messages, spoken when F1 is pressed on a control.
+# Context-sensitive help messages, spoken when F1 is pressed on a control.
 #
 # This file is round-tripped by the `gen-help` dev tool:
 #   cargo run --bin gen-help
@@ -49,15 +49,16 @@ file = "src/ui/chat.rs"
 message = "Arrow up and down through this list to view chats. Home jumps to the oldest message while END jumps to the most recent one."
 
 [[control]]
-id = "dialog.connect.addSite"
-label = "Add service button"
-file = "src/ui/connect_dialog.rs"
-message = "Add a new streaming service profile. Choose Audiopub for an Audiopub site, or Icecast for direct source streaming."
-[[control]]
 id = "dialog.connect.addServiceType"
 label = "New service type selector"
 file = "src/ui/connect_dialog.rs"
 message = "Choose whether the new service profile is an Audiopub service or a direct Icecast service."
+
+[[control]]
+id = "dialog.connect.addSite"
+label = "Add service button"
+file = "src/ui/connect_dialog.rs"
+message = "Add a new streaming service profile. Choose Audiopub for an Audiopub site, or Icecast for direct source streaming."
 
 [[control]]
 id = "dialog.connect.connectButton"
@@ -70,12 +71,6 @@ id = "dialog.connect.email"
 label = "Email address for the selected service"
 file = "src/ui/connect_dialog.rs"
 message = "Type the email address you use to log in to the selected Audiopub service."
-
-[[control]]
-id = "dialog.connect.password"
-label = "Password for the selected service"
-file = "src/ui/connect_dialog.rs"
-message = "Type the password you use to log in to the selected Audiopub service."
 
 [[control]]
 id = "dialog.connect.icecastMount"
@@ -114,10 +109,11 @@ file = "src/ui/connect_dialog.rs"
 message = "Type a short name for this service as it should appear in the services list."
 
 [[control]]
-id = "dialog.connect.renameSite"
-label = "Rename service button"
+id = "dialog.connect.password"
+label = "Password for the selected service"
 file = "src/ui/connect_dialog.rs"
-message = "Rename the selected service profile. The main Audiopub service cannot be renamed."
+message = "Type the password you use to log in to the selected Audiopub service."
+
 [[control]]
 id = "dialog.connect.removeSite"
 label = "Remove service button"
@@ -125,10 +121,17 @@ file = "src/ui/connect_dialog.rs"
 message = "This deletes the selected service profile. The main Audiopub service cannot be removed."
 
 [[control]]
+id = "dialog.connect.renameSite"
+label = "Rename service button"
+file = "src/ui/connect_dialog.rs"
+message = "Rename the selected service profile. The main Audiopub service cannot be renamed."
+
+[[control]]
 id = "dialog.connect.serviceType"
 label = "Service type selector"
 file = "src/ui/connect_dialog.rs"
 message = "Choose whether the selected non-main service is Audiopub or Icecast. The main Audiopub service shows this selector disabled because its type is fixed."
+
 [[control]]
 id = "dialog.connect.siteList"
 label = "Configured streaming services list"
@@ -140,6 +143,7 @@ id = "dialog.connect.url"
 label = "Audiopub URL for the selected service"
 file = "src/ui/connect_dialog.rs"
 message = "Type the full Audiopub service URL, starting with http or https. The main Audiopub service keeps its built-in URL."
+
 [[control]]
 id = "dialog.fxEditor.bypass"
 label = "Bypass this plugin checkbox"
@@ -195,6 +199,36 @@ file = "src/ui/fx_params.rs"
 message = ""
 
 [[control]]
+id = "dialog.keybind.action"
+label = "Binding action choice"
+file = "src/ui/keybinds_ui.rs"
+message = "What the shortcut will do. Some actions need to know which scene, source or bus they apply to; choosing one of those adds a further list right after this one."
+
+[[control]]
+id = "dialog.keybind.category"
+label = "Binding category choice"
+file = "src/ui/keybinds_ui.rs"
+message = "Which group of actions to choose from: streaming, scenes, monitoring or muting. Changing this refills the action list below it."
+
+[[control]]
+id = "dialog.keybind.global"
+label = "Global binding checkbox"
+file = "src/ui/keybinds_ui.rs"
+message = "When checked, this shortcut works anywhere in Windows, not only while Pubsplash is in front, unless some other application swallows it first. A global shortcut must include CTRL, ALT or SHIFT, or be a function key: on its own a plain letter or digit would be taken away from everything you type in."
+
+[[control]]
+id = "dialog.keybind.shortcut"
+label = "Shortcut capture field"
+file = "src/ui/keybinds_ui.rs"
+message = "While this field has focus, press the key combination you want and it is read back to you. ESCAPE or DELETE clears it again. TAB and SHIFT plus TAB are left alone so you can always move on, which means they cannot themselves be bound. F1 and F6 are refused as well: F1 speaks this help and F6 moves between the lists on a tab."
+
+[[control]]
+id = "dialog.keybind.specifier"
+label = "Binding scene, source or bus choice"
+file = "src/ui/keybinds_ui.rs"
+message = "Which scene, source or bus the action applies to. This appears only for actions that need one, and disappears again when you pick an action that does not. A source shortcut runs against the scene that is live when you press it, so it does nothing while you are in a scene that has no source by that name."
+
+[[control]]
 id = "dialog.loadChain.delete"
 label = "Delete selected chain button"
 file = "src/ui/buses.rs"
@@ -247,6 +281,36 @@ id = "dialog.preferences.archive.recordingFolder"
 label = "Recording folder path input"
 file = "src/ui/preferences.rs"
 message = "Type the path where you'd like your local recordings to be saved to, or use the browse button to pick a folder using a standard Windows folder picker."
+
+[[control]]
+id = "dialog.preferences.keybinds.add"
+label = "Add binding button"
+file = "src/ui/keybinds_ui.rs"
+message = "Opens a dialog where you choose an action and press the keys you want to run it with."
+
+[[control]]
+id = "dialog.preferences.keybinds.edit"
+label = "Edit binding button"
+file = "src/ui/keybinds_ui.rs"
+message = "Opens the same dialog for the action highlighted in the list, filled in with whatever it is bound to now, so you can change the keys or make the shortcut global."
+
+[[control]]
+id = "dialog.preferences.keybinds.list"
+label = "Keybinds list"
+file = "src/ui/keybinds_ui.rs"
+message = "Every action you can give a keyboard shortcut to. Arrow up and down through them. Each row gives the action, then the keys bound to it, or Unassigned when it has none, and says global when the shortcut works even while another application is in front. Press DELETE, or use the remove binding button, to take a shortcut away. Streaming starts and stops with F9 and recording with F10 until you change them."
+
+[[control]]
+id = "dialog.preferences.keybinds.remove"
+label = "Remove binding button"
+file = "src/ui/keybinds_ui.rs"
+message = "Takes the shortcut away from the highlighted action, leaving the action itself alone. The DELETE key in the list does the same thing."
+
+[[control]]
+id = "dialog.preferences.keybinds.reset"
+label = "Reset keybinds to defaults button"
+file = "src/ui/keybinds_ui.rs"
+message = "Throws away every shortcut you have made and puts back the two Pubsplash ships with, F9 for streaming and F10 for recording. You are asked to confirm first."
 
 [[control]]
 id = "dialog.preferences.sounds.importPack"
@@ -805,4 +869,3 @@ id = "dialog.soundEventsSource.packPath"
 label = "Sound pack path input"
 file = "src/ui/scenes.rs"
 message = "The sound pack this source plays from. Type the full path to a compiled dot pspack file, or to a sound pack project folder if you are still working on one, or use the browse button. Until this is filled in, the source stays silent."
-

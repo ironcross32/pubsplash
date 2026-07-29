@@ -1,4 +1,4 @@
-﻿# Pubsplash
+# Pubsplash
 
 Pubsplash is an accessibility-first Windows app for streaming audio to [Audiopub](https://audiopub.site/) or a direct Icecast server.
 
@@ -33,7 +33,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 1. Launch Pubsplash.
 2. Open **File > Setup streaming services**, select **Audiopub** or add an **Icecast** service, enter that service's connection details, and press **Connect**. The built-in **Audiopub** service is permanent and cannot be removed or changed to Icecast.
 3. Optionally open **File > Set stream info** to set the stream's title, description, streaming quality (MP3 bitrate), whether an Audiopub stream should be archived on the server, and whether to **record this stream** to a file on your computer. The title, description, archive, and record choices reset every time Pubsplash starts; the quality setting is saved and persists across sessions. To have archiving or recording pre-selected each launch, enable **Archive streams by default** or **Record streams by default** on the Archiving tab of **File > Preferences** (`CTRL+,`). Recordings are an exact copy of the streamed MP3, saved as `recording_<yyyy-mm-dd>_<HH-MM-SS>.mp3` in the recording folder set on that same tab (your Music library by default).
-4. On the **Home** tab, press **Start streaming** (`ALT+S`). If you haven't set the stream info yet, the dialog opens first Ã¢â‚¬â€ press **OK** to start with what's filled in (tabbing into a text field selects its contents so you can just type over the defaults), or **Cancel** to not start streaming.
+4. On the **Home** tab, press **Start streaming** (`ALT+S`). If you haven't set the stream info yet, the dialog opens first — press **OK** to start with what's filled in (tabbing into a text field selects its contents so you can just type over the defaults), or **Cancel** to not start streaming.
 5. Press **Stop streaming** (`ALT+T`) when you're done.
 
 **Help > Open Readme** and **Help <> View Changelog** open this document and the changelog in your default browser. Both are installed with Pubsplash and match the version you are running; if a copy is unavailable, Pubsplash opens the one on GitHub instead.
@@ -48,6 +48,7 @@ The **Stream overview** at the top of the Home tab is a list you can arrow throu
 | --- | --- |
 | `F1` | Speak context-sensitive help for the focused control |
 | `F6` / `SHIFT+F6` | Move to the next / previous list on the current tab, and past the last one to the tab bar |
+| `F9` / `F10` | Start / stop streaming, start / stop recording (see [Keybinds](#keybinds); both can be changed) |
 | `ALT+S` / `ALT+T` | Start / stop streaming (Home tab) |
 | `ALT+R` / `ALT+C` | Start / stop recording without streaming (Home tab) |
 | `ALT+W` | Switch to the selected scene (Home tab) |
@@ -65,6 +66,27 @@ The **Stream overview** at the top of the Home tab is a list you can arrow throu
 | `SHIFT+F10` / `Applications` | Open the context menu for the focused control (mixer volume sliders) |
 
 In the mixer, sliders respond to arrow keys for 1% steps, `Page Up` / `Page Down` for 10% steps, and `Home` / `End` for maximum / minimum volume. `Up`, `Right`, and `Page Up` always raise the volume; `Down`, `Left`, and `Page Down` always lower it.
+
+### Keybinds
+
+The shortcuts above are fixed, but **Preferences > Keybinds** lets you put your own key on the things you reach for most, so you don't have to tab to the control first. Out of the box `F9` starts and stops streaming and `F10` starts and stops recording; both are ordinary bindings you can change or delete.
+
+The tab is a list of every action that can be bound, each row reading the action followed by its keys, or *Unassigned*. **Add binding** and **Edit binding** open the same dialog; **Remove binding** (or `Delete` on the list) takes a shortcut away, and **Reset to defaults** puts back just `F9` and `F10`.
+
+You can bind:
+
+- starting and stopping the stream, and starting and stopping a recording
+- switching to the next or previous scene — these cycle round, and do nothing at all if you only have one scene — or jumping straight to a scene by name
+- monitoring master, any source, or any bus
+- muting master, any source, or any bus
+
+In the Add binding dialog, choose a category and then an action. Actions that need to know *which* scene, source or bus add a third dropdown right after the action; it disappears again if you pick an action that doesn't need one. Then tab to the **Shortcut** box and simply press the keys you want — they are read back to you. `Escape` or `Delete` clears the box, and `Tab` and `Shift+Tab` still move you on rather than being captured (which is also why they can't be bound). `F1` and `F6` are refused, since they belong to help and pane switching.
+
+Tick **Global** to make a shortcut work anywhere in Windows, not only while Pubsplash is in front — handy for muting your microphone from inside a game. A global shortcut has to include `CTRL`, `ALT` or `SHIFT`, or be a function key; a bare letter or digit would be swallowed everywhere you type. Another application that grabs the same combination first still wins.
+
+A source binding stores the source's name and applies it to whichever scene is live when you press it, so a shortcut for a source that isn't in the current scene tells you so and does nothing.
+
+Starting and stopping a stream or a recording is announced through your screen reader however it was triggered — by a keybind, by the buttons, or by the server ending the stream — so a shortcut pressed from another tab, or from another application, never leaves you guessing.
 
 ### Volume boost
 
@@ -148,7 +170,7 @@ Nine engines are available:
 | Google Cloud | API key | |
 | Star | The address of your own Star server | |
 
-Credentials go on the **Speech** tab of **File â†’ Preferences** (`CTRL+,`), once each, rather than on every source. They are encrypted for your Windows account, so copying `config.json` to another machine will not carry your keys with it.
+Credentials go on the **Speech** tab of **File → Preferences** (`CTRL+,`), once each, rather than on every source. They are encrypted for your Windows account, so copying `config.json` to another machine will not carry your keys with it.
 
 That tab starts with a **Speech engine** picker, and everything after it belongs to whichever engine the picker names so tabbing to the ElevenLabs key does not take you past OpenAI, Azure, AWS and Google first. The three engines that need no setup say so. The tab reopens on the engine you were last looking at.
 

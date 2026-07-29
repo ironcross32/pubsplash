@@ -166,15 +166,57 @@ fn switch_to_selected_scene(app: &Rc<App>, list: &ListBox) {
         };
         scene.name.clone()
     };
-    let changed = app.config.borrow_mut().scenes.switch_to(&name);
-    // Switching to the already-active scene must do nothing.
-    if changed == crate::state::ListEdit::Changed {
-        app.save_config();
-        // The new scene's sources are different strips at the same positions.
-        app.clear_source_monitors();
-        app.sync_engine_sources();
-        rebuild_mixer(app);
-        refresh_scene_list(app);
+    switch_to_scene_named(app, &name);
+}
+
+/// Makes `name` the active scene and rebuilds everything that depends on it.
+///
+/// Switching to the already-active scene, or to one that does not exist, is a
+/// no-op — `ScenesConfig::switch_to` reports `Unchanged` for both.
+pub fn switch_to_scene_named(app: &Rc<App>, name: &str) {
+    let changed = app.config.borrow_mut().scenes.switch_to(name);
+    if changed != crate::state::ListEdit::Changed {
+        return;
+    }
+    app.save_config();
+    // The new scene's sources are different strips at the same positions.
+    app.clear_source_monitors();
+    app.sync_engine_sources();
+    rebuild_mixer(app);
+    refresh_scene_list(app);
+    // Nothing else says which scene is live when the switch came from a
+    // keybinding pressed on some other tab.
+    super::help::announce(&format!("Scene {name}"));
+}
+
+/// The scene after (or before) the active one, wrapping at either end.
+///
+/// Kept pure so the wrap and the single-scene case can be tested without a
+/// window. `None` means "do nothing": fewer than two scenes, or an active scene
+/// that is not in the list at all.
+fn neighbouring_scene(names: &[String], active: &str, forward: bool) -> Option<String> {
+    if names.len() < 2 {
+        return None;
+    }
+    let at = names.iter().position(|n| n == active)?;
+    let next = if forward {
+        (at + 1) % names.len()
+    } else {
+        (at + names.len() - 1) % names.len()
+    };
+    Some(names[next].clone())
+}
+
+/// Switches to the next or previous scene, cycling past either end. Does nothing
+/// when there is only one scene.
+pub fn cycle_scene(app: &Rc<App>, forward: bool) {
+    let next = {
+        let config = app.config.borrow();
+        let names: Vec<String> = config.scenes.scenes.iter().map(|s| s.name.clone()).collect();
+        neighbouring_scene(&names, &config.scenes.active_scene, forward)
+    };
+    if let Some(name) = next {
+        switch_to_scene_named(app, &name);
     }
 }
 
@@ -423,7 +465,7 @@ pub fn rebuild_mixer(app: &Rc<App>) {
 
     // Strip names are derived from what each source points at (device, running
     // application, voice) rather than from `SourceConfig.name`, which is only
-    // ever the kind's display name â€” see `crate::source_name`.
+    // ever the kind's display name — see `crate::source_name`.
     let ((master_volume, master_muted, master_boost), sources, buses) = {
         let config = app.config.borrow();
         let ctx = app.name_context(
@@ -508,12 +550,15 @@ pub fn rebuild_mixer(app: &Rc<App>) {
 }
 
 /// One live mixer strip. Kept so a strip can be re-named without recreating it
-/// â€” see [`relabel_source_strips`].
+/// — see [`relabel_source_strips`].
 #[derive(Clone)]
 pub struct MixerStrip {
     /// Index into the active scene's sources, or `None` for master and buses
     /// (whose names come from config and never change behind the user's back).
     pub source_index: Option<usize>,
+    /// What this strip controls. Lets a keybinding find the strip it must drive
+    /// and re-announce — see [`strip_for`].
+    pub target: StripTarget,
     label: StaticText,
     slider: Slider,
     mute: CheckBox,
@@ -528,7 +573,7 @@ pub struct MixerStrip {
 }
 
 /// Removes the UIA providers installed on the current mixer sliders. Must run
-/// while those sliders' windows still exist â€” i.e. before `rebuild_mixer`
+/// while those sliders' windows still exist — i.e. before `rebuild_mixer`
 /// destroys the inner panel, and before the frame is torn down.
 pub fn drop_mixer_strips(app: &Rc<App>) {
     app.widgets(|w| {
@@ -539,7 +584,7 @@ pub fn drop_mixer_strips(app: &Rc<App>) {
 }
 
 /// Re-derives the source strips' names and applies any that changed, without
-/// creating or destroying a widget â€” so keyboard focus survives. This runs off
+/// creating or destroying a widget — so keyboard focus survives. This runs off
 /// the pump when an application starts or exits, which is exactly when the user
 /// is likely to be on that strip.
 pub fn relabel_source_strips(app: &Rc<App>) {
@@ -644,6 +689,7 @@ fn add_strip(
 
     let strip = MixerStrip {
         source_index,
+        target,
         label: label.clone(),
         slider: slider.clone(),
         mute: mute_check.clone(),
@@ -767,7 +813,7 @@ fn add_strip(
         });
     }
 
-    // Context menu (right-click, SHIFT+F10, or the applications key â€” Windows
+    // Context menu (right-click, SHIFT+F10, or the applications key — Windows
     // raises WM_CONTEXTMENU for all three, which wx turns into this event).
     // `Slider` doesn't implement wxdragon's `MenuEvents` trait and the orphan
     // rule blocks adding it, so bind the raw event types instead.
@@ -834,39 +880,106 @@ fn add_strip(
         let app = app.clone();
         let mute_check = mute_check.clone();
         mute_check.clone().on_toggled(move |_| {
-            let now_muted = mute_check.get_value();
-            {
-                let mut config = app.config.borrow_mut();
-                match target {
-                    StripTarget::Master => config.audio.master_muted = now_muted,
-                    StripTarget::Source(i) => {
-                        let Some(source) = config
-                            .scenes
-                            .active_scene_mut()
-                            .and_then(|s| s.sources.get_mut(i))
-                        else {
-                            return;
-                        };
-                        source.muted = now_muted;
-                    }
-                    StripTarget::Bus(i) => {
-                        let Some(bus) = config.buses.buses.get_mut(i) else {
-                            return;
-                        };
-                        bus.muted = now_muted;
-                    }
-                }
-            }
-            match target {
-                StripTarget::Master => app.engine.send(EngineCommand::SetMasterMute(now_muted)),
-                StripTarget::Source(i) => {
-                    app.engine.send(EngineCommand::SetSourceMute(i, now_muted))
-                }
-                StripTarget::Bus(i) => app.engine.send(EngineCommand::SetBusMute(i, now_muted)),
-            }
-            app.save_config();
+            set_mute(&app, target, mute_check.get_value());
         });
     }
+}
+
+/// Whether `target` is currently muted.
+fn mute_of(app: &Rc<App>, target: StripTarget) -> bool {
+    let config = app.config.borrow();
+    match target {
+        StripTarget::Master => config.audio.master_muted,
+        StripTarget::Source(i) => config
+            .scenes
+            .active_scene()
+            .and_then(|s| s.sources.get(i))
+            .is_some_and(|s| s.muted),
+        StripTarget::Bus(i) => config.buses.buses.get(i).is_some_and(|b| b.muted),
+    }
+}
+
+/// Writes `target`'s mute state to config and to the engine. The strip's
+/// checkbox is *not* touched here: the checkbox handler is one caller and is
+/// already showing the new value, so writing it back would fire a redundant
+/// accessibility event. [`toggle_mute_target`] is the caller that needs it.
+fn set_mute(app: &Rc<App>, target: StripTarget, muted: bool) {
+    {
+        let mut config = app.config.borrow_mut();
+        match target {
+            StripTarget::Master => config.audio.master_muted = muted,
+            StripTarget::Source(i) => {
+                let Some(source) = config
+                    .scenes
+                    .active_scene_mut()
+                    .and_then(|s| s.sources.get_mut(i))
+                else {
+                    return;
+                };
+                source.muted = muted;
+            }
+            StripTarget::Bus(i) => {
+                let Some(bus) = config.buses.buses.get_mut(i) else {
+                    return;
+                };
+                bus.muted = muted;
+            }
+        }
+    }
+    app.engine.send(match target {
+        StripTarget::Master => EngineCommand::SetMasterMute(muted),
+        StripTarget::Source(i) => EngineCommand::SetSourceMute(i, muted),
+        StripTarget::Bus(i) => EngineCommand::SetBusMute(i, muted),
+    });
+    app.save_config();
+}
+
+/// The live strip for `target`, if the mixer is showing one.
+///
+/// Only the active scene's sources have strips, so a source binding pointing at
+/// some other scene finds nothing here — which is what lets the caller say so
+/// instead of silently doing nothing.
+fn strip_for(app: &Rc<App>, target: StripTarget) -> Option<MixerStrip> {
+    app.widgets(|w| {
+        w.mixer_strips
+            .borrow()
+            .iter()
+            .find(|s| s.target == target)
+            .cloned()
+    })
+    .flatten()
+}
+
+/// Flips `target`'s mute from a keybinding, updates the strip's checkbox to
+/// match, and announces the result.
+///
+/// The announcement is the whole point: the user is somewhere else entirely (the
+/// chat list, another tab), so nothing would otherwise tell them what happened.
+pub fn toggle_mute_target(app: &Rc<App>, target: StripTarget) {
+    let Some(strip) = strip_for(app, target) else {
+        super::help::announce("That strip is not in the mixer right now");
+        return;
+    };
+    let muted = !mute_of(app, target);
+    set_mute(app, target, muted);
+    // Keep the visible control honest. `set_value` does not fire `on_toggled`,
+    // so this cannot recurse back into `set_mute`.
+    strip.mute.set_value(muted);
+    let name = strip.name.borrow().clone();
+    super::help::announce(&format!(
+        "{name} {}",
+        if muted { "muted" } else { "unmuted" }
+    ));
+}
+
+/// Flips `target`'s monitoring from a keybinding. [`toggle_monitor`] already
+/// announces; this only has to find the strip.
+pub fn toggle_monitor_target(app: &Rc<App>, target: StripTarget) {
+    let Some(strip) = strip_for(app, target) else {
+        super::help::announce("That strip is not in the mixer right now");
+        return;
+    };
+    toggle_monitor(app, target, &strip);
 }
 
 /// Whether `target` is currently being monitored. Monitoring is session state,
@@ -991,9 +1104,51 @@ pub fn on_sources_changed(app: &Rc<App>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{OverviewRow, OverviewState, overview_rows};
+    use super::{OverviewRow, OverviewState, neighbouring_scene, overview_rows};
     use crate::ui::StreamState;
     use std::time::Duration;
+
+    fn scenes(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn scene_cycling_wraps_at_both_ends() {
+        let names = scenes(&["Default", "Live", "Break"]);
+        assert_eq!(
+            neighbouring_scene(&names, "Default", true).as_deref(),
+            Some("Live")
+        );
+        assert_eq!(
+            neighbouring_scene(&names, "Break", true).as_deref(),
+            Some("Default"),
+            "past the last scene comes the first"
+        );
+        assert_eq!(
+            neighbouring_scene(&names, "Default", false).as_deref(),
+            Some("Break"),
+            "before the first scene comes the last"
+        );
+        assert_eq!(
+            neighbouring_scene(&names, "Live", false).as_deref(),
+            Some("Default")
+        );
+    }
+
+    // The spec is explicit that cycling does nothing at all with one scene,
+    // rather than re-selecting it (which would rebuild the mixer and move focus).
+    #[test]
+    fn scene_cycling_does_nothing_without_a_second_scene() {
+        assert_eq!(neighbouring_scene(&scenes(&["Default"]), "Default", true), None);
+        assert_eq!(neighbouring_scene(&scenes(&["Default"]), "Default", false), None);
+        assert_eq!(neighbouring_scene(&[], "Default", true), None);
+    }
+
+    #[test]
+    fn scene_cycling_gives_up_when_the_active_scene_is_unknown() {
+        let names = scenes(&["Default", "Live"]);
+        assert_eq!(neighbouring_scene(&names, "Deleted", true), None);
+    }
 
     fn state(stream: StreamState, recording: bool, elapsed: Option<u64>) -> OverviewState {
         OverviewState {

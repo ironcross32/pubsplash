@@ -1,4 +1,4 @@
-﻿#[path = "../soundpack.rs"]
+#[path = "../soundpack.rs"]
 mod soundpack;
 
 use std::path::PathBuf;

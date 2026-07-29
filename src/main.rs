@@ -5,6 +5,7 @@ mod b64;
 mod config;
 mod fx;
 mod json_store;
+mod keybind;
 mod logging;
 mod net;
 mod secret;

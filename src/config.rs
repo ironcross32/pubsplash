@@ -22,6 +22,7 @@ pub struct Config {
     pub archiving: ArchivingConfig,
     pub sounds: SoundsConfig,
     pub speech: SpeechConfig,
+    pub keybinds: crate::keybind::KeybindsConfig,
 }
 
 impl Default for Config {
@@ -36,6 +37,7 @@ impl Default for Config {
             archiving: ArchivingConfig::default(),
             sounds: SoundsConfig::default(),
             speech: SpeechConfig::default(),
+            keybinds: crate::keybind::KeybindsConfig::default(),
         }
     }
 }
@@ -144,9 +146,9 @@ pub struct PluginRef {
     pub format: crate::vst::PluginFormat,
     /// Display name; also the last-resort match key.
     pub name: String,
-    /// VST2 four-character unique id â€” the primary VST2 match key.
+    /// VST2 four-character unique id — the primary VST2 match key.
     pub unique_id: Option<i32>,
-    /// VST3 class id (hex) â€” the primary VST3 match key.
+    /// VST3 class id (hex) — the primary VST3 match key.
     pub class_id: Option<String>,
     /// Last known path; used only to break ties between duplicates.
     pub path: String,
@@ -633,7 +635,7 @@ pub struct TtsSourceConfig {
     /// 0-100.
     pub volume: u32,
     /// SAPI-style rate, -10..=10. Network engines scale this to their own
-    /// range â€” see `tts::engine::SynthRequest`.
+    /// range — see `tts::engine::SynthRequest`.
     pub rate: i32,
     /// -50..=50, in whatever unit the engine uses. Engines without a pitch
     /// control (SAPI, OpenAI, gTTS, Polly) ignore it.
@@ -767,6 +769,7 @@ pub fn load_from(path: &PathBuf) -> Config {
             config.connection.ensure_main_site();
             config.scenes.ensure_default_scene();
             config.fix_up_routing();
+            config.keybinds.fix_up();
             config
         }
         // Missing, or corrupt and now renamed aside: either way the path is
@@ -810,7 +813,7 @@ mod tests {
     #[test]
     fn an_interrupted_write_leaves_the_previous_file_intact() {
         // Config is saved often enough that a crash mid-write is a real risk,
-        // and a truncated file reads as corrupt â€” which costs the user every
+        // and a truncated file reads as corrupt — which costs the user every
         // scene, source, bus and FX chain they have. `write_atomic` stages the
         // new contents in a sibling temp file, so a crash before the rename
         // leaves only that temp file behind.
@@ -897,6 +900,32 @@ mod tests {
         assert!(!source.boost, "volume boost must default off");
         assert!(!config.audio.master_boost, "master boost must default off");
         assert_eq!(config.audio.bitrate_kbps, 192);
+    }
+
+    #[test]
+    fn old_config_without_keybinds_gains_the_defaults() {
+        // Upgrading from a build with no keybinds must hand the user F9 and F10
+        // rather than nothing at all.
+        let path = temp_path("old_keybinds.json");
+        let json = r#"{ "audio": { "bitrate_kbps": 128 } }"#;
+        std::fs::write(&path, json).unwrap();
+        let config = load_from(&path);
+        assert_eq!(
+            config.keybinds,
+            crate::keybind::KeybindsConfig::default(),
+            "an absent keybinds key must fall back to the defaults"
+        );
+    }
+
+    #[test]
+    fn a_config_with_every_keybind_removed_stays_empty() {
+        // The counterpart: `#[serde(default)]` fills an *absent* key, so a user
+        // who deletes every binding must not have them handed back on restart.
+        let path = temp_path("no_keybinds.json");
+        let mut config = Config::default();
+        config.keybinds.binds.clear();
+        save_to(&config, &path);
+        assert!(load_from(&path).keybinds.binds.is_empty());
     }
 
     #[test]

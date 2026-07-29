@@ -11,6 +11,8 @@ mod fx_editor;
 mod fx_params;
 mod help;
 mod home;
+mod keybinds;
+mod keybinds_ui;
 mod list;
 mod native_acc;
 mod panes;
@@ -87,7 +89,7 @@ pub struct ChatEntry {
     pub user: String,
     pub content: String,
     pub received: Instant,
-    /// `"user: content"` with newlines flattened â€” the part of the list label
+    /// `"user: content"` with newlines flattened — the part of the list label
     /// that never changes. Built once, because the relative times are
     /// re-rendered once a second across the whole history.
     pub prefix: String,
@@ -148,7 +150,7 @@ pub struct Runtime {
     /// Drives the record button and its mutual exclusion with streaming; a
     /// recording running alongside a stream does *not* set it.
     pub recording: bool,
-    /// When the current recording started, whichever way it was started â€”
+    /// When the current recording started, whichever way it was started —
     /// standalone or alongside a stream. The one signal for "a recording is
     /// underway", and the clock the overview list shows when not streaming.
     pub recording_started: Option<Instant>,
@@ -160,7 +162,7 @@ pub struct Runtime {
     /// currently failing and retrying. Drives the "(reconnecting)" labels.
     pub failing: HashSet<String>,
     /// Which mixer strips are being monitored through the local playback
-    /// device. Deliberately not persisted â€” see [`Monitors`].
+    /// device. Deliberately not persisted — see [`Monitors`].
     pub monitors: Monitors,
     /// What `refresh_stream_ui` last wrote to the stream/record controls.
     pub shown: ShownStreamUi,
@@ -169,7 +171,7 @@ pub struct Runtime {
 /// The last values `App::refresh_stream_ui` wrote to each control.
 ///
 /// It runs once a second for the whole stream, and setting a label or an
-/// enable state fires an MSAA change event whether or not anything changed â€”
+/// enable state fires an MSAA change event whether or not anything changed —
 /// so a screen-reader user parked on the stream button (the likeliest place to
 /// be while streaming) heard it re-announced every second. Nothing is written
 /// now unless it actually differs.
@@ -189,6 +191,50 @@ pub struct ShownStreamUi {
     /// while it is selected, and the cache is what makes that row still count
     /// as out of date on the next tick.
     pub overview: Vec<(home::OverviewRow, String)>,
+    /// The stream phase and standalone-recording state last *spoken*. Separate
+    /// from the label caches above because those change for reasons that are not
+    /// a transition (the button enable rules), and because `None` marks the very
+    /// first refresh, which seeds these silently rather than announcing at
+    /// startup that nothing is happening.
+    announced_stream: Option<StreamPhase>,
+    announced_recording: Option<bool>,
+}
+
+/// The four states worth announcing, since `StreamState` also carries a stream
+/// id that has nothing to do with what the user needs to hear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamPhase {
+    Idle,
+    Starting,
+    Live,
+    Stopping,
+}
+
+impl StreamPhase {
+    fn of(state: &StreamState) -> Self {
+        match state {
+            StreamState::Idle => StreamPhase::Idle,
+            StreamState::Starting => StreamPhase::Starting,
+            StreamState::Live { .. } => StreamPhase::Live,
+            StreamState::Stopping => StreamPhase::Stopping,
+        }
+    }
+
+    /// What to say on arriving here from `previous`.
+    fn announcement(&self, previous: StreamPhase) -> Option<&'static str> {
+        match self {
+            StreamPhase::Starting => Some("Connecting to the stream"),
+            StreamPhase::Live => Some("Streaming started"),
+            StreamPhase::Stopping => Some("Stopping the stream"),
+            // Reaching idle from starting means the attempt failed, and
+            // `NetEvent::StreamError` has already put a message box up saying
+            // why — "Streaming stopped" on top of that would be noise.
+            StreamPhase::Idle => match previous {
+                StreamPhase::Live | StreamPhase::Stopping => Some("Streaming stopped"),
+                _ => None,
+            },
+        }
+    }
 }
 
 /// Which mixer strips are monitored, by the same indices the mixer and engine
@@ -264,7 +310,7 @@ impl wxdragon::accessible::AccessibleImpl for NameOnlyAccessible {
     /// It happens to make no audible difference today, because everything still
     /// using this has no MSAA children and 0 was already the true answer:
     /// controls that do have children are list boxes, and those go through
-    /// [`native_acc`] instead. Keep it anyway â€” the next control with children
+    /// [`native_acc`] instead. Keep it anyway — the next control with children
     /// would otherwise inherit a silent lie.
     fn get_child_count(&self) -> (wxdragon::accessible::AccStatus, i32) {
         (wxdragon::ffi::wxd_AccStatus_WXD_ACC_NOT_IMPLEMENTED, 0)
@@ -272,7 +318,7 @@ impl wxdragon::accessible::AccessibleImpl for NameOnlyAccessible {
 
     fn get_name(&self, child_id: i32) -> (wxdragon::accessible::AccStatus, Option<String>) {
         // Child id 0 is the control itself (MSAA CHILDID_SELF). Ids 1..n are
-        // the control's children (e.g. list box items) Ã¢â‚¬â€ those must fall
+        // the control's children (e.g. list box items) — those must fall
         // through to the default accessible or every item announces as the
         // control's name.
         if child_id == 0 {
@@ -323,7 +369,7 @@ pub struct Widgets {
     /// The replaceable panel holding the current mixer strips.
     pub mixer_inner: RefCell<Option<Panel>>,
     /// The current mixer strips, in creation (and so Tab) order. Holding the
-    /// widgets lets a strip be re-labelled in place Ã¢â‚¬â€ a full rebuild would move
+    /// widgets lets a strip be re-labelled in place — a full rebuild would move
     /// focus, and the app-detection tick re-labels exactly when the user is
     /// most likely reaching for that slider. Each strip's UIA provider must be
     /// uninstalled while its window still exists, so `rebuild_mixer` drains
@@ -403,7 +449,7 @@ pub struct App {
     /// crashes inside wx's event dispatch (0xc0000005).
     pub pump_timer: RefCell<Option<Timer<Frame>>>,
     /// The 100 ms timer that services open plugin editors and a running plugin
-    /// scan. Exists only while one of those does â€” see [`sync_fast_timer`].
+    /// scan. Exists only while one of those does — see [`sync_fast_timer`].
     pub fast_timer: RefCell<Option<Timer<Frame>>>,
     /// Set while the shutdown cue is playing. `on_close` hides the frame and
     /// starts the cue on its own thread; the pump polls this and finishes the
@@ -501,7 +547,7 @@ fn sound_event_enabled(
 /// Whether a source's audio should reach the master mix.
 ///
 /// Only TTS sources can answer no. A network engine has no local voice of its
-/// own â€” the mixer is the only way its speech is ever heard â€” so it always
+/// own — the mixer is the only way its speech is ever heard — so it always
 /// feeds the strip, and "Send speech to the stream" is honoured here instead,
 /// by keeping the strip off master. The user still hears it by monitoring the
 /// strip (CTRL+M), and it still reaches any buses the source sends to.
@@ -510,7 +556,7 @@ fn sound_event_enabled(
 /// Not a dialog: these arrive while chat is flowing, and a modal per failed
 /// message would make a wrong API key unusable rather than merely annoying.
 /// The chat list is where the user is already reading, it persists, and a
-/// screen reader reaches it â€” and the worker has already rate-limited repeats
+/// screen reader reaches it — and the worker has already rate-limited repeats
 /// to one a minute, so this cannot flood.
 /// Returns how many entries were added, so the caller refreshes the list.
 fn report_speech_problems(app: &Rc<App>) -> usize {
@@ -565,7 +611,7 @@ fn speak_chat(app: &Rc<App>, user: &str, content: &str) {
             },
             source_name: source.name.clone(),
             // A network engine has no local voice, so the mixer is its only
-            // path out â€” it always feeds, and the source's own routing decides
+            // path out — it always feeds, and the source's own routing decides
             // whether that reaches the stream. SAPI speaks locally regardless,
             // so for it this really is "also send it to the stream".
             to_stream: tts.output_to_stream || crate::tts::engines::is_network(&tts.engine),
@@ -580,7 +626,7 @@ impl App {
     }
 
     /// Marks the config as needing to be written. The write itself happens on
-    /// the next one-second pump tick (or at exit) â€” see [`App::flush_config`].
+    /// the next one-second pump tick (or at exit) — see [`App::flush_config`].
     ///
     /// Saving here directly used to mean serializing the whole config, every
     /// plugin's base64 state included, once per slider event: a mouse drag
@@ -608,7 +654,7 @@ impl App {
         NameContext::build(sources, run.apps.clone(), run.failing.clone())
     }
 
-    /// Re-enumerates the processes behind every scene's Application sources Ã¢â‚¬â€
+    /// Re-enumerates the processes behind every scene's Application sources —
     /// every scene, because the Sources list shows whichever scene is selected,
     /// not the active one.
     ///
@@ -616,13 +662,13 @@ impl App {
     /// displayed application name would differ, the second when a source in the
     /// *active* scene would now capture a different process (including starting
     /// or stopping capture entirely), which is what makes a re-sync worth its
-    /// cost Ã¢â‚¬â€ `SetSources` respawns every capture thread.
+    /// cost — `SetSources` respawns every capture thread.
     /// Starts the enumeration off the UI thread. Returns `Some` only when it
     /// could answer without enumerating at all; the result of a real
     /// enumeration arrives via [`App::apply_app_processes`].
     ///
     /// Enumerating is a whole-system process snapshot, and it used to run
-    /// synchronously here. `device.rs`'s own budget for it is 50 ms â€” squarely
+    /// synchronously here. `device.rs`'s own budget for it is 50 ms — squarely
     /// in the range a screen-reader user feels, since NVDA's speech pump goes
     /// through the foreground window's message queue. Every two seconds, that
     /// is a periodic hitch while arrowing the mixer.
@@ -661,7 +707,7 @@ impl App {
     /// Enumerates synchronously.
     ///
     /// For one-off, user-initiated edits, whose very next line reads
-    /// `run.apps` â€” adding a source has to know the pid before it can sync the
+    /// `run.apps` — adding a source has to know the pid before it can sync the
     /// engine, and paying 50 ms once on an explicit action is not the problem.
     /// The *periodic* poll goes through [`App::request_app_processes`].
     pub fn refresh_app_processes(&self) -> (bool, bool) {
@@ -723,7 +769,7 @@ impl App {
 
     /// Forgets which sources were being monitored. Source monitoring is held by
     /// position, so any edit that moves, adds, or removes a source would leave
-    /// the flags pointing at a different strip than the user chose â€” and the
+    /// the flags pointing at a different strip than the user chose — and the
     /// mistake is one you hear. Call this before re-syncing the engine, which
     /// carries the flags in `SourceSpec`.
     pub fn clear_source_monitors(&self) {
@@ -737,7 +783,7 @@ impl App {
 
     /// Sends the active scene's sources to the audio engine (mixer order).
     /// Send targets are translated from bus names to current bus indices,
-    /// so call this again after any bus reorder â€” or better, use
+    /// so call this again after any bus reorder — or better, use
     /// [`App::sync_engine_routing`], which carries both in one command.
     pub fn sync_engine_sources(&self) {
         let Some(specs) = self.source_specs() else {
@@ -923,6 +969,7 @@ impl App {
         };
 
         let streaming_or_starting = !matches!(run.stream, StreamState::Idle);
+        let phase = StreamPhase::of(&run.stream);
         let recording = run.recording;
         let record_label = if recording {
             "Stop re&cording"
@@ -957,6 +1004,35 @@ impl App {
         // Outside the closure above: it holds a borrow of `run`, and this takes
         // its own.
         home::refresh_overview(self);
+
+        // Speak the transitions. This is the one funnel every one of them passes
+        // through — the start/stop methods call it directly and every `NetEvent`
+        // arm reaches it via `stream_ui_dirty` — so the guard below is what keeps
+        // the once-a-second refresh from repeating itself. It matters most when
+        // the change came from a keybinding pressed on another tab, or from the
+        // server ending the stream, with nothing on screen to notice.
+        let lines = {
+            let mut run = self.run.borrow_mut();
+            let shown = &mut run.shown;
+            let stream_line = match shown.announced_stream.replace(phase) {
+                Some(previous) if previous != phase => phase.announcement(previous),
+                // First refresh: seed silently rather than narrate the startup
+                // state nobody asked about.
+                _ => None,
+            };
+            let record_line = match shown.announced_recording.replace(recording) {
+                Some(previous) if previous != recording => Some(if recording {
+                    "Recording started"
+                } else {
+                    "Recording stopped"
+                }),
+                _ => None,
+            };
+            [stream_line, record_line]
+        };
+        for line in lines.into_iter().flatten() {
+            help::announce(line);
+        }
     }
 }
 
@@ -1047,7 +1123,7 @@ pub fn start_streaming(app: &Rc<App>) {
     let info = app.run.borrow().stream_info.clone();
     // Bounded, at roughly two seconds of encoded audio. Unbounded, a stalled
     // TCP send window meant the queue grew at the encoded bitrate for as long
-    // as the stall lasted, silently â€” and for a live stream, minutes of
+    // as the stall lasted, silently — and for a live stream, minutes of
     // buffered audio is worse than a gap.
     let (tx, rx) = tokio::sync::mpsc::channel(200);
     let bitrate = app.config.borrow().audio.bitrate_kbps;
@@ -1274,6 +1350,8 @@ pub fn build(app: Rc<App>) {
     // announcements and install the app-wide F1 hook.
     help::install_announcer(&frame);
     help::install_hook();
+    // The same hook dispatches user keybindings; give it the table to match on.
+    keybinds::reload(&app.config.borrow());
 
     // The pump has two halves.
     //
@@ -1283,9 +1361,9 @@ pub fn build(app: Rc<App>) {
     // a timer period. For an app whose whole point is that a blind broadcaster
     // hears their chat, that queueing delay was a real cost.
     //
-    // The timer keeps only what genuinely needs a clock â€” elapsed durations,
+    // The timer keeps only what genuinely needs a clock — elapsed durations,
     // relative timestamps, the deferred config write, and asking after running
-    // applications â€” and so runs once a second rather than ten times.
+    // applications — and so runs once a second rather than ten times.
     {
         let app = app.clone();
         frame.on_idle(move |_| {
@@ -1526,7 +1604,7 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
 ///
 /// Sibling-of-`current_exe` only, exactly like `vst::scan::helper_path`. Falling
 /// back to the bare name would let Windows resolve it against the working
-/// directory and PATH â€” which either fails with a pathless "os error 2" or, on
+/// directory and PATH — which either fails with a pathless "os error 2" or, on
 /// an unlucky machine, runs something else entirely.
 fn launch_sound_pack_manager() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe failed: {e}"))?;
@@ -1549,7 +1627,7 @@ fn launch_sound_pack_manager() -> Result<(), String> {
 /// The local file is preferred because it matches the build the user is
 /// actually running and needs no network. `fallback_url` covers a source
 /// checkout that never generated the HTML, plus the case where the file is
-/// there but has no handler â€” hence the fall-through on a failed open, not
+/// there but has no handler — hence the fall-through on a failed open, not
 /// just on a missing file.
 fn open_doc(name: &str, fallback_url: &str) -> Result<(), String> {
     if let Some(path) = find_doc(name) {
@@ -1607,7 +1685,7 @@ fn shell_open(target: &str) -> Result<(), String> {
 /// Diagnostic only.
 ///
 /// `App` is an `Rc` and every wx event closure holds a clone, while
-/// `App.widgets` holds the `Frame` those closures are bound to â€” a cycle, so
+/// `App.widgets` holds the `Frame` those closures are bound to — a cycle, so
 /// whether this ever runs depends on whether wxdragon frees closure boxes when
 /// the frame is destroyed. If it does not, plugin DLLs are never `FreeLibrary`d
 /// and the TTS and scan threads are never joined at exit. Nothing depends on
@@ -1671,7 +1749,7 @@ fn apply_app_changes(app: &Rc<App>, (labels_changed, capture_changed): (bool, bo
     }
 }
 
-/// Clears [`App::pumping`] however `pump_events` returns â€” including if a
+/// Clears [`App::pumping`] however `pump_events` returns — including if a
 /// handler panics, which wxdragon catches and discards, and which would
 /// otherwise wedge the pump for the rest of the session.
 struct PumpGuard(Rc<App>);
@@ -1685,7 +1763,7 @@ impl Drop for PumpGuard {
 /// Drains engine and network events into UI state.
 ///
 /// Not re-entrant. Several of the handlers below open modal dialogs, and a
-/// modal runs a nested event loop â€” which can fire the pump timer again, on top
+/// modal runs a nested event loop — which can fire the pump timer again, on top
 /// of a call that is part-way through and may be holding an `App` borrow. The
 /// guard makes the nested call a no-op; the events are still there for the
 /// outer call (or the next tick) to drain.
@@ -1694,7 +1772,7 @@ impl Drop for PumpGuard {
 /// wxdragon has no post-to-UI-thread primitive, so work that must touch
 /// widgets after a worker finishes parks a polling closure here instead. Each
 /// returns `true` when it is done and should be dropped. The UI thread owns
-/// this outright â€” hence `thread_local` rather than a lock.
+/// this outright — hence `thread_local` rather than a lock.
 type PendingCallback = Box<dyn FnMut() -> bool>;
 
 thread_local! {
@@ -1903,6 +1981,9 @@ fn pump_events(app: &Rc<App>) {
     // rings the idle doorbell when it was. F6 pane cycling arrives the same way.
     help::pump();
     panes::pump(app);
+    // User keybindings ride the same hook, and their actions run here so nothing
+    // touches `App` from the hook context.
+    keybinds::pump(app);
     // Scans and plugin editors are serviced by the fast timer, which only runs
     // while one of them exists; settle that here so no transition can leave it
     // running with nothing to do (or stopped with something waiting).
@@ -1918,7 +1999,7 @@ fn pump_events(app: &Rc<App>) {
 
 /// Drives a running VST scan: relays progress into the progress dialog,
 /// forwards its Cancel button to the worker, and finishes or abandons the
-/// scan. Events are collected under a short borrow first Ã¢â‚¬â€ handlers below
+/// scan. Events are collected under a short borrow first — handlers below
 /// open modal dialogs, which must not happen while `app.scan` is borrowed.
 fn pump_scan_events(app: &Rc<App>) {
     use crate::vst::scan::ScanEvent;
