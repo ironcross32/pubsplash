@@ -144,9 +144,9 @@ pub struct PluginRef {
     pub format: crate::vst::PluginFormat,
     /// Display name; also the last-resort match key.
     pub name: String,
-    /// VST2 four-character unique id — the primary VST2 match key.
+    /// VST2 four-character unique id â€” the primary VST2 match key.
     pub unique_id: Option<i32>,
-    /// VST3 class id (hex) — the primary VST3 match key.
+    /// VST3 class id (hex) â€” the primary VST3 match key.
     pub class_id: Option<String>,
     /// Last known path; used only to break ties between duplicates.
     pub path: String,
@@ -189,9 +189,11 @@ impl Default for PluginsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ConnectionConfig {
-    /// All known Audio Pub sites. The main site is always present.
+    /// All known streaming service profiles. The main Audiopub site is always present.
     pub sites: Vec<SiteConfig>,
-    /// URL of the site to auto-connect to on launch, if any.
+    /// Stable id of the service to auto-connect to on launch, if any.
+    ///
+    /// Older configs stored an Audiopub URL here; lookups still accept that.
     pub last_used_site: Option<String>,
 }
 
@@ -207,34 +209,179 @@ impl Default for ConnectionConfig {
 impl ConnectionConfig {
     /// Guarantees the permanent main site entry exists (first in the list).
     pub fn ensure_main_site(&mut self) {
-        if !self.sites.iter().any(|s| s.url == MAIN_SITE_URL) {
-            self.sites.insert(0, SiteConfig::main_site());
+        let main_index = self.sites.iter().position(SiteConfig::is_main);
+        match main_index {
+            Some(index) => {
+                let mut main = self.sites.remove(index);
+                main.repair_main_site();
+                self.sites.insert(0, main);
+            }
+            None => self.sites.insert(0, SiteConfig::main_site()),
+        }
+
+        let mut used = std::collections::HashSet::new();
+        for index in 0..self.sites.len() {
+            if self.sites[index].is_main() {
+                self.sites[index].repair_main_site();
+            } else {
+                self.sites[index].repair_defaults(index + 1);
+            }
+            if !used.insert(self.sites[index].id.clone()) {
+                self.sites[index].id = format!("service-{}", index + 1);
+                used.insert(self.sites[index].id.clone());
+            }
         }
     }
 
-    pub fn site(&self, url: &str) -> Option<&SiteConfig> {
-        self.sites.iter().find(|s| s.url == url)
+    pub fn site(&self, id_or_url: &str) -> Option<&SiteConfig> {
+        self.sites
+            .iter()
+            .find(|s| s.id == id_or_url || s.url == id_or_url)
     }
 
     #[allow(dead_code)]
-    pub fn site_mut(&mut self, url: &str) -> Option<&mut SiteConfig> {
-        self.sites.iter_mut().find(|s| s.url == url)
+    pub fn site_mut(&mut self, id_or_url: &str) -> Option<&mut SiteConfig> {
+        self.sites
+            .iter_mut()
+            .find(|s| s.id == id_or_url || s.url == id_or_url)
+    }
+
+    pub fn next_service_id(&self) -> String {
+        for n in 1.. {
+            let id = format!("service-{n}");
+            if self.sites.iter().all(|s| s.id != id) {
+                return id;
+            }
+        }
+        unreachable!()
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamingServiceType {
+    #[default]
+    Audiopub,
+    Icecast,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct SiteConfig {
+    pub id: String,
+    pub nickname: String,
+    pub service_type: StreamingServiceType,
+    /// Audiopub site URL.
     pub url: String,
+    /// Audiopub login email.
     pub email: String,
+    /// Audiopub login password.
     pub password: String,
+    /// Raw Icecast server host or address, without the port.
+    pub icecast_server: String,
+    pub icecast_port: u16,
+    /// Raw Icecast mount point, with or without a leading slash.
+    pub icecast_mount: String,
+    pub icecast_username: String,
+    pub icecast_password: String,
+}
+
+impl Default for SiteConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            nickname: String::new(),
+            service_type: StreamingServiceType::Audiopub,
+            url: String::new(),
+            email: String::new(),
+            password: String::new(),
+            icecast_server: String::new(),
+            icecast_port: 8000,
+            icecast_mount: String::new(),
+            icecast_username: "source".to_string(),
+            icecast_password: String::new(),
+        }
+    }
 }
 
 impl SiteConfig {
     pub fn main_site() -> Self {
         Self {
+            id: MAIN_SITE_URL.to_string(),
+            nickname: "Audiopub".to_string(),
+            service_type: StreamingServiceType::Audiopub,
             url: MAIN_SITE_URL.to_string(),
             ..Default::default()
+        }
+    }
+
+    pub fn audiopub(id: String, nickname: String) -> Self {
+        Self {
+            id,
+            nickname,
+            service_type: StreamingServiceType::Audiopub,
+            ..Default::default()
+        }
+    }
+
+    pub fn icecast(id: String, nickname: String) -> Self {
+        Self {
+            id,
+            nickname,
+            service_type: StreamingServiceType::Icecast,
+            ..Default::default()
+        }
+    }
+
+    pub fn is_main(&self) -> bool {
+        self.url == MAIN_SITE_URL
+    }
+
+    pub fn display_name(&self) -> String {
+        let nickname = self.nickname.trim();
+        if !nickname.is_empty() {
+            return nickname.to_string();
+        }
+        match self.service_type {
+            StreamingServiceType::Audiopub if !self.url.trim().is_empty() => self.url.clone(),
+            StreamingServiceType::Icecast if !self.icecast_server.trim().is_empty() => {
+                self.icecast_server.clone()
+            }
+            StreamingServiceType::Audiopub => "Audiopub service".to_string(),
+            StreamingServiceType::Icecast => "Icecast service".to_string(),
+        }
+    }
+
+    pub fn icecast_username(&self) -> String {
+        let username = self.icecast_username.trim();
+        if username.is_empty() {
+            "source".to_string()
+        } else {
+            username.to_string()
+        }
+    }
+
+    fn repair_main_site(&mut self) {
+        self.id = MAIN_SITE_URL.to_string();
+        self.nickname = "Audiopub".to_string();
+        self.service_type = StreamingServiceType::Audiopub;
+        self.url = MAIN_SITE_URL.to_string();
+        self.repair_defaults(1);
+    }
+
+    fn repair_defaults(&mut self, ordinal: usize) {
+        if self.id.trim().is_empty() {
+            self.id = if !self.url.trim().is_empty() {
+                self.url.clone()
+            } else {
+                format!("service-{ordinal}")
+            };
+        }
+        if self.nickname.trim().is_empty() {
+            self.nickname = self.display_name();
+        }
+        if self.icecast_port == 0 {
+            self.icecast_port = 8000;
         }
     }
 }
@@ -486,7 +633,7 @@ pub struct TtsSourceConfig {
     /// 0-100.
     pub volume: u32,
     /// SAPI-style rate, -10..=10. Network engines scale this to their own
-    /// range — see `tts::engine::SynthRequest`.
+    /// range â€” see `tts::engine::SynthRequest`.
     pub rate: i32,
     /// -50..=50, in whatever unit the engine uses. Engines without a pitch
     /// control (SAPI, OpenAI, gTTS, Polly) ignore it.
@@ -663,7 +810,7 @@ mod tests {
     #[test]
     fn an_interrupted_write_leaves_the_previous_file_intact() {
         // Config is saved often enough that a crash mid-write is a real risk,
-        // and a truncated file reads as corrupt — which costs the user every
+        // and a truncated file reads as corrupt â€” which costs the user every
         // scene, source, bus and FX chain they have. `write_atomic` stages the
         // new contents in a sibling temp file, so a crash before the rename
         // leaves only that temp file behind.
@@ -855,6 +1002,71 @@ mod tests {
         assert_eq!(load_from(&path), config);
     }
 
+    #[test]
+    fn old_audiopub_site_defaults_to_audiopub_with_nickname() {
+        let path = temp_path("old_audiopub_site.json");
+        let json = r#"{
+            "connection": {
+                "sites": [{
+                    "url": "https://example.org/",
+                    "email": "dj@example.org",
+                    "password": "secret"
+                }],
+                "last_used_site": "https://example.org/"
+            }
+        }"#;
+        std::fs::write(&path, json).unwrap();
+        let config = load_from(&path);
+        let service = config.connection.site("https://example.org/").unwrap();
+        assert_eq!(service.service_type, StreamingServiceType::Audiopub);
+        assert_eq!(service.nickname, "https://example.org/");
+        assert_eq!(service.email, "dj@example.org");
+        assert_eq!(service.password, "secret");
+    }
+
+    #[test]
+    fn main_site_is_repaired_if_edited() {
+        let path = temp_path("main_site_repair.json");
+        let mut config = Config::default();
+        config.connection.sites[0].id = "changed".into();
+        config.connection.sites[0].nickname = "Changed".into();
+        config.connection.sites[0].service_type = StreamingServiceType::Icecast;
+        config.connection.sites[0].icecast_server = "ice.example.org".into();
+        save_to(&config, &path);
+        let loaded = load_from(&path);
+        let main = &loaded.connection.sites[0];
+        assert_eq!(main.id, MAIN_SITE_URL);
+        assert_eq!(main.nickname, "Audiopub");
+        assert_eq!(main.service_type, StreamingServiceType::Audiopub);
+        assert_eq!(main.url, MAIN_SITE_URL);
+    }
+
+    #[test]
+    fn icecast_service_roundtrips() {
+        let path = temp_path("icecast_service.json");
+        let mut config = Config::default();
+        config.connection.sites.push(SiteConfig {
+            id: "icecast-1".into(),
+            nickname: "Station".into(),
+            service_type: StreamingServiceType::Icecast,
+            icecast_server: "ice.example.org".into(),
+            icecast_port: 9000,
+            icecast_mount: "/live".into(),
+            icecast_username: "dj".into(),
+            icecast_password: "secret".into(),
+            ..Default::default()
+        });
+        save_to(&config, &path);
+        let loaded = load_from(&path);
+        let service = loaded.connection.site("icecast-1").unwrap();
+        assert_eq!(service.service_type, StreamingServiceType::Icecast);
+        assert_eq!(service.nickname, "Station");
+        assert_eq!(service.icecast_server, "ice.example.org");
+        assert_eq!(service.icecast_port, 9000);
+        assert_eq!(service.icecast_mount, "/live");
+        assert_eq!(service.icecast_username, "dj");
+        assert_eq!(service.icecast_password, "secret");
+    }
     #[test]
     fn main_site_is_restored_if_deleted() {
         let path = temp_path("nosite.json");

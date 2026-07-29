@@ -306,7 +306,10 @@ mod tests {
         // One 10 ms block cannot complete a 50 ms fade, and the first sample
         // must still be essentially wet — no step discontinuity.
         let (sample, wet, tail) = run(Processed::Retiring, MixMode::Replace, 1.0, 1);
-        assert!(wet > 0.0 && wet < 1.0, "mid-fade after one block, got {wet}");
+        assert!(
+            wet > 0.0 && wet < 1.0,
+            "mid-fade after one block, got {wet}"
+        );
         assert!(
             (tail[0] - -1.0).abs() < 0.01,
             "first sample of the fade must still be wet, got {}",

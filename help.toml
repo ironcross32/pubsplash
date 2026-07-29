@@ -1,4 +1,4 @@
-# Context-sensitive help messages, spoken when F1 is pressed on a control.
+﻿# Context-sensitive help messages, spoken when F1 is pressed on a control.
 #
 # This file is round-tripped by the `gen-help` dev tool:
 #   cargo run --bin gen-help
@@ -50,40 +50,96 @@ message = "Arrow up and down through this list to view chats. Home jumps to the 
 
 [[control]]
 id = "dialog.connect.addSite"
-label = "Add site button"
+label = "Add service button"
 file = "src/ui/connect_dialog.rs"
-message = "Add a new Audiopub instance which becomes an option you can connect to."
+message = "Add a new streaming service profile. Choose Audiopub for an Audiopub site, or Icecast for direct source streaming."
+[[control]]
+id = "dialog.connect.addServiceType"
+label = "New service type selector"
+file = "src/ui/connect_dialog.rs"
+message = "Choose whether the new service profile is an Audiopub service or a direct Icecast service."
 
 [[control]]
 id = "dialog.connect.connectButton"
 label = "Connect or disconnect button"
 file = "src/ui/connect_dialog.rs"
-message = "Attempts to log you in to the selected instance. If login is successful, this button will change to Disconnect. Once logged in, Pubsplash will remember this instance and log you in when you launch it. This persists until you decide to change it."
+message = "Connects to the selected service. Audiopub services log in with the URL, email, and password. Icecast services are armed from the saved server, mount, username, and password, then connect to Icecast when you start streaming. Once connected, this button changes to Disconnect."
 
 [[control]]
 id = "dialog.connect.email"
-label = "Email address for the selected site"
+label = "Email address for the selected service"
 file = "src/ui/connect_dialog.rs"
-message = "Type the email address you use to log in to the selected instance."
+message = "Type the email address you use to log in to the selected Audiopub service."
 
 [[control]]
 id = "dialog.connect.password"
-label = "Password for the selected site"
+label = "Password for the selected service"
 file = "src/ui/connect_dialog.rs"
-message = "Type the password you use to log in to the selected instance."
+message = "Type the password you use to log in to the selected Audiopub service."
 
+[[control]]
+id = "dialog.connect.icecastMount"
+label = "Icecast mount point for the selected service"
+file = "src/ui/connect_dialog.rs"
+message = "Type the Icecast mount point for this service. A leading slash is optional."
+
+[[control]]
+id = "dialog.connect.icecastPassword"
+label = "Icecast password for the selected service"
+file = "src/ui/connect_dialog.rs"
+message = "Type the Icecast source password or stream key for this service."
+
+[[control]]
+id = "dialog.connect.icecastPort"
+label = "Icecast port for the selected service"
+file = "src/ui/connect_dialog.rs"
+message = "Type the Icecast port number. The default is 8000."
+
+[[control]]
+id = "dialog.connect.icecastServer"
+label = "Icecast server for the selected service"
+file = "src/ui/connect_dialog.rs"
+message = "Type the Icecast server host or address, without the port."
+
+[[control]]
+id = "dialog.connect.icecastUsername"
+label = "Icecast username for the selected service"
+file = "src/ui/connect_dialog.rs"
+message = "Type the Icecast source username. If left blank, Pubsplash uses source."
+
+[[control]]
+id = "dialog.connect.nickname"
+label = "Streaming service nickname"
+file = "src/ui/connect_dialog.rs"
+message = "Type a short name for this service as it should appear in the services list."
+
+[[control]]
+id = "dialog.connect.renameSite"
+label = "Rename service button"
+file = "src/ui/connect_dialog.rs"
+message = "Rename the selected service profile. The main Audiopub service cannot be renamed."
 [[control]]
 id = "dialog.connect.removeSite"
-label = "Remove site button"
+label = "Remove service button"
 file = "src/ui/connect_dialog.rs"
-message = "This deletes the selected instance. Note: You can't remove the main instance (audiopub.site)."
+message = "This deletes the selected service profile. The main Audiopub service cannot be removed."
 
 [[control]]
-id = "dialog.connect.siteList"
-label = "Configured Audio Pub sites list"
+id = "dialog.connect.serviceType"
+label = "Service type selector"
 file = "src/ui/connect_dialog.rs"
-message = "Use the arrow keys to select an instance, then tab to the edit boxes to enter your credentials. Audiopub.site is already here for you, simply press down arrow to select it, and you may enter your email and password to log in."
+message = "Choose whether the selected non-main service is Audiopub or Icecast. The main Audiopub service shows this selector disabled because its type is fixed."
+[[control]]
+id = "dialog.connect.siteList"
+label = "Configured streaming services list"
+file = "src/ui/connect_dialog.rs"
+message = "Use the arrow keys to select a streaming service, then tab to its settings. Audiopub is already here for you; add more Audiopub or Icecast services with the Add service button."
 
+[[control]]
+id = "dialog.connect.url"
+label = "Audiopub URL for the selected service"
+file = "src/ui/connect_dialog.rs"
+message = "Type the full Audiopub service URL, starting with http or https. The main Audiopub service keeps its built-in URL."
 [[control]]
 id = "dialog.fxEditor.bypass"
 label = "Bypass this plugin checkbox"
@@ -634,7 +690,7 @@ message = "Sets this strip's level, from 0 to 100 percent, where 100 is unity ga
 id = "tab.home.overview"
 label = "Stream overview list"
 file = "src/ui/home.rs"
-message = "A read-only list of the current state of your broadcast, one fact per row. The status row is always there and tells you whether you're streaming, recording, or both. While you're streaming, listener and listener peak rows appear below it. Whenever a stream or a recording is running, a duration row shows how long it has been going. That row counts up in the background, but the row you have selected is left alone until you go to it, so nothing in this list ever reads itself out at you. It's brought up to date the moment before you'd hear it: arrow onto the row, or tab into the list, and it reads the time as it is now, once."
+message = "A read-only list of the current state of your broadcast, one fact per row. The status row is always there and tells you whether you're streaming, recording, or both. While you're streaming, quality, listener, and listener peak rows appear below it; quality is the bitrate and format going out to your listeners. Whenever a stream or a recording is running, a duration row shows how long it has been going. That row counts up in the background, but the row you have selected is left alone until you go to it, so nothing in this list ever reads itself out at you. It's brought up to date the moment before you'd hear it: arrow onto the row, or tab into the list, and it reads the time as it is now, once."
 
 [[control]]
 id = "tab.home.recordButton"
@@ -749,3 +805,4 @@ id = "dialog.soundEventsSource.packPath"
 label = "Sound pack path input"
 file = "src/ui/scenes.rs"
 message = "The sound pack this source plays from. Type the full path to a compiled dot pspack file, or to a sound pack project folder if you are still working on one, or use the browse button. Until this is filled in, the source stays silent."
+

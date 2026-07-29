@@ -1,49 +1,84 @@
-//! Configure Audio Pub dialog: site list, credentials, connect/disconnect.
+//! Setup streaming services dialog: service list, credentials, connect/disconnect.
 
 use super::{App, show_error};
-use crate::config::{MAIN_SITE_URL, SiteConfig};
+use crate::config::{MAIN_SITE_URL, SiteConfig, StreamingServiceType};
 use crate::net::NetCommand;
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
-/// Shown when no sites are configured. See [`super::list`].
-const NO_SITES: &str = "No sites";
+/// Shown when no services are configured. See [`super::list`].
+const NO_SERVICES: &str = "No services";
 
 pub fn show(app: &Rc<App>, frame: &Frame) {
-    let dialog = Dialog::builder(frame, "Configure Audio Pub")
+    let dialog = Dialog::builder(frame, "Setup streaming services")
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .with_size(520, 480)
+        .with_size(560, 640)
         .build();
     let panel = Panel::builder(&dialog).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
-    let sites_label = StaticText::builder(&panel).with_label("Sites").build();
-    let sites_list = ListBox::builder(&panel).build();
-    super::native_acc::install(&sites_list, "Sites");
+    let services_label = StaticText::builder(&panel)
+        .with_label("Streaming services")
+        .build();
+    let services_list = ListBox::builder(&panel).build();
+    super::native_acc::install(&services_list, "Streaming services");
     super::help::tag(
-        &sites_list,
+        &services_list,
         "dialog.connect.siteList",
-        "Configured Audio Pub sites list",
+        "Configured streaming services list",
     );
-    let site_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let add_site = Button::builder(&panel).with_label("&Add site").build();
-    let remove_site = Button::builder(&panel).with_label("&Remove site").build();
-    super::help::tag(&add_site, "dialog.connect.addSite", "Add site button");
+    let service_buttons = BoxSizer::builder(Orientation::Horizontal).build();
+    let add_service = Button::builder(&panel).with_label("&Add service").build();
+    let rename_service = Button::builder(&panel)
+        .with_label("Rena&me service")
+        .build();
+    let remove_service = Button::builder(&panel)
+        .with_label("&Remove service")
+        .build();
+    super::help::tag(&add_service, "dialog.connect.addSite", "Add service button");
     super::help::tag(
-        &remove_site,
-        "dialog.connect.removeSite",
-        "Remove site button",
+        &rename_service,
+        "dialog.connect.renameSite",
+        "Rename service button",
     );
-    site_buttons.add(&add_site, 0, SizerFlag::All, 4);
-    site_buttons.add(&remove_site, 0, SizerFlag::All, 4);
+    super::help::tag(
+        &remove_service,
+        "dialog.connect.removeSite",
+        "Remove service button",
+    );
+    service_buttons.add(&add_service, 0, SizerFlag::All, 4);
+    service_buttons.add(&rename_service, 0, SizerFlag::All, 4);
+    service_buttons.add(&remove_service, 0, SizerFlag::All, 4);
 
+    let service_type = RadioBox::builder(&panel, &["Audiopub", "Icecast"])
+        .with_label("Service type")
+        .with_style(RadioBoxStyle::SpecifyRows)
+        .with_major_dimension(1)
+        .build();
+    super::native_acc::install_radio_box(&service_type, "Service type");
+    super::help::tag(
+        &service_type,
+        "dialog.connect.serviceType",
+        "Service type selector",
+    );
+
+    let url_label = StaticText::builder(&panel)
+        .with_label("Audiopub URL")
+        .build();
+    let url_input = TextCtrl::builder(&panel).build();
+    super::set_accessible_name(&url_input, "Audiopub URL");
+    super::help::tag(
+        &url_input,
+        "dialog.connect.url",
+        "Audiopub URL for the selected service",
+    );
     let email_label = StaticText::builder(&panel).with_label("Email").build();
     let email_input = TextCtrl::builder(&panel).build();
     super::set_accessible_name(&email_input, "Email");
     super::help::tag(
         &email_input,
         "dialog.connect.email",
-        "Email address for the selected site",
+        "Email address for the selected service",
     );
     let password_label = StaticText::builder(&panel).with_label("Password").build();
     let password_input = TextCtrl::builder(&panel)
@@ -53,7 +88,60 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     super::help::tag(
         &password_input,
         "dialog.connect.password",
-        "Password for the selected site",
+        "Password for the selected service",
+    );
+
+    let server_label = StaticText::builder(&panel)
+        .with_label("Icecast server")
+        .build();
+    let server_input = TextCtrl::builder(&panel).build();
+    super::set_accessible_name(&server_input, "Icecast server");
+    super::help::tag(
+        &server_input,
+        "dialog.connect.icecastServer",
+        "Icecast server for the selected service",
+    );
+    let port_label = StaticText::builder(&panel)
+        .with_label("Icecast port")
+        .build();
+    let port_input = TextCtrl::builder(&panel).build();
+    super::set_accessible_name(&port_input, "Icecast port");
+    super::help::tag(
+        &port_input,
+        "dialog.connect.icecastPort",
+        "Icecast port for the selected service",
+    );
+    let mount_label = StaticText::builder(&panel)
+        .with_label("Icecast mount point")
+        .build();
+    let mount_input = TextCtrl::builder(&panel).build();
+    super::set_accessible_name(&mount_input, "Icecast mount point");
+    super::help::tag(
+        &mount_input,
+        "dialog.connect.icecastMount",
+        "Icecast mount point for the selected service",
+    );
+    let username_label = StaticText::builder(&panel)
+        .with_label("Icecast username")
+        .build();
+    let username_input = TextCtrl::builder(&panel).build();
+    super::set_accessible_name(&username_input, "Icecast username");
+    super::help::tag(
+        &username_input,
+        "dialog.connect.icecastUsername",
+        "Icecast username for the selected service",
+    );
+    let icecast_password_label = StaticText::builder(&panel)
+        .with_label("Icecast password")
+        .build();
+    let icecast_password_input = TextCtrl::builder(&panel)
+        .with_style(TextCtrlStyle::Password)
+        .build();
+    super::set_accessible_name(&icecast_password_input, "Icecast password");
+    super::help::tag(
+        &icecast_password_input,
+        "dialog.connect.icecastPassword",
+        "Icecast password for the selected service",
     );
 
     let connect_button = Button::builder(&panel).with_label("&Connect").build();
@@ -62,20 +150,38 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         "dialog.connect.connectButton",
         "Connect or disconnect button",
     );
-    // `ID_CANCEL` is what wx maps Escape to, and it *emulates a click*, so
+    // `ID_CANCEL` is what wx maps Escape to, and it emulates a click, so
     // Escape saves the fields just like pressing Close does.
     let close_button = Button::builder(&panel)
         .with_id(ID_CANCEL)
         .with_label("C&lose")
         .build();
 
-    sizer.add(&sites_label, 0, SizerFlag::All, 4);
-    sizer.add(&sites_list, 1, SizerFlag::Expand | SizerFlag::All, 4);
-    sizer.add_sizer(&site_buttons, 0, SizerFlag::Expand, 0);
+    sizer.add(&services_label, 0, SizerFlag::All, 4);
+    sizer.add(&services_list, 1, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add_sizer(&service_buttons, 0, SizerFlag::Expand, 0);
+    sizer.add(&service_type, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&url_label, 0, SizerFlag::All, 4);
+    sizer.add(&url_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&email_label, 0, SizerFlag::All, 4);
     sizer.add(&email_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&password_label, 0, SizerFlag::All, 4);
     sizer.add(&password_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&server_label, 0, SizerFlag::All, 4);
+    sizer.add(&server_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&port_label, 0, SizerFlag::All, 4);
+    sizer.add(&port_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&mount_label, 0, SizerFlag::All, 4);
+    sizer.add(&mount_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&username_label, 0, SizerFlag::All, 4);
+    sizer.add(&username_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&icecast_password_label, 0, SizerFlag::All, 4);
+    sizer.add(
+        &icecast_password_input,
+        0,
+        SizerFlag::Expand | SizerFlag::All,
+        4,
+    );
     sizer.add(&connect_button, 0, SizerFlag::All, 8);
     sizer.add(&close_button, 0, SizerFlag::All, 8);
     panel.set_sizer(sizer, true);
@@ -83,19 +189,67 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
     dialog.set_sizer(dialog_sizer, true);
 
-    let refresh_sites = {
+    let update_field_visibility = {
+        let panel = panel.clone();
+        let service_type = service_type.clone();
+        let url_label = url_label.clone();
+        let url_input = url_input.clone();
+        let email_label = email_label.clone();
+        let email_input = email_input.clone();
+        let password_label = password_label.clone();
+        let password_input = password_input.clone();
+        let server_label = server_label.clone();
+        let server_input = server_input.clone();
+        let port_label = port_label.clone();
+        let port_input = port_input.clone();
+        let mount_label = mount_label.clone();
+        let mount_input = mount_input.clone();
+        let username_label = username_label.clone();
+        let username_input = username_input.clone();
+        let icecast_password_label = icecast_password_label.clone();
+        let icecast_password_input = icecast_password_input.clone();
+        move || {
+            let audiopub = service_type.get_selection() != 1;
+            url_label.show(audiopub);
+            url_input.show(audiopub);
+            email_label.show(audiopub);
+            email_input.show(audiopub);
+            password_label.show(audiopub);
+            password_input.show(audiopub);
+            server_label.show(!audiopub);
+            server_input.show(!audiopub);
+            port_label.show(!audiopub);
+            port_input.show(!audiopub);
+            mount_label.show(!audiopub);
+            mount_input.show(!audiopub);
+            username_label.show(!audiopub);
+            username_input.show(!audiopub);
+            icecast_password_label.show(!audiopub);
+            icecast_password_input.show(!audiopub);
+            panel.layout();
+        }
+    };
+
+    let refresh_services = {
         let app = app.clone();
-        let sites_list = sites_list.clone();
-        move |select_url: Option<&str>| {
+        let services_list = services_list.clone();
+        move |select_id: Option<&str>| {
             let config = app.config.borrow();
-            let sites = &config.connection.sites;
-            let labels: Vec<String> = sites
+            let services = &config.connection.sites;
+            let labels: Vec<String> = services
                 .iter()
-                .map(|site| {
+                .map(|service| {
                     let connected =
-                        app.run.borrow().connected_site.as_deref() == Some(site.url.as_str());
-                    let mut label = site.url.clone();
-                    if site.url == MAIN_SITE_URL {
+                        app.run.borrow().connected_service.as_deref() == Some(service.id.as_str());
+                    let mut label = match service.service_type {
+                        StreamingServiceType::Audiopub => {
+                            format!("{} (Audiopub)", service.display_name())
+                        }
+                        StreamingServiceType::Icecast => {
+                            format!("{} (Icecast)", service.display_name())
+                        }
+                    };
+                    if service.is_main() {
                         label.push_str(" (main)");
                     }
                     if connected {
@@ -104,32 +258,98 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
                     label
                 })
                 .collect();
-            super::list::fill(&sites_list, &labels, NO_SITES);
-            if !sites.is_empty() {
-                let select_index = sites
+            super::list::fill(&services_list, &labels, NO_SERVICES);
+            if !services.is_empty() {
+                let select_index = services
                     .iter()
-                    .position(|site| Some(site.url.as_str()) == select_url)
+                    .position(|service| {
+                        Some(service.id.as_str()) == select_id
+                            || Some(service.url.as_str()) == select_id
+                    })
                     .unwrap_or(0);
-                sites_list.set_selection(select_index as u32, true);
+                services_list.set_selection(select_index as u32, true);
             }
         }
     };
 
-    let load_credentials = {
+    let update_actions = {
         let app = app.clone();
-        let sites_list = sites_list.clone();
-        let email_input = email_input.clone();
-        let password_input = password_input.clone();
+        let services_list = services_list.clone();
+        let rename_service = rename_service.clone();
+        let remove_service = remove_service.clone();
         move || {
             let config = app.config.borrow();
-            let Some(index) = super::list::selection(&sites_list, config.connection.sites.len())
+            let enabled = super::list::selection(&services_list, config.connection.sites.len())
+                .and_then(|index| config.connection.sites.get(index))
+                .map(|service| !service.is_main())
+                .unwrap_or(false);
+            rename_service.enable(enabled);
+            remove_service.enable(enabled);
+        }
+    };
+
+    let clear_fields = {
+        let url_input = url_input.clone();
+        let email_input = email_input.clone();
+        let password_input = password_input.clone();
+        let server_input = server_input.clone();
+        let port_input = port_input.clone();
+        let mount_input = mount_input.clone();
+        let username_input = username_input.clone();
+        let icecast_password_input = icecast_password_input.clone();
+        move || {
+            url_input.set_value("");
+            email_input.set_value("");
+            password_input.set_value("");
+            server_input.set_value("");
+            port_input.set_value("");
+            mount_input.set_value("");
+            username_input.set_value("");
+            icecast_password_input.set_value("");
+        }
+    };
+
+    let load_fields = {
+        let app = app.clone();
+        let services_list = services_list.clone();
+        let service_type = service_type.clone();
+        let url_input = url_input.clone();
+        let email_input = email_input.clone();
+        let password_input = password_input.clone();
+        let server_input = server_input.clone();
+        let port_input = port_input.clone();
+        let mount_input = mount_input.clone();
+        let username_input = username_input.clone();
+        let icecast_password_input = icecast_password_input.clone();
+        let update_field_visibility = update_field_visibility.clone();
+        let update_actions = update_actions.clone();
+        let clear_fields = clear_fields.clone();
+        move || {
+            let config = app.config.borrow();
+            let Some(index) = super::list::selection(&services_list, config.connection.sites.len())
             else {
+                clear_fields();
+                update_actions();
                 return;
             };
-            if let Some(site) = config.connection.sites.get(index) {
-                email_input.set_value(&site.email);
-                password_input.set_value(&site.password);
+            if let Some(service) = config.connection.sites.get(index) {
+                service_type.set_selection(match service.service_type {
+                    StreamingServiceType::Audiopub => 0,
+                    StreamingServiceType::Icecast => 1,
+                });
+                service_type.enable(!service.is_main());
+                url_input.set_value(&service.url);
+                email_input.set_value(&service.email);
+                password_input.set_value(&service.password);
+                server_input.set_value(&service.icecast_server);
+                port_input.set_value(&service.icecast_port.to_string());
+                mount_input.set_value(&service.icecast_mount);
+                username_input.set_value(&service.icecast_username);
+                icecast_password_input.set_value(&service.icecast_password);
             }
+            drop(config);
+            update_field_visibility();
+            update_actions();
         }
     };
 
@@ -138,13 +358,13 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         let connect_button = connect_button.clone();
         move || {
             // While any connection exists the button reads Disconnect, even
-            // if a different site is highlighted.
-            let connected = app.run.borrow().connected_site.is_some();
+            // if a different service is highlighted.
+            let connected = app.run.borrow().connected_service.is_some();
             connect_button.set_label(if connected { "Dis&connect" } else { "&Connect" });
         }
     };
 
-    let initial_site = {
+    let initial_service = {
         let config = app.config.borrow();
         config
             .connection
@@ -152,75 +372,144 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
             .clone()
             .unwrap_or_else(|| MAIN_SITE_URL.to_string())
     };
-    refresh_sites(Some(&initial_site));
-    load_credentials();
+    refresh_services(Some(&initial_service));
+    load_fields();
     update_connect_label();
 
-    // Selection change loads that site's credentials.
     {
-        let load_credentials = load_credentials.clone();
-        sites_list
+        let load_fields = load_fields.clone();
+        services_list
             .clone()
-            .on_selection_changed(move |_| load_credentials());
+            .on_selection_changed(move |_| load_fields());
     }
 
-    // Save typed credentials into the selected site as the user types is
-    // fiddly; instead persist on Connect and on Close via this helper.
+    {
+        let update_field_visibility = update_field_visibility.clone();
+        service_type
+            .clone()
+            .on_selected(move |_| update_field_visibility());
+    }
+
+    // Save typed fields into the selected service on Connect and Close.
     let save_fields = {
         let app = app.clone();
-        let sites_list = sites_list.clone();
+        let services_list = services_list.clone();
+        let service_type = service_type.clone();
+        let url_input = url_input.clone();
         let email_input = email_input.clone();
         let password_input = password_input.clone();
+        let server_input = server_input.clone();
+        let port_input = port_input.clone();
+        let mount_input = mount_input.clone();
+        let username_input = username_input.clone();
+        let icecast_password_input = icecast_password_input.clone();
         move || {
             let count = app.config.borrow().connection.sites.len();
-            let Some(index) = super::list::selection(&sites_list, count) else {
+            let Some(index) = super::list::selection(&services_list, count) else {
                 return None;
             };
             let mut config = app.config.borrow_mut();
-            let Some(site) = config.connection.sites.get_mut(index) else {
+            let Some(service) = config.connection.sites.get_mut(index) else {
                 return None;
             };
-            site.email = email_input.get_value().trim().to_string();
-            site.password = password_input.get_value();
-            let url = site.url.clone();
+            if !service.is_main() {
+                service.service_type = if service_type.get_selection() == 1 {
+                    StreamingServiceType::Icecast
+                } else {
+                    StreamingServiceType::Audiopub
+                };
+            } else {
+                service.service_type = StreamingServiceType::Audiopub;
+                service.nickname = "Audiopub".to_string();
+                service.url = MAIN_SITE_URL.to_string();
+            }
+            service.url = url_input.get_value().trim().to_string();
+            if service.is_main() {
+                service.url = MAIN_SITE_URL.to_string();
+            }
+            service.email = email_input.get_value().trim().to_string();
+            service.password = password_input.get_value();
+            service.icecast_server = server_input.get_value().trim().to_string();
+            service.icecast_port = port_input.get_value().trim().parse().unwrap_or(0);
+            service.icecast_mount = mount_input.get_value().trim().to_string();
+            service.icecast_username = username_input.get_value().trim().to_string();
+            service.icecast_password = icecast_password_input.get_value();
+            let id = service.id.clone();
             drop(config);
             app.save_config();
-            Some(url)
+            Some(id)
         }
     };
 
     {
         let app = app.clone();
         let dialog_for_add = dialog.clone();
-        let refresh_sites = refresh_sites.clone();
-        add_site.on_click(move |_| {
+        let refresh_services = refresh_services.clone();
+        let load_fields = load_fields.clone();
+        add_service.on_click(move |_| {
+            let Some((nickname, service_type)) = prompt_new_service(&dialog_for_add) else {
+                return;
+            };
+            let id = {
+                let mut config = app.config.borrow_mut();
+                let id = config.connection.next_service_id();
+                let service = match service_type {
+                    StreamingServiceType::Audiopub => SiteConfig::audiopub(id.clone(), nickname),
+                    StreamingServiceType::Icecast => SiteConfig::icecast(id.clone(), nickname),
+                };
+                config.connection.sites.push(service);
+                id
+            };
+            app.save_config();
+            refresh_services(Some(&id));
+            load_fields();
+        });
+    }
+
+    {
+        let app = app.clone();
+        let services_list_for_rename = services_list.clone();
+        let dialog_for_rename = dialog.clone();
+        let refresh_services = refresh_services.clone();
+        rename_service.on_click(move |_| {
+            let count = app.config.borrow().connection.sites.len();
+            let Some(index) = super::list::selection(&services_list_for_rename, count) else {
+                return;
+            };
+            let (id, current_name) = {
+                let config = app.config.borrow();
+                let Some(service) = config.connection.sites.get(index) else {
+                    return;
+                };
+                if service.is_main() {
+                    show_error(
+                        &dialog_for_rename,
+                        "Rename service",
+                        "The main Audiopub service cannot be renamed.",
+                    );
+                    return;
+                }
+                (service.id.clone(), service.display_name())
+            };
             let entry = TextEntryDialog::builder(
-                &dialog_for_add,
-                "URL of the Audio Pub instance (https://...):",
-                "Add site",
+                &dialog_for_rename,
+                "New service nickname:",
+                "Rename service",
             )
+            .with_default_value(&current_name)
             .build();
             if entry.show_modal() == ID_OK {
-                if let Some(url) = entry.get_value() {
-                    let url = url.trim().to_string();
-                    if url.is_empty() || !url.starts_with("http") {
-                        show_error(
-                            &dialog_for_add,
-                            "Add site",
-                            "Enter a full URL starting with http(s)://",
-                        );
+                if let Some(name) = entry.get_value() {
+                    let name = name.trim();
+                    if name.is_empty() {
+                        show_error(&dialog_for_rename, "Rename service", "Enter a nickname.");
                         return;
                     }
-                    let mut config = app.config.borrow_mut();
-                    if config.connection.site(&url).is_none() {
-                        config.connection.sites.push(SiteConfig {
-                            url: url.clone(),
-                            ..Default::default()
-                        });
+                    if let Some(service) = app.config.borrow_mut().connection.site_mut(&id) {
+                        service.nickname = name.to_string();
                     }
-                    drop(config);
                     app.save_config();
-                    refresh_sites(Some(&url));
+                    refresh_services(Some(&id));
                 }
             }
         });
@@ -228,34 +517,34 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
 
     {
         let app = app.clone();
-        let sites_list_for_remove = sites_list.clone();
+        let services_list_for_remove = services_list.clone();
         let dialog_for_remove = dialog.clone();
-        let refresh_sites = refresh_sites.clone();
-        let load_credentials = load_credentials.clone();
-        remove_site.on_click(move |_| {
+        let refresh_services = refresh_services.clone();
+        let load_fields = load_fields.clone();
+        remove_service.on_click(move |_| {
             let count = app.config.borrow().connection.sites.len();
-            let Some(index) = super::list::selection(&sites_list_for_remove, count) else {
+            let Some(index) = super::list::selection(&services_list_for_remove, count) else {
                 return;
             };
             {
                 let mut config = app.config.borrow_mut();
-                let Some(site) = config.connection.sites.get(index) else {
+                let Some(service) = config.connection.sites.get(index) else {
                     return;
                 };
-                if site.url == MAIN_SITE_URL {
+                if service.is_main() {
                     drop(config);
                     show_error(
                         &dialog_for_remove,
-                        "Remove site",
-                        "The main Audio Pub site cannot be removed.",
+                        "Remove service",
+                        "The main Audiopub service cannot be removed.",
                     );
                     return;
                 }
                 config.connection.sites.remove(index);
             }
             app.save_config();
-            refresh_sites(None);
-            load_credentials();
+            refresh_services(None);
+            load_fields();
         });
     }
 
@@ -265,35 +554,30 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         let save_fields = save_fields.clone();
         let dialog_for_connect = dialog.clone();
         connect_button.on_click(move |_| {
-            let connected = app.run.borrow().connected_site.is_some();
+            let connected = app.run.borrow().connected_service.is_some();
             if connected {
                 app.net.send(NetCommand::Disconnect);
-                app.run.borrow_mut().connected_site = None;
+                app.run.borrow_mut().connected_service = None;
                 update_connect_label();
                 return;
             }
-            let Some(url) = save_fields() else { return };
-            let (email, password) = {
+            let Some(id) = save_fields() else { return };
+            let profile = {
                 let config = app.config.borrow();
-                let Some(site) = config.connection.site(&url) else {
+                let Some(service) = config.connection.site(&id) else {
                     return;
                 };
-                (site.email.clone(), site.password.clone())
+                match super::service_profile_from_site(service) {
+                    Ok(profile) => profile,
+                    Err(message) => {
+                        drop(config);
+                        show_error(&dialog_for_connect, "Connect", &message);
+                        return;
+                    }
+                }
             };
-            if email.is_empty() || password.is_empty() {
-                show_error(
-                    &dialog_for_connect,
-                    "Connect",
-                    "Enter your email and password first.",
-                );
-                return;
-            }
             app.run.borrow_mut().connecting = true;
-            app.net.send(NetCommand::Connect {
-                site_url: url,
-                email,
-                password,
-            });
+            app.net.send(NetCommand::Connect { profile });
             // Result arrives via the pump; the dialog may already be closed
             // by then, which is fine - the main window reports the outcome.
         });
@@ -317,4 +601,79 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     dialog.show_modal();
     *app.connect_ui.borrow_mut() = None;
     dialog.destroy();
+}
+
+fn prompt_new_service(parent: &Dialog) -> Option<(String, StreamingServiceType)> {
+    let dialog = Dialog::builder(parent, "Add streaming service")
+        .with_style(DialogStyle::DefaultDialogStyle)
+        .with_size(360, 220)
+        .build();
+    let panel = Panel::builder(&dialog).build();
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+    let nickname_label = StaticText::builder(&panel).with_label("Nickname").build();
+    let nickname_input = TextCtrl::builder(&panel).build();
+    super::set_accessible_name(&nickname_input, "Nickname");
+    super::help::tag(
+        &nickname_input,
+        "dialog.connect.nickname",
+        "Streaming service nickname",
+    );
+    let service_type = RadioBox::builder(&panel, &["Audiopub", "Icecast"])
+        .with_label("Service type")
+        .with_style(RadioBoxStyle::SpecifyRows)
+        .with_major_dimension(1)
+        .build();
+    service_type.set_selection(0);
+    super::native_acc::install_radio_box(&service_type, "Service type");
+    super::help::tag(
+        &service_type,
+        "dialog.connect.addServiceType",
+        "New service type selector",
+    );
+    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
+    let ok = Button::builder(&panel)
+        .with_id(ID_OK)
+        .with_label("OK")
+        .build();
+    let cancel = Button::builder(&panel)
+        .with_id(ID_CANCEL)
+        .with_label("Cancel")
+        .build();
+    {
+        let dialog = dialog.clone();
+        ok.on_click(move |_| dialog.end_modal(ID_OK));
+    }
+    {
+        let dialog = dialog.clone();
+        cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    }
+    buttons.add(&ok, 0, SizerFlag::All, 4);
+    buttons.add(&cancel, 0, SizerFlag::All, 4);
+    sizer.add(&nickname_label, 0, SizerFlag::All, 4);
+    sizer.add(&nickname_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&service_type, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add_sizer(&buttons, 0, SizerFlag::Expand, 0);
+    panel.set_sizer(sizer, true);
+    let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
+    dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
+    dialog.set_sizer(dialog_sizer, true);
+
+    loop {
+        if dialog.show_modal() != ID_OK {
+            dialog.destroy();
+            return None;
+        }
+        let nickname = nickname_input.get_value().trim().to_string();
+        if nickname.is_empty() {
+            show_error(&dialog, "Add service", "Enter a nickname.");
+            continue;
+        }
+        let kind = if service_type.get_selection() == 1 {
+            StreamingServiceType::Icecast
+        } else {
+            StreamingServiceType::Audiopub
+        };
+        dialog.destroy();
+        return Some((nickname, kind));
+    }
 }

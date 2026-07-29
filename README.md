@@ -1,46 +1,46 @@
-# Pubsplash
+﻿# Pubsplash
 
-Pubsplash is an accessibility-first Windows app for streaming audio to [Audio Pub](https://audiopub.site/), the open-source audio sharing and livestreaming platform.
+Pubsplash is an accessibility-first Windows app for streaming audio to [Audiopub](https://audiopub.site/) or a direct Icecast server.
 
 It is built in Rust with the wxDragon UI toolkit, and designed from the ground up to work well with screen readers such as NVDA and JAWS.
 
 ## Features
 
-- Stream live audio to audiopub.site or any self-hosted Audio Pub instance
+- Stream live audio to audiopub.site, a self-hosted Audiopub instance, or a direct Icecast server
 - MP3 encoding with configurable bitrate
 - Scenes: group any number of audio sources and switch between them
 - Source types: microphone, desktop audio, per-application audio, text-to-speech, and sound events
-- Applications are picked from a list of what is running â€” by default just the ones that have actually played sound â€” rather than typed from memory
-- Sources name themselves after what they capture â€” the microphone device, the running application's real name, the chosen speech voice â€” so the mixer's sliders say exactly what you are adjusting even with several of the same type in a scene
-- Sources reconnect on their own if their device is unplugged, resets, or is not ready yet when Pubsplash starts. A source that is retrying reads "(reconnecting)" on its mixer strip, and a source set to a particular microphone is never silently switched to a different one
-- Chat: read incoming messages in an accessible list, send outbound messages, and have chat read aloud automatically with text-to-speech (optionally spoken into the stream as well)
+- Applications are picked from a list of what is running by default; just the ones that have actually played sound
+- Sources name themself based on what they're capturing
+- Sources reconnect on their own if their device is unplugged, resets, or is not ready yet when Pubsplash starts. A source that is retrying reads "(reconnecting)" on its mixer strip
+- Audiopub chat: read incoming messages in an accessible list, send outbound messages, and have chat read aloud automatically with text-to-speech (optionally spoken into the stream as well)
 - Nine speech engines: SAPI 5 and Microsoft Edge need no setup, and Google Translate, OpenAI, ElevenLabs, Azure, AWS Polly, Google Cloud, and a self-hosted Star server are available once you enter their credentials on the Speech tab of Preferences. Keys are encrypted for your Windows account
 - Loop-safe by design: Desktop Audio capture excludes Pubsplash's own audio, so text-to-speech and sound cues can never echo into your stream
 - Built-in startup and shutdown sounds, each able to be switched off, plus audio cues for stream events (listener changes, incoming and outgoing messages) that you can send to your listeners or keep to yourself
 - A fully keyboard-accessible mixer with per-source volume and mute, plus an optional per-strip volume boost for sources that are too quiet at 100%
-- Empty lists say what they are: rather than leaving a screen reader with nothing to announce, a list with nothing in it holds a single row naming what belongs there ("No chats", "No sources", "No plugins")
+- Empty lists contain a placeholder item explaining what they're meant to contain, this is a workaround to an NVDA sisue that causes empty controls to not announce their type and speak a message like, "Unknown"
 - Mixing buses with per-source sends, so sources can be routed through shared processing (see below)
-- VST2 and VST3 effect chains on buses and the master output — mono or stereo, and instruments too — with a screen-reader-friendly Osara-like parameter editor and shareable effect chains
-- Status bar shows your stream status, quality, and duration
+- Load VST2 or VST3 plugins onto a bus, save your setup as an FX chain; export a chain to move it to another machine or give it to a friend
+- The Home tab's stream overview list reports your stream status, quality, listener count and peak, and duration
 
 ## Requirements
 
 - Windows 10 or 11
-- An Audio Pub account (your account must be trusted to stream)
+- An Audiopub account trusted to stream, or Icecast source credentials for a plain TCP Icecast server
 
 ## Getting started
 
 1. Launch Pubsplash.
-2. Open **File â†’ Configure Audio Pub**, select the site, enter your email and password, and press **Connect**.
-3. Optionally open **File â†’ Set stream info** to set the stream's title, description, streaming quality (MP3 bitrate), whether the stream should be archived on the server, and whether to **record this stream** to a file on your computer. The title, description, archive, and record choices reset every time Pubsplash starts; the quality setting is saved and persists across sessions. To have archiving or recording pre-selected each launch, enable **Archive streams by default** or **Record streams by default** on the Archiving tab of **File â†’ Preferences** (`CTRL+,`). Recordings are an exact copy of the streamed MP3, saved as `recording_<yyyy-mm-dd>_<HH-MM-SS>.mp3` in the recording folder set on that same tab (your Music library by default).
-4. On the **Home** tab, press **Start streaming** (`ALT+S`). If you haven't set the stream info yet, the dialog opens first â€” press **OK** to start with what's filled in (tabbing into a text field selects its contents so you can just type over the defaults), or **Cancel** to not start streaming.
+2. Open **File > Setup streaming services**, select **Audiopub** or add an **Icecast** service, enter that service's connection details, and press **Connect**. The built-in **Audiopub** service is permanent and cannot be removed or changed to Icecast.
+3. Optionally open **File > Set stream info** to set the stream's title, description, streaming quality (MP3 bitrate), whether an Audiopub stream should be archived on the server, and whether to **record this stream** to a file on your computer. The title, description, archive, and record choices reset every time Pubsplash starts; the quality setting is saved and persists across sessions. To have archiving or recording pre-selected each launch, enable **Archive streams by default** or **Record streams by default** on the Archiving tab of **File > Preferences** (`CTRL+,`). Recordings are an exact copy of the streamed MP3, saved as `recording_<yyyy-mm-dd>_<HH-MM-SS>.mp3` in the recording folder set on that same tab (your Music library by default).
+4. On the **Home** tab, press **Start streaming** (`ALT+S`). If you haven't set the stream info yet, the dialog opens first Ã¢â‚¬â€ press **OK** to start with what's filled in (tabbing into a text field selects its contents so you can just type over the defaults), or **Cancel** to not start streaming.
 5. Press **Stop streaming** (`ALT+T`) when you're done.
 
-**Help → Open Readme** and **Help → View Changelog** open this document and the changelog in your default browser. Both are installed with Pubsplash and match the version you are running; if a copy is unavailable, Pubsplash opens the one on GitHub instead.
+**Help > Open Readme** and **Help <> View Changelog** open this document and the changelog in your default browser. Both are installed with Pubsplash and match the version you are running; if a copy is unavailable, Pubsplash opens the one on GitHub instead.
 
 To record locally without going live, use **Start recording** (`ALT+R`) next to the streaming button; press **Stop recording** (`ALT+C`) to finish. It saves the same MP3 to your recording folder without connecting to the server. Recording and streaming can't run at the same time.
 
-The **Stream overview** at the top of the Home tab is a list you can arrow through, one fact per row. The status row is always there and says whether you're streaming, recording, or both; listener and listener peak rows appear while you're streaming; and a duration row shows how long the current stream or recording has been running. The duration counts up in the background, but the row you have selected is left alone until you go to it, so nothing in this list ever reads itself out at you. It's brought up to date the moment before you'd hear it: arrow onto the row, or tab into the list, and it reads the time as it is now, once.
+The **Stream overview** at the top of the Home tab is a list you can arrow through, one fact per row. The status row is always there and says whether you're streaming, recording, or both; listener and listener peak rows appear while you're streaming to Audiopub; and a duration row shows how long the current stream or recording has been running.
 
 ## Keyboard shortcuts
 
@@ -68,17 +68,23 @@ In the mixer, sliders respond to arrow keys for 1% steps, `Page Up` / `Page Down
 
 ### Volume boost
 
-Mixer volume sliders normally stop at 100%, which is unity gain â€” the source's own level, unchanged. If a source is still too quiet there (a microphone or a capture device that is simply low at the Windows level), open the slider's context menu with `SHIFT+F10`, the `Applications` key, or a right click, and choose **Enable volume boost**. The item shows a check mark while boost is on, and that slider then runs from 0% to 500%, amplifying the signal by up to five times.
+Mixer volume sliders normally stop at 100%, . If a source is still too quiet there (a microphone or a capture device that is simply low at the Windows level), open the slider's context menu with `SHIFT+F10`, the `Applications` key, or a right click, and choose **Enable volume boost**. The item shows a check mark while boost is on, and that slider then runs from 0% to 500%, amplifying the signal by up to five times.
 
-Boost is remembered per strip â€” Master, each source, and each bus have their own setting, saved with your configuration. Turning it back off snaps the slider down to 100% if it was higher. Note that the boost is a plain gain stage with no limiter, so amplifying an already-loud source will distort it; back the slider off until it sounds clean.
+### Streaming services
+
+Use **File > Setup streaming services** to manage the services Pubsplash can connect to. Each service has a nickname that appears in the list.
+
+The permanent **Audiopub** service points to audiopub.site. You can add other Audiopub services for self-hosted instances by entering their URL, email address, and password.
+
+Icecast services use direct source streaming. Enter the server, port, mount point, username, and source password from your Icecast host. The username defaults to `source` if left blank. Direct Icecast streams do not provide Audiopub chat, listener counts, server archiving, or a public Audiopub stream page.
 
 ## Capturing an application
 
 Add an **Application** source on the **Scenes and Sources** tab (**Add source**, then pick "Application") to stream one program's audio while leaving the rest of your system out of the mix.
 
-The picker that opens lists the applications you can capture, each read as its real name followed by its program file â€” "Firefox (firefox.exe)". By default it offers only the applications that have played sound since they started, which is usually a handful; that is the **Only show apps that have played sound** checkbox, and unchecking it widens the list to every open application, including ones that have not made a sound yet. Windows' own components never appear in either view, and Pubsplash never offers itself. Press **Refresh** after starting an application, or after playing something in one, to look again.
+The picker that opens lists the applications you can capture. Use the controls to widen the scope to include all applications; hit refresh to update the list.
 
-**Type a name...** enters a program name by hand, for an application that is not running yet â€” the source stays silent until that program starts and then picks it up on its own, without any further editing. Editing an Application source later reopens the picker with its application already highlighted; if that application has since closed, it appears as a "(not running)" entry at the top, so cancelling never loses the setting.
+**Type a name...** enters a program name by hand. This can be used to capture an application that's not running yet. When Pubsplash detects the app, it'll start capturing it automatically.
 
 ## Buses and sends
 
@@ -92,16 +98,13 @@ To route a source into a bus, select the source on the **Scenes and Sources** ta
 
 Each bus and the master output can run a chain of VST2 and VST3 plugins. On the **Buses** tab, select a bus (or the pinned **Master output** row) and use the effects list below it:
 
-- **Add plugin** inserts a scanned plugin at the end of the chain. Mono and stereo plugins are both supported — a mono effect is fed a centre downmix and its output is placed centrally. A plugin whose output is wider than stereo (surround) cannot be used, and Pubsplash says so.
+- **Add plugin** inserts a scanned plugin at the end of the chain. Note that if a plugin outputs more than 2 channels, Pubsplash will not load it at this time.
 - **Move plugin up** / **down** (or `CTRL+Up` / `CTRL+Down`) reorder the chain; effects are applied top to bottom.
 - **Bypass** turns an effect off without removing it; **Remove plugin** (or `Delete`) takes it out.
 
 Each row names the plugin and its format, so a plugin you have installed as both a VST2 and a VST3 can be told apart: `1. Compressor (VST3)`. A plugin that could not be loaded says whether it is missing from this machine or failed to start.
 
 Effects process live, including while you are streaming. Turning bypass on or off, and opening a VST3 plugin's own interface, fade the effect out of and back into the signal path over 50 ms, so neither one clicks on air. Each plugin's settings are remembered between sessions.
-
-**Instruments.** A VST3 instrument — or any plugin with no audio input, such as a tone or noise generator — can also go in a chain. Its sound is *added* to whatever the bus is already carrying rather than replacing it, so it sits alongside your microphone instead of silencing it. Pubsplash sends no MIDI, so an instrument plays only from its own interface (an on-screen keyboard, arpeggiator, or generative patch).
-
 
 ### Adjusting plugin parameters
 
@@ -123,7 +126,7 @@ When a chain you load or import uses plugins that aren't installed on this machi
 
 ## VST plugins
 
-Open **File â†’ Preferences** (`CTRL+,`) and choose the **VST plugins** tab to tell Pubsplash where your plugins live. The folder list starts out with the standard Windows VST locations that exist on most machines ; add or remove folders as needed (`Delete` removes the focused folder).
+Open **File > Preferences** (`CTRL+,`) and choose the **VST plugins** tab to tell Pubsplash where your plugins live. The folder list starts out with the standard Windows VST locations that exist on most machines ; add or remove folders as needed (`Delete` removes the focused folder).
 
 Press **Scan for new plugins** to scan only files that haven't been scanned before, or **Rescan all plugins** to start over. Scans are able to be canceled at any time. If a plugin is taking too long and you suspect it's not going to scan, you can skip it. If a scan runs to completion, a cache will be written alongside Pubsplash's configuration file and these plugins will become available to use immediately.
 
@@ -145,13 +148,13 @@ Nine engines are available:
 | Google Cloud | API key | |
 | Star | The address of your own Star server | |
 
-Credentials go on the **Speech** tab of **File → Preferences** (`CTRL+,`), once each, rather than on every source. They are encrypted for your Windows account, so copying `config.json` to another machine will not carry your keys with it.
+Credentials go on the **Speech** tab of **File â†’ Preferences** (`CTRL+,`), once each, rather than on every source. They are encrypted for your Windows account, so copying `config.json` to another machine will not carry your keys with it.
 
-That tab starts with a **Speech engine** picker, and everything after it belongs to whichever engine the picker names — so tabbing to the ElevenLabs key does not take you past OpenAI, Azure, AWS and Google first. The three engines that need no setup say so. The tab reopens on the engine you were last looking at.
+That tab starts with a **Speech engine** picker, and everything after it belongs to whichever engine the picker names so tabbing to the ElevenLabs key does not take you past OpenAI, Azure, AWS and Google first. The three engines that need no setup say so. The tab reopens on the engine you were last looking at.
 
-Engines other than SAPI 5 and Google Translate publish their voice lists over the network, so their voice pickers start out holding only **Default voice**. The line under the picker says how many voices the selected engine has, or that they have not been fetched yet. Press **Get available voices** (`ALT+G`) to fill the list; it is remembered until you change the credentials or restart. Press **Preview voice** (`ALT+P`) to hear the current settings — this is the quickest way to find out whether a key is wrong, because it reports the reason rather than just going quiet.
+Engines other than SAPI 5 and Google Translate publish their voice lists over the network, so their voice pickers start out holding only **Default voice**. The line under the picker says how many voices the selected engine has, or that they have not been fetched yet. Press **Get available voices** (`ALT+G`) to fill the list; it is remembered until you change the credentials or restart. Press **Preview voice** (`ALT+P`) to hear the current settings; this is the quickest way to find out whether a key is wrong, because it reports the reason rather than just going quiet.
 
-Changing the engine reloads the voice list, which takes a moment for the long ones, so it happens a fraction of a second after you stop moving through the picker — or immediately when you tab out of it. Arrowing through all nine engines to reach the one you want costs nothing.
+Changing the engine reloads the voice list.
 
 ### Hearing it, and sending it
 
@@ -163,13 +166,13 @@ SAPI 5 speaks to you directly, whatever else is going on. The other engines prod
 
 The Speech tab has two limits that apply to every network engine. **Longest message to speak** cuts over-long chat messages short rather than skipping them, so one wall of text cannot tie up the engine. **Shortest gap between requests** spreads out a burst of chat so a busy stream does not run up a bill or trip a rate limit. When messages still arrive faster than they can be spoken, the oldest queued ones are dropped, so what you hear stays current.
 
-If an engine fails — a wrong key, no network, a service outage — the reason appears in the chat list rather than in a dialog box, and repeats of the same failure are held down to one a minute.
+If an engine fails (a wrong key, no network, a service outage) the reason appears in the chat list rather than in a dialog box, and repeats of the same failure are held down to one a minute.
 
 ## Configuration
 
 Pubsplash stores its configuration data in `C:\Users\<Your-user-name>\AppData\Local\pubsplash`.
 
-**config.json** is where all of your app settings live. It holds things like preferences, your Audiopub credentials, your scenes and sources, and so on. It is written when the app is first launched. Pubsplash will also regenerate it if it becomes missing or if it is found to be corrupt. In the latter case, the corrupted file will be renamed and given a .bak extension, allowing you to fix it if you so choose.
+**config.json** is where all of your app settings live. It holds things like preferences, your streaming service profiles, your scenes and sources, and so on. It is written when the app is first launched. Pubsplash will also regenerate it if it becomes missing or if it is found to be corrupt. In the latter case, the corrupted file will be renamed and given a .bak extension, allowing you to fix it if you so choose.
 
 **vst_plugins.json** stores the plugin cache. It is written when a scan runs to completion. Pubsplash uses this to determine which plugins to offer when you go to add one to a bus.
 
@@ -197,14 +200,16 @@ See the repository for license details.
 
 A Sound Events source plays cues into its scene from the sound pack chosen on the **Sound packs** tab in Preferences. It can react to listener increases, listener decreases, listener-peak increases, incoming chat, and successfully sent chat messages; each of those five has its own checkbox in the source's edit dialog, and there is nothing else to set up. A stream begins with a silent listener baseline, so connecting does not play a count-change cue.
 
-To use a pack of your own, open **File > Preferences** (`CTRL+,`) and go to the **Sound packs** tab. **Import pack** (`ALT+I`) asks for a compiled `.pspack` file and copies it into Pubsplash's own folder, so you can move or delete the file you imported from afterwards. Imported packs are listed in the **Sound pack** combo box alongside **Built-in default**; the one you choose there is used by everything — the startup and shut-down cues and every Sound Events source in every scene. Arrowing through the list is free: the pack you land on is loaded a moment after you stop, or immediately if you tab out of the list. A pack's sounds are all held in memory while it is the chosen one, so cues play without touching the disk, and they are released as soon as you change packs. **Remove pack** (`ALT+K`) deletes Pubsplash's copy of the chosen pack after asking you to confirm, and returns you to the built-in one.
+To use a pack of your own, open **File > Preferences** (`CTRL+,`) and go to the **Sound packs** tab. **Import pack** (`ALT+I`) asks for a compiled `.pspack` file and copies it into Pubsplash's own folder, so you can move or delete the file you imported from afterwards. Imported packs are listed in the **Sound pack** combo box alongside **Built-in default**; the one you choose there is used by everything; the startup and shut-down cues and every Sound Events source in every scene. Arrowing through the list is free: the pack you land on is loaded a moment after you stop, or immediately if you tab out of the list. A pack's sounds are all held in memory while it is the chosen one, so cues play without touching the disk, and they are released as soon as you change packs. **Remove pack** (`ALT+K`) deletes Pubsplash's copy of the chosen pack after asking you to confirm, and returns you to the built-in one.
 
 A Sound Events source's cues always play on your default Windows output device, so you hear them whatever else is going on. By default they also go out to your listeners; clear **Send these sounds to the stream** in the edit dialog to keep them to yourself, and they then never reach the stream mix or a recording. The copy you hear bypasses the mixer, so the source's volume slider only affects what your listeners hear; muting the source silences the cues everywhere.
 
-Pubsplash includes a default sound pack baked into the executable. Its startup and shutdown cues play locally on the default Windows output device; they do not enter the stream mix or local recordings. Either can be turned off under **File > Preferences** (`CTRL+,`) on the **Sound packs** tab, in the **Interface sounds** group. With the shut-down sound off, closing the window is immediate instead of waiting for the cue to finish.
+Pubsplash includes a default sound pack . Its startup and shutdown cues play locally on the default Windows output device; they do not enter the stream mix or local recordings. Either can be turned off under **File > Preferences** (`CTRL+,`) on the **Sound packs** tab, in the **Interface sounds** group.
 
-Open **Tools > Sound Pack Manager** to create or edit a sound pack project. Project editing, saving, and compiling controls stay disabled until you create a project with **New** or load one with **Open**. **New** asks for a pack name and parent folder, then creates a child project folder using a Windows-safe version of the name with spaces changed to underscores. Interface packs currently support `ui_startup` and `ui_shutdown`; stream packs support `se_listener_increase`, `se_listener_decrease`, `se_listener_peak_increase`, `se_incoming_chat`, and `se_outgoing_chat`.
+Open **Tools > Sound Pack Manager** to create or edit a sound pack project. Project editing, saving, and compiling controls stay disabled until you create a project with **New** or load one with **Open**. **New** asks for a pack name and parent folder, then creates a child project folder. Interface packs currently support `ui_startup` and `ui_shutdown`; stream packs support `se_listener_increase`, `se_listener_decrease`, `se_listener_peak_increase`, `se_incoming_chat`, and `se_outgoing_chat`.
 
 Development projects contain `sound-pack.toml` plus a `sounds/` directory. WAV files must be readable by Pubsplash; mono files are duplicated to stereo and non-48 kHz files are resampled during playback. In the manager, choose one Source WAV per sound or event, use **Test** to preview it, then press **Save**. Save copies the selected WAVs into the project; it does not move or delete your original files. The saved files use names such as `se_incoming_chat_01.wav`.
 
 Compiling creates a distributable `.pspack` from the last saved project contents and bumps the project revision after a successful build. Press **Save** before **Compile** after changing Source WAV paths. There is also a command-line compiler installed next to `pubsplash.exe`: `soundpack.exe <project-directory> <output.pspack>`. `.pspack` encrypts assets at rest and authenticates their contents. Because Pubsplash must decrypt audio to play it, it is a deterrent against casual extraction rather than DRM.
+
+

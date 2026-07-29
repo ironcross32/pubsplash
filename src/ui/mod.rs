@@ -1,4 +1,4 @@
-//! The wxDragon UI: main frame, tabs, menu bar, status bar, and the pump
+//! The wxDragon UI: main frame, tabs, menu bar, and the pump
 //! timer that carries events from the audio/network threads onto the UI
 //! thread.
 
@@ -23,8 +23,8 @@ mod stream_info_dialog;
 use crate::audio::{
     AudioEngine, EngineCommand, FeedKind, RoutingUpdate, SourceSpec, capture::CaptureKind,
 };
-use crate::config::{Config, SourceKindConfig};
-use crate::net::{NetCommand, NetEvent, NetHandle};
+use crate::config::{Config, SiteConfig, SourceKindConfig, StreamingServiceType};
+use crate::net::{NetCommand, NetEvent, NetHandle, ServiceProfile};
 use crate::source_name::NameContext;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -87,7 +87,7 @@ pub struct ChatEntry {
     pub user: String,
     pub content: String,
     pub received: Instant,
-    /// `"user: content"` with newlines flattened — the part of the list label
+    /// `"user: content"` with newlines flattened â€” the part of the list label
     /// that never changes. Built once, because the relative times are
     /// re-rendered once a second across the whole history.
     pub prefix: String,
@@ -135,7 +135,7 @@ impl Default for StreamInfo {
 pub struct Runtime {
     pub stream: StreamState,
     pub stream_started: Option<Instant>,
-    pub connected_site: Option<String>,
+    pub connected_service: Option<String>,
     pub connecting: bool,
     pub listeners: u32,
     pub listener_peak: u32,
@@ -148,7 +148,7 @@ pub struct Runtime {
     /// Drives the record button and its mutual exclusion with streaming; a
     /// recording running alongside a stream does *not* set it.
     pub recording: bool,
-    /// When the current recording started, whichever way it was started —
+    /// When the current recording started, whichever way it was started â€”
     /// standalone or alongside a stream. The one signal for "a recording is
     /// underway", and the clock the overview list shows when not streaming.
     pub recording_started: Option<Instant>,
@@ -160,7 +160,7 @@ pub struct Runtime {
     /// currently failing and retrying. Drives the "(reconnecting)" labels.
     pub failing: HashSet<String>,
     /// Which mixer strips are being monitored through the local playback
-    /// device. Deliberately not persisted — see [`Monitors`].
+    /// device. Deliberately not persisted â€” see [`Monitors`].
     pub monitors: Monitors,
     /// What `refresh_stream_ui` last wrote to the stream/record controls.
     pub shown: ShownStreamUi,
@@ -169,7 +169,7 @@ pub struct Runtime {
 /// The last values `App::refresh_stream_ui` wrote to each control.
 ///
 /// It runs once a second for the whole stream, and setting a label or an
-/// enable state fires an MSAA change event whether or not anything changed —
+/// enable state fires an MSAA change event whether or not anything changed â€”
 /// so a screen-reader user parked on the stream button (the likeliest place to
 /// be while streaming) heard it re-announced every second. Nothing is written
 /// now unless it actually differs.
@@ -179,7 +179,6 @@ pub struct Runtime {
 /// compare equal and the guard would silently never fire.
 #[derive(Default)]
 pub struct ShownStreamUi {
-    status_text: String,
     stream_label: String,
     stream_enabled: Option<bool>,
     record_label: String,
@@ -227,7 +226,7 @@ impl Default for Runtime {
         Self {
             stream: StreamState::Idle,
             stream_started: None,
-            connected_site: None,
+            connected_service: None,
             connecting: false,
             listeners: 0,
             listener_peak: 0,
@@ -265,7 +264,7 @@ impl wxdragon::accessible::AccessibleImpl for NameOnlyAccessible {
     /// It happens to make no audible difference today, because everything still
     /// using this has no MSAA children and 0 was already the true answer:
     /// controls that do have children are list boxes, and those go through
-    /// [`native_acc`] instead. Keep it anyway — the next control with children
+    /// [`native_acc`] instead. Keep it anyway â€” the next control with children
     /// would otherwise inherit a silent lie.
     fn get_child_count(&self) -> (wxdragon::accessible::AccStatus, i32) {
         (wxdragon::ffi::wxd_AccStatus_WXD_ACC_NOT_IMPLEMENTED, 0)
@@ -273,7 +272,7 @@ impl wxdragon::accessible::AccessibleImpl for NameOnlyAccessible {
 
     fn get_name(&self, child_id: i32) -> (wxdragon::accessible::AccStatus, Option<String>) {
         // Child id 0 is the control itself (MSAA CHILDID_SELF). Ids 1..n are
-        // the control's children (e.g. list box items) â€” those must fall
+        // the control's children (e.g. list box items) Ã¢â‚¬â€ those must fall
         // through to the default accessible or every item announces as the
         // control's name.
         if child_id == 0 {
@@ -316,7 +315,6 @@ pub struct Widgets {
     /// The tab bar. Kept so [`panes`] can reach the current page and focus the
     /// tabs themselves.
     pub notebook: Notebook,
-    pub status_bar: StatusBar,
     pub overview: ListBox,
     pub stream_button: Button,
     pub record_button: Button,
@@ -325,7 +323,7 @@ pub struct Widgets {
     /// The replaceable panel holding the current mixer strips.
     pub mixer_inner: RefCell<Option<Panel>>,
     /// The current mixer strips, in creation (and so Tab) order. Holding the
-    /// widgets lets a strip be re-labelled in place â€” a full rebuild would move
+    /// widgets lets a strip be re-labelled in place Ã¢â‚¬â€ a full rebuild would move
     /// focus, and the app-detection tick re-labels exactly when the user is
     /// most likely reaching for that slider. Each strip's UIA provider must be
     /// uninstalled while its window still exists, so `rebuild_mixer` drains
@@ -343,7 +341,7 @@ pub struct Widgets {
     pub fx_bypass: CheckBox,
 }
 
-/// Live handles into the Configure Audio Pub dialog while it is open, so
+/// Live handles into the Setup streaming services dialog while it is open, so
 /// connection results arriving on the pump can report inside the dialog and
 /// put keyboard focus back on the connect button.
 #[derive(Clone)]
@@ -405,7 +403,7 @@ pub struct App {
     /// crashes inside wx's event dispatch (0xc0000005).
     pub pump_timer: RefCell<Option<Timer<Frame>>>,
     /// The 100 ms timer that services open plugin editors and a running plugin
-    /// scan. Exists only while one of those does — see [`sync_fast_timer`].
+    /// scan. Exists only while one of those does â€” see [`sync_fast_timer`].
     pub fast_timer: RefCell<Option<Timer<Frame>>>,
     /// Set while the shutdown cue is playing. `on_close` hides the frame and
     /// starts the cue on its own thread; the pump polls this and finishes the
@@ -503,7 +501,7 @@ fn sound_event_enabled(
 /// Whether a source's audio should reach the master mix.
 ///
 /// Only TTS sources can answer no. A network engine has no local voice of its
-/// own — the mixer is the only way its speech is ever heard — so it always
+/// own â€” the mixer is the only way its speech is ever heard â€” so it always
 /// feeds the strip, and "Send speech to the stream" is honoured here instead,
 /// by keeping the strip off master. The user still hears it by monitoring the
 /// strip (CTRL+M), and it still reaches any buses the source sends to.
@@ -512,7 +510,7 @@ fn sound_event_enabled(
 /// Not a dialog: these arrive while chat is flowing, and a modal per failed
 /// message would make a wrong API key unusable rather than merely annoying.
 /// The chat list is where the user is already reading, it persists, and a
-/// screen reader reaches it — and the worker has already rate-limited repeats
+/// screen reader reaches it â€” and the worker has already rate-limited repeats
 /// to one a minute, so this cannot flood.
 /// Returns how many entries were added, so the caller refreshes the list.
 fn report_speech_problems(app: &Rc<App>) -> usize {
@@ -567,7 +565,7 @@ fn speak_chat(app: &Rc<App>, user: &str, content: &str) {
             },
             source_name: source.name.clone(),
             // A network engine has no local voice, so the mixer is its only
-            // path out — it always feeds, and the source's own routing decides
+            // path out â€” it always feeds, and the source's own routing decides
             // whether that reaches the stream. SAPI speaks locally regardless,
             // so for it this really is "also send it to the stream".
             to_stream: tts.output_to_stream || crate::tts::engines::is_network(&tts.engine),
@@ -582,7 +580,7 @@ impl App {
     }
 
     /// Marks the config as needing to be written. The write itself happens on
-    /// the next one-second pump tick (or at exit) — see [`App::flush_config`].
+    /// the next one-second pump tick (or at exit) â€” see [`App::flush_config`].
     ///
     /// Saving here directly used to mean serializing the whole config, every
     /// plugin's base64 state included, once per slider event: a mouse drag
@@ -610,7 +608,7 @@ impl App {
         NameContext::build(sources, run.apps.clone(), run.failing.clone())
     }
 
-    /// Re-enumerates the processes behind every scene's Application sources â€”
+    /// Re-enumerates the processes behind every scene's Application sources Ã¢â‚¬â€
     /// every scene, because the Sources list shows whichever scene is selected,
     /// not the active one.
     ///
@@ -618,13 +616,13 @@ impl App {
     /// displayed application name would differ, the second when a source in the
     /// *active* scene would now capture a different process (including starting
     /// or stopping capture entirely), which is what makes a re-sync worth its
-    /// cost â€” `SetSources` respawns every capture thread.
+    /// cost Ã¢â‚¬â€ `SetSources` respawns every capture thread.
     /// Starts the enumeration off the UI thread. Returns `Some` only when it
     /// could answer without enumerating at all; the result of a real
     /// enumeration arrives via [`App::apply_app_processes`].
     ///
     /// Enumerating is a whole-system process snapshot, and it used to run
-    /// synchronously here. `device.rs`'s own budget for it is 50 ms — squarely
+    /// synchronously here. `device.rs`'s own budget for it is 50 ms â€” squarely
     /// in the range a screen-reader user feels, since NVDA's speech pump goes
     /// through the foreground window's message queue. Every two seconds, that
     /// is a periodic hitch while arrowing the mixer.
@@ -663,7 +661,7 @@ impl App {
     /// Enumerates synchronously.
     ///
     /// For one-off, user-initiated edits, whose very next line reads
-    /// `run.apps` — adding a source has to know the pid before it can sync the
+    /// `run.apps` â€” adding a source has to know the pid before it can sync the
     /// engine, and paying 50 ms once on an explicit action is not the problem.
     /// The *periodic* poll goes through [`App::request_app_processes`].
     pub fn refresh_app_processes(&self) -> (bool, bool) {
@@ -725,7 +723,7 @@ impl App {
 
     /// Forgets which sources were being monitored. Source monitoring is held by
     /// position, so any edit that moves, adds, or removes a source would leave
-    /// the flags pointing at a different strip than the user chose — and the
+    /// the flags pointing at a different strip than the user chose â€” and the
     /// mistake is one you hear. Call this before re-syncing the engine, which
     /// carries the flags in `SourceSpec`.
     pub fn clear_source_monitors(&self) {
@@ -739,7 +737,7 @@ impl App {
 
     /// Sends the active scene's sources to the audio engine (mixer order).
     /// Send targets are translated from bus names to current bus indices,
-    /// so call this again after any bus reorder — or better, use
+    /// so call this again after any bus reorder â€” or better, use
     /// [`App::sync_engine_routing`], which carries both in one command.
     pub fn sync_engine_sources(&self) {
         let Some(specs) = self.source_specs() else {
@@ -853,7 +851,7 @@ impl App {
         let StreamState::Live { stream_id } = &run.stream else {
             return None;
         };
-        let site = run.connected_site.as_deref()?;
+        let site = run.connected_service.as_deref()?;
         Some(format!("{}/live/{}", site.trim_end_matches('/'), stream_id))
     }
 
@@ -914,31 +912,14 @@ impl App {
         self.refresh_stream_ui();
     }
 
-    /// Repaints everything that depends on stream state: overview list,
-    /// stream button, status bar.
+    /// Repaints everything that depends on stream state: overview list and the
+    /// stream/record buttons.
     pub fn refresh_stream_ui(&self) {
         let run = self.run.borrow();
-        let config = self.config.borrow();
 
-        let (status_text, button_label) = match &run.stream {
-            StreamState::Idle => ("Not streaming".to_string(), "&Start streaming".to_string()),
-            StreamState::Starting => ("Connecting...".to_string(), "S&top streaming".to_string()),
-            StreamState::Live { .. } => {
-                let duration = run
-                    .stream_started
-                    .map(|t| format_duration(t.elapsed()))
-                    .unwrap_or_default();
-                (
-                    format!(
-                        "Streaming - {} kbps {} - {}",
-                        config.audio.bitrate_kbps,
-                        config.audio.format.display_name(),
-                        duration
-                    ),
-                    "S&top streaming".to_string(),
-                )
-            }
-            StreamState::Stopping => ("Stopping...".to_string(), "S&top streaming".to_string()),
+        let button_label = match &run.stream {
+            StreamState::Idle => "&Start streaming",
+            _ => "S&top streaming",
         };
 
         let streaming_or_starting = !matches!(run.stream, StreamState::Idle);
@@ -949,20 +930,15 @@ impl App {
             "Start &recording"
         };
         drop(run);
-        drop(config);
 
         self.widgets(|w| {
             // Every write below fires an accessibility change event, so each
             // one is guarded — see [`ShownStreamUi`].
             let mut run = self.run.borrow_mut();
             let shown = &mut run.shown;
-            if shown.status_text != status_text {
-                w.status_bar.set_status_text(&status_text, 0);
-                shown.status_text = status_text;
-            }
             if shown.stream_label != button_label {
-                w.stream_button.set_label(&button_label);
-                shown.stream_label = button_label;
+                w.stream_button.set_label(button_label);
+                shown.stream_label = button_label.to_string();
             }
             // Streaming and standalone recording are mutually exclusive.
             if shown.stream_enabled != Some(!recording) {
@@ -996,6 +972,50 @@ fn recording_filename() -> String {
     )
 }
 
+pub fn service_profile_from_site(site: &SiteConfig) -> Result<ServiceProfile, String> {
+    let nickname = site.display_name();
+    match site.service_type {
+        StreamingServiceType::Audiopub => {
+            let site_url = site.url.trim();
+            if site_url.is_empty() || !site_url.starts_with("http") {
+                return Err("Enter a full Audiopub URL starting with http(s)://".to_string());
+            }
+            if site.email.trim().is_empty() || site.password.is_empty() {
+                return Err("Enter your email and password first.".to_string());
+            }
+            Ok(ServiceProfile::Audiopub {
+                id: site.id.clone(),
+                nickname,
+                site_url: site_url.to_string(),
+                email: site.email.trim().to_string(),
+                password: site.password.clone(),
+            })
+        }
+        StreamingServiceType::Icecast => {
+            if site.icecast_server.trim().is_empty() {
+                return Err("Enter the Icecast server.".to_string());
+            }
+            if site.icecast_port == 0 {
+                return Err("Enter a valid Icecast port.".to_string());
+            }
+            if site.icecast_mount.trim().trim_start_matches('/').is_empty() {
+                return Err("Enter the Icecast mount point.".to_string());
+            }
+            if site.icecast_password.is_empty() {
+                return Err("Enter the Icecast password.".to_string());
+            }
+            Ok(ServiceProfile::Icecast {
+                id: site.id.clone(),
+                nickname,
+                server: site.icecast_server.trim().to_string(),
+                port: site.icecast_port,
+                mount: site.icecast_mount.trim().to_string(),
+                username: site.icecast_username(),
+                password: site.icecast_password.clone(),
+            })
+        }
+    }
+}
 /// Kicks off the stream (engine encoding + network side). If the user never
 /// confirmed the stream info this session, the Set stream info dialog opens
 /// first; cancelling it cancels the start.
@@ -1005,13 +1025,13 @@ pub fn start_streaming(app: &Rc<App>) {
         if run.stream != StreamState::Idle {
             return;
         }
-        if run.connected_site.is_none() {
+        if run.connected_service.is_none() {
             drop(run);
             app.widgets(|w| {
                 show_error(
                     &w.frame,
                     "Not connected",
-                    "Connect to an Audio Pub site first (File > Configure Audio Pub).",
+                    "Connect to a streaming service first (File > Setup streaming services).",
                 )
             });
             return;
@@ -1027,7 +1047,7 @@ pub fn start_streaming(app: &Rc<App>) {
     let info = app.run.borrow().stream_info.clone();
     // Bounded, at roughly two seconds of encoded audio. Unbounded, a stalled
     // TCP send window meant the queue grew at the encoded bitrate for as long
-    // as the stall lasted, silently — and for a live stream, minutes of
+    // as the stall lasted, silently â€” and for a live stream, minutes of
     // buffered audio is worse than a gap.
     let (tx, rx) = tokio::sync::mpsc::channel(200);
     let bitrate = app.config.borrow().audio.bitrate_kbps;
@@ -1118,12 +1138,6 @@ pub fn build(app: Rc<App>) {
     frame_sizer.add(&notebook, 1, SizerFlag::Expand | SizerFlag::All, 0);
     frame.set_sizer(frame_sizer, true);
 
-    let status_bar = StatusBar::builder(&frame)
-        .with_fields_count(1)
-        .add_initial_text(0, "Not streaming")
-        .build();
-    frame.set_existing_status_bar(Some(&status_bar));
-
     build_menu(&app, &frame);
 
     // Tabs fill in the Widgets struct.
@@ -1136,7 +1150,6 @@ pub fn build(app: Rc<App>) {
     *app.widgets.borrow_mut() = Some(Widgets {
         frame: frame.clone(),
         notebook: notebook.clone(),
-        status_bar,
         overview,
         stream_button,
         record_button,
@@ -1270,9 +1283,9 @@ pub fn build(app: Rc<App>) {
     // a timer period. For an app whose whole point is that a blind broadcaster
     // hears their chat, that queueing delay was a real cost.
     //
-    // The timer keeps only what genuinely needs a clock — elapsed durations,
+    // The timer keeps only what genuinely needs a clock â€” elapsed durations,
     // relative timestamps, the deferred config write, and asking after running
-    // applications — and so runs once a second rather than ten times.
+    // applications â€” and so runs once a second rather than ten times.
     {
         let app = app.clone();
         frame.on_idle(move |_| {
@@ -1331,18 +1344,17 @@ pub fn build(app: Rc<App>) {
         *app_for_timer.pump_timer.borrow_mut() = Some(timer);
     }
 
-    // Auto-connect to the last used site.
+    // Auto-connect to the last used service.
     {
         let config = app.config.borrow();
-        if let Some(site_url) = config.connection.last_used_site.clone() {
-            if let Some(site) = config.connection.site(&site_url) {
-                if !site.email.is_empty() && !site.password.is_empty() {
-                    app.run.borrow_mut().connecting = true;
-                    app.net.send(NetCommand::Connect {
-                        site_url: site.url.clone(),
-                        email: site.email.clone(),
-                        password: site.password.clone(),
-                    });
+        if let Some(service_id) = config.connection.last_used_site.clone() {
+            if let Some(site) = config.connection.site(&service_id) {
+                match service_profile_from_site(site) {
+                    Ok(profile) => {
+                        app.run.borrow_mut().connecting = true;
+                        app.net.send(NetCommand::Connect { profile });
+                    }
+                    Err(message) => log::warn!("Skipping auto-connect: {message}"),
                 }
             }
         }
@@ -1425,8 +1437,8 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
     let file_menu = Menu::builder()
         .append_item(
             ID_MENU_CONFIGURE,
-            "&Configure Audio Pub...",
-            "Manage Audio Pub sites and credentials",
+            "Setup streaming &services...",
+            "Manage Audiopub and Icecast streaming services",
         )
         .append_item(
             ID_MENU_STREAM_INFO,
@@ -1514,7 +1526,7 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
 ///
 /// Sibling-of-`current_exe` only, exactly like `vst::scan::helper_path`. Falling
 /// back to the bare name would let Windows resolve it against the working
-/// directory and PATH — which either fails with a pathless "os error 2" or, on
+/// directory and PATH â€” which either fails with a pathless "os error 2" or, on
 /// an unlucky machine, runs something else entirely.
 fn launch_sound_pack_manager() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe failed: {e}"))?;
@@ -1537,7 +1549,7 @@ fn launch_sound_pack_manager() -> Result<(), String> {
 /// The local file is preferred because it matches the build the user is
 /// actually running and needs no network. `fallback_url` covers a source
 /// checkout that never generated the HTML, plus the case where the file is
-/// there but has no handler — hence the fall-through on a failed open, not
+/// there but has no handler â€” hence the fall-through on a failed open, not
 /// just on a missing file.
 fn open_doc(name: &str, fallback_url: &str) -> Result<(), String> {
     if let Some(path) = find_doc(name) {
@@ -1595,7 +1607,7 @@ fn shell_open(target: &str) -> Result<(), String> {
 /// Diagnostic only.
 ///
 /// `App` is an `Rc` and every wx event closure holds a clone, while
-/// `App.widgets` holds the `Frame` those closures are bound to — a cycle, so
+/// `App.widgets` holds the `Frame` those closures are bound to â€” a cycle, so
 /// whether this ever runs depends on whether wxdragon frees closure boxes when
 /// the frame is destroyed. If it does not, plugin DLLs are never `FreeLibrary`d
 /// and the TTS and scan threads are never joined at exit. Nothing depends on
@@ -1659,7 +1671,7 @@ fn apply_app_changes(app: &Rc<App>, (labels_changed, capture_changed): (bool, bo
     }
 }
 
-/// Clears [`App::pumping`] however `pump_events` returns — including if a
+/// Clears [`App::pumping`] however `pump_events` returns â€” including if a
 /// handler panics, which wxdragon catches and discards, and which would
 /// otherwise wedge the pump for the rest of the session.
 struct PumpGuard(Rc<App>);
@@ -1673,7 +1685,7 @@ impl Drop for PumpGuard {
 /// Drains engine and network events into UI state.
 ///
 /// Not re-entrant. Several of the handlers below open modal dialogs, and a
-/// modal runs a nested event loop — which can fire the pump timer again, on top
+/// modal runs a nested event loop â€” which can fire the pump timer again, on top
 /// of a call that is part-way through and may be holding an `App` borrow. The
 /// guard makes the nested call a no-op; the events are still there for the
 /// outer call (or the next tick) to drain.
@@ -1682,7 +1694,7 @@ impl Drop for PumpGuard {
 /// wxdragon has no post-to-UI-thread primitive, so work that must touch
 /// widgets after a worker finishes parks a polling closure here instead. Each
 /// returns `true` when it is done and should be dropped. The UI thread owns
-/// this outright — hence `thread_local` rather than a lock.
+/// this outright â€” hence `thread_local` rather than a lock.
 type PendingCallback = Box<dyn FnMut() -> bool>;
 
 thread_local! {
@@ -1721,15 +1733,18 @@ fn pump_events(app: &Rc<App>) {
 
     while let Ok(event) = app.net.events.try_recv() {
         match event {
-            NetEvent::Connected { site_url } => {
+            NetEvent::Connected {
+                service_id,
+                display_name,
+            } => {
                 {
                     let mut run = app.run.borrow_mut();
                     run.connecting = false;
-                    run.connected_site = Some(site_url.clone());
+                    run.connected_service = Some(service_id.clone());
                 }
                 {
                     let mut config = app.config.borrow_mut();
-                    config.connection.last_used_site = Some(site_url.clone());
+                    config.connection.last_used_site = Some(service_id.clone());
                 }
                 app.save_config();
                 stream_ui_dirty = true;
@@ -1741,7 +1756,7 @@ fn pump_events(app: &Rc<App>) {
                     show_info(
                         &ui.dialog,
                         "Connected",
-                        &format!("Connected to {site_url} and logged in successfully."),
+                        &format!("Connected to {display_name}."),
                     );
                     ui.connect_button.set_focus();
                 }
@@ -1767,7 +1782,7 @@ fn pump_events(app: &Rc<App>) {
             }
             NetEvent::Disconnected => {
                 let mut run = app.run.borrow_mut();
-                run.connected_site = None;
+                run.connected_service = None;
                 run.connecting = false;
                 drop(run);
                 stream_ui_dirty = true;
@@ -1903,7 +1918,7 @@ fn pump_events(app: &Rc<App>) {
 
 /// Drives a running VST scan: relays progress into the progress dialog,
 /// forwards its Cancel button to the worker, and finishes or abandons the
-/// scan. Events are collected under a short borrow first â€” handlers below
+/// scan. Events are collected under a short borrow first Ã¢â‚¬â€ handlers below
 /// open modal dialogs, which must not happen while `app.scan` is borrowed.
 fn pump_scan_events(app: &Rc<App>) {
     use crate::vst::scan::ScanEvent;

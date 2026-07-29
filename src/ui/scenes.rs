@@ -2,6 +2,7 @@
 //! and per-type source edit dialogs.
 
 use super::home::on_sources_changed;
+use super::slider_uia::SliderAnnouncer;
 use super::{App, WXK_DELETE, WXK_DOWN, WXK_UP, show_error};
 use crate::config::{SoundEventsSourceConfig, SourceConfig, SourceKindConfig, TtsSourceConfig};
 use crate::soundpack::StreamEvent;
@@ -699,6 +700,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         "dialog.ttsSource.volume",
         "TTS voice volume slider",
     );
+    let volume_announcer = wire_slider(&volume_slider, "Voice volume", "%", 0, 100, 10);
 
     let rate_label = StaticText::builder(&panel)
         .with_label("Speech rate (-10 to 10)")
@@ -714,6 +716,8 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         "dialog.ttsSource.rate",
         "TTS speech rate slider",
     );
+    // Page step of 2 rather than 10: the whole range is only 20 wide.
+    let rate_announcer = wire_slider(&rate_slider, "Speech rate", "", -10, 10, 2);
 
     let pitch_label = StaticText::builder(&panel)
         .with_label("Voice pitch (-50 to 50)")
@@ -728,9 +732,10 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         "dialog.ttsSource.pitch",
         "TTS voice pitch slider",
     );
+    let pitch_announcer = wire_slider(&pitch_slider, "Voice pitch", "", -50, 50, 10);
     // Named per engine: not every engine has a pitch control, and a slider
     // that silently does nothing is worse than one that says so.
-    set_pitch_name(&pitch_slider, selected_id);
+    set_pitch_name(&pitch_slider, &pitch_announcer, selected_id);
 
     let output_check = CheckBox::builder(&panel)
         .with_label("Send speech to the stream")
@@ -825,6 +830,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         let voice_choice = voice_choice.clone();
         let voice_count_label = voice_count_label.clone();
         let pitch_slider = pitch_slider.clone();
+        let pitch_announcer = pitch_announcer.clone();
         let voices = voices.clone();
         let selected_engine = selected_engine.clone();
         let applied = applied.clone();
@@ -846,7 +852,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
             update_voice_status(&voice_count_label, &voice_choice, engine);
             let supported = pitch_is_supported(engine);
             if supported != pitch_supported.replace(supported) {
-                set_pitch_name(&pitch_slider, engine);
+                set_pitch_name(&pitch_slider, &pitch_announcer, engine);
             }
             applied.set(engine);
         })
@@ -1022,6 +1028,11 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     }
     alive.set(false);
     settle.stop();
+    // The provider registry is keyed by HWND, so it must let go of these sliders
+    // before the window is destroyed and the handles can be recycled.
+    volume_announcer.uninstall();
+    rate_announcer.uninstall();
+    pitch_announcer.uninstall();
     dialog.destroy();
 }
 
@@ -1102,15 +1113,57 @@ fn selected_voice(
 }
 
 /// Names the pitch slider, saying so when the engine ignores it.
-fn set_pitch_name(slider: &Slider, engine: &str) {
-    super::set_accessible_name(
-        slider,
-        if pitch_is_supported(engine) {
-            "Voice pitch"
-        } else {
-            "Voice pitch, not supported by this engine"
-        },
-    );
+fn set_pitch_name(slider: &Slider, announcer: &SliderAnnouncer, engine: &str) {
+    let name = if pitch_is_supported(engine) {
+        "Voice pitch"
+    } else {
+        "Voice pitch, not supported by this engine"
+    };
+    super::set_accessible_name(slider, name);
+    // The MSAA name above is only half of it — NVDA reads the UIA one.
+    announcer.set_name(name);
+}
+
+/// Gives a dialog slider the two things that make it usable with a screen
+/// reader: our UIA provider, so the announced value is the slider's own number
+/// rather than the trackbar's percentage of range, and the app's movement
+/// mapping instead of the trackbar's backwards one (see
+/// [`super::slider_uia::key_step`]).
+///
+/// `suffix` is appended to the announced value. The returned announcer must be
+/// kept alive for the slider's lifetime and uninstalled before the dialog is
+/// destroyed.
+fn wire_slider(
+    slider: &Slider,
+    name: &str,
+    suffix: &'static str,
+    min: i32,
+    max: i32,
+    page: i32,
+) -> Rc<SliderAnnouncer> {
+    let announcer = Rc::new(super::slider_uia::install(slider));
+    announcer.set_text(name, &format!("{}{suffix}", slider.value()));
+    let slider_for_keys = slider.clone();
+    let announcer_for_keys = announcer.clone();
+    slider.clone().on_key_down(move |event| {
+        let Some((code, _)) = super::key_of(&event) else {
+            event.skip(true);
+            return;
+        };
+        let current = slider_for_keys.value();
+        let Some(value) = super::slider_uia::key_step(code, current, min, max, page) else {
+            event.skip(true);
+            return;
+        };
+        // wxDragon re-arms `Skip(true)` before every closure, so a handled key
+        // needs an explicit `skip(false)`; without it the trackbar's default proc
+        // also gets the key and applies its opposite mapping.
+        event.skip(false);
+        slider_for_keys.set_value(value);
+        // Announced even at the end of the range, so the key always speaks.
+        announcer_for_keys.update_value(&format!("{value}{suffix}"));
+    });
+    announcer
 }
 
 /// Synthesizes a fixed phrase and reports the outcome.

@@ -10,6 +10,9 @@ use wxdragon::prelude::*;
 /// Shown when the source sends to no buses. See [`super::list`].
 const NO_SENDS: &str = "No sends";
 
+/// How far Page Up and Page Down move the level slider, over its 0-100 range.
+const PAGE_STEP: i32 = 10;
+
 /// Opens the sends dialog for one source of one scene.
 pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     let Some(frame) = app.widgets(|w| w.frame.clone()) else {
@@ -95,6 +98,10 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
         .with_max_value(100)
         .build();
     super::set_accessible_name(&level_slider, "Send level");
+    // A native trackbar announces its own position through UIA, which is what
+    // NVDA reads on Windows 10/11 — `set_accessible_name` only answers MSAA. Our
+    // provider is what makes the per-bus name and the level actually spoken.
+    let announcer = Rc::new(super::slider_uia::install(&level_slider));
     super::help::tag(
         &level_slider,
         "dialog.sends.level",
@@ -154,6 +161,7 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
         let working = working.clone();
         let send_list = send_list.clone();
         let level_slider = level_slider.clone();
+        let announcer = announcer.clone();
         move || {
             let count = working.borrow().len();
             let Some(index) = super::list::selection(&send_list, count) else {
@@ -161,7 +169,12 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
             };
             if let Some(send) = working.borrow().get(index) {
                 level_slider.set_value(send.level as i32);
-                super::set_accessible_name(&level_slider, &format!("Send level for {}", send.bus));
+                let name = format!("Send level for {}", send.bus);
+                super::set_accessible_name(&level_slider, &name);
+                // `set_text`, not `update`: the list selection that got us here
+                // is already speaking, and an event would chase it with a
+                // redundant re-read of the level.
+                announcer.set_text(&name, &send.level.to_string());
             }
         }
     };
@@ -173,22 +186,66 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
             .on_selection_changed(move |_| load_selected());
     }
 
-    // Slider edits the selected send's level.
-    {
+    // Writes a level to the selected send and pushes it out to the list label and
+    // the screen reader. Shared by the slider's mouse and keyboard paths.
+    let apply_level = {
         let working = working.clone();
         let send_list = send_list.clone();
-        let level_slider = level_slider.clone();
         let refresh_list = refresh_list.clone();
-        level_slider.clone().on_slider(move |_| {
+        let announcer = announcer.clone();
+        move |value: u32| {
             let count = working.borrow().len();
             let Some(index) = super::list::selection(&send_list, count) else {
                 return;
             };
-            let value = level_slider.value().clamp(0, 100) as u32;
-            if let Some(send) = working.borrow_mut().get_mut(index) {
+            // The mutable borrow has to be closed before `refresh_list`, which
+            // borrows the same cell.
+            let bus = {
+                let mut working = working.borrow_mut();
+                let Some(send) = working.get_mut(index) else {
+                    return;
+                };
                 send.level = value;
-            }
+                send.bus.clone()
+            };
             refresh_list(Some(index));
+            announcer.update(&format!("Send level for {bus}"), &value.to_string());
+        }
+    };
+
+    // Slider edits the selected send's level (mouse drags and the mnemonic path;
+    // the keys are handled below).
+    {
+        let level_slider = level_slider.clone();
+        let apply_level = apply_level.clone();
+        level_slider
+            .clone()
+            .on_slider(move |_| apply_level(level_slider.value().clamp(0, 100) as u32));
+    }
+
+    // Every movement key is handled here rather than by the native trackbar,
+    // whose directions are backwards; see `slider_uia::key_step`.
+    {
+        let level_slider_for_keys = level_slider.clone();
+        let apply_level = apply_level.clone();
+        level_slider.clone().on_key_down(move |event| {
+            let Some((code, _)) = super::key_of(&event) else {
+                event.skip(true);
+                return;
+            };
+            let current = level_slider_for_keys.value();
+            let Some(value) = super::slider_uia::key_step(code, current, 0, 100, PAGE_STEP) else {
+                event.skip(true);
+                return;
+            };
+            // Consuming the key matters: wxDragon re-arms `Skip(true)` before
+            // every closure, and the trackbar's default proc would otherwise
+            // apply its opposite mapping and fire a `wxEVT_SLIDER` over the top.
+            event.skip(false);
+            level_slider_for_keys.set_value(value);
+            // Announced even when already at the end of the range, so the key
+            // always produces spoken feedback.
+            apply_level(value as u32);
         });
     }
 
@@ -291,5 +348,8 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
         app.save_config();
         app.sync_engine_sources();
     }
+    // The provider registry is keyed by HWND, so it must let go of this slider
+    // before the window is destroyed and the handle can be recycled.
+    announcer.uninstall();
     dialog.destroy();
 }

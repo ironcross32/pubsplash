@@ -213,6 +213,7 @@ pub fn refresh_scene_list(app: &Rc<App>) {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OverviewRow {
     Status,
+    Quality,
     Listeners,
     ListenerPeak,
     Duration,
@@ -227,6 +228,9 @@ pub struct OverviewState {
     pub recording: bool,
     pub listeners: u32,
     pub listener_peak: u32,
+    /// Encoder settings, pre-formatted ("128 kbps MP3"). Held as a string so
+    /// this snapshot stays free of config types and the row stays testable.
+    pub quality: String,
     /// Elapsed time on whichever clock is running: the stream's if streaming,
     /// otherwise the recording's. `None` when neither is.
     pub elapsed: Option<std::time::Duration>,
@@ -257,6 +261,9 @@ fn overview_rows(state: &OverviewState) -> Vec<(OverviewRow, String)> {
 
     let mut rows = vec![(OverviewRow::Status, format!("Status: {status}"))];
     if streaming {
+        // Describes what is going out on the wire, so it is grouped with the
+        // listener counts and shares their streaming-only gate.
+        rows.push((OverviewRow::Quality, format!("Quality: {}", state.quality)));
         rows.push((
             OverviewRow::Listeners,
             format!("Listeners: {}", state.listeners),
@@ -306,6 +313,14 @@ pub fn refresh_overview(app: &App) {
 }
 
 fn refresh(app: &App, selected_rows: Selected) {
+    let quality = {
+        let config = app.config.borrow();
+        format!(
+            "{} kbps {}",
+            config.audio.bitrate_kbps,
+            config.audio.format.display_name()
+        )
+    };
     let state = {
         let run = app.run.borrow();
         let streaming = matches!(run.stream, StreamState::Live { .. });
@@ -314,6 +329,7 @@ fn refresh(app: &App, selected_rows: Selected) {
             recording: run.recording_started.is_some(),
             listeners: run.listeners,
             listener_peak: run.listener_peak,
+            quality,
             elapsed: if streaming {
                 run.stream_started.map(|t| t.elapsed())
             } else {
@@ -710,7 +726,13 @@ fn add_strip(
                 return;
             };
             // CTRL+M toggles monitoring for the focused strip. wx reports
-            // letter keys as their uppercase ASCII code.
+            // letter keys as their uppercase ASCII code. Consuming the key here
+            // is not enough to keep Windows quiet about it — CTRL+M is also
+            // ASCII 0x0D, and the `WM_CHAR` that follows draws the default error
+            // sound out of `IsDialogMessage` before wx dispatches anything. The
+            // `WM_GETDLGCODE` handler in `slider_uia` is what silences it, so a
+            // CTRL+letter shortcut on any other kind of control will ding until
+            // that control claims `DLGC_WANTCHARS` too.
             if ctrl && code == KEY_M {
                 event.skip(false);
                 toggle_monitor(&app, target, &strip_for_key_monitor);
@@ -979,6 +1001,7 @@ mod tests {
             recording,
             listeners: 4,
             listener_peak: 7,
+            quality: "128 kbps MP3".into(),
             elapsed: elapsed.map(Duration::from_secs),
         }
     }
@@ -1017,15 +1040,17 @@ mod tests {
             kinds,
             [
                 OverviewRow::Status,
+                OverviewRow::Quality,
                 OverviewRow::Listeners,
                 OverviewRow::ListenerPeak,
                 OverviewRow::Duration,
             ]
         );
         assert_eq!(rows[0].1, "Status: Streaming and recording");
-        assert_eq!(rows[1].1, "Listeners: 4");
-        assert_eq!(rows[2].1, "Listener peak: 7");
-        assert_eq!(rows[3].1, "Duration: 01:02:03");
+        assert_eq!(rows[1].1, "Quality: 128 kbps MP3");
+        assert_eq!(rows[2].1, "Listeners: 4");
+        assert_eq!(rows[3].1, "Listener peak: 7");
+        assert_eq!(rows[4].1, "Duration: 01:02:03");
     }
 
     #[test]
@@ -1036,6 +1061,7 @@ mod tests {
             kinds,
             [
                 OverviewRow::Status,
+                OverviewRow::Quality,
                 OverviewRow::Listeners,
                 OverviewRow::ListenerPeak,
             ]

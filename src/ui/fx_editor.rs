@@ -8,20 +8,20 @@
 //! (Close button). Everything else the plugin receives normally, and the
 //! toolbar's own buttons are ordinary Tab-reachable wx controls.
 
-use super::fx::{self, ChainTarget};
 use super::App;
 use super::WXK_ESCAPE;
+use super::fx::{self, ChainTarget};
 use crate::vst::PluginInstance;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use wxdragon::prelude::*;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{SetFocus, VK_F6};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetAncestor, GetForegroundWindow, SetWindowsHookExW, UnhookWindowsHookEx,
-    GA_ROOT, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
+    CallNextHookEx, GA_ROOT, GetAncestor, GetForegroundWindow, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT,
+    SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
 };
 
 /// The installed low-level keyboard hook (as isize; 0 = not installed).

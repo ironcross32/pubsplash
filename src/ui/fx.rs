@@ -398,10 +398,7 @@ pub fn replace_chain(app: &Rc<App>, target: ChainTarget, slots: Vec<FxSlotConfig
             fx.retiring.extend(old.into_iter().flatten());
         }
     }
-    let instances: Vec<_> = slots
-        .iter()
-        .map(|slot| load_slot(app, slot).ok())
-        .collect();
+    let instances: Vec<_> = slots.iter().map(|slot| load_slot(app, slot).ok()).collect();
     with_slots_mut(app, target, |c| *c = slots);
     if let Some(list) = instances_mut(&mut app.fx.borrow_mut(), target) {
         *list = instances;

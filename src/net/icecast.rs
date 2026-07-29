@@ -1,7 +1,7 @@
 //! Icecast source-protocol client.
 //!
-//! Audio Pub ingests standard Icecast source connections:
-//! `PUT http://<host>:<port>/<mount>` with Basic auth `source:<stream key>`,
+//! Icecast source connections use plain TCP:
+//! `PUT http://<host>:<port>/<mount>` with Basic auth,
 //! `Expect: 100-continue`, then an endless body of encoded audio frames.
 
 use std::io::ErrorKind;
@@ -14,7 +14,9 @@ pub struct IcecastTarget {
     pub host: String,
     /// Mount without leading slash (the Audio Pub user id).
     pub mount: String,
-    /// The Audio Pub stream key.
+    /// Source username, usually `source`.
+    pub username: String,
+    /// Source password or stream key.
     pub password: String,
     /// e.g. `audio/mpeg`.
     pub content_type: String,
@@ -35,6 +37,10 @@ pub enum IcecastError {
 
 // Standard-library base64 does not exist; this avoids pulling in a crate for
 // one header. RFC 4648, no padding edge cases beyond the usual.
+fn authorization_header(username: &str, password: &str) -> String {
+    base64(format!("{username}:{password}").as_bytes())
+}
+
 fn base64(input: &[u8]) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
@@ -66,7 +72,12 @@ impl IcecastConnection {
         let mut stream = TcpStream::connect(&target.host).await?;
         stream.set_nodelay(true)?;
 
-        let auth = base64(format!("source:{}", target.password).as_bytes());
+        let username = if target.username.trim().is_empty() {
+            "source"
+        } else {
+            target.username.trim()
+        };
+        let auth = authorization_header(username, &target.password);
         let request = format!(
             "PUT /{mount} HTTP/1.1\r\n\
              Host: {host}\r\n\
@@ -145,6 +156,12 @@ mod tests {
         assert_eq!(base64(b"source:abc123"), "c291cmNlOmFiYzEyMw==");
     }
 
+    #[test]
+    fn authorization_uses_configured_username() {
+        assert_eq!(authorization_header("source", "key"), "c291cmNlOmtleQ==");
+        assert_eq!(authorization_header("dj", "key"), "ZGo6a2V5");
+    }
+
     #[tokio::test]
     async fn handshake_against_fake_server() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -166,6 +183,7 @@ mod tests {
         let target = IcecastTarget {
             host: addr.to_string(),
             mount: "user-123".into(),
+            username: "source".into(),
             password: "key".into(),
             content_type: "audio/mpeg".into(),
         };
@@ -195,6 +213,7 @@ mod tests {
         let target = IcecastTarget {
             host: addr.to_string(),
             mount: "u".into(),
+            username: "source".into(),
             password: "bad".into(),
             content_type: "audio/mpeg".into(),
         };
