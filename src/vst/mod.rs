@@ -10,9 +10,11 @@ pub mod discover;
 pub mod host2;
 pub mod host3;
 mod instance;
+mod module_pin;
 mod moduleinfo;
 mod pe;
 pub mod scan;
+pub mod suspend;
 mod types;
 
 pub use instance::{MixMode, PluginInstance, Processed, PtrScratch};

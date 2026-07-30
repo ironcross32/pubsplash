@@ -3,6 +3,7 @@
 mod audio;
 mod b64;
 mod config;
+mod crash;
 mod fx;
 mod json_store;
 mod keybind;
@@ -31,6 +32,10 @@ fn main() {
         handle.set_level(&config.logging.level);
     }
     logging::install_panic_hook();
+    // The panic hook only catches Rust panics. Hosted plugins fault in C++,
+    // which kills the process without unwinding, so it takes a Win32 exception
+    // filter to leave any trace at all of who did it.
+    crash::install();
     log::info!("Pubsplash {} starting", env!("CARGO_PKG_VERSION"));
 
     let plugin_cache = vst::load_cache();
@@ -71,6 +76,22 @@ fn main() {
     }
     let _ = wxdragon::main(move |_| {
         let (apps_tx, apps_rx) = crossbeam_channel::unbounded();
+        let (tts_catalog_tx, tts_catalog_rx) = crossbeam_channel::unbounded();
+        tts::catalog::start_refresh(config.speech.clone(), tts_catalog_tx);
+        ui::run_when_ready(move || {
+            while let Ok(refresh) = tts_catalog_rx.try_recv() {
+                match refresh.result {
+                    Ok(catalog) => {
+                        tts::catalog::commit_engine(refresh.engine, catalog);
+                    }
+                    Err(error) => log::warn!(
+                        "Could not refresh the {} TTS catalog: {error}",
+                        tts::engines::display_name(refresh.engine)
+                    ),
+                }
+            }
+            false
+        });
         let app = Rc::new(ui::App {
             config: RefCell::new(config.clone()),
             run: RefCell::new(ui::Runtime::default()),
@@ -82,6 +103,7 @@ fn main() {
             plugins: RefCell::new(plugin_cache.clone()),
             scan: RefCell::new(None),
             fx: RefCell::new(ui::FxRuntime::default()),
+            orphaned_plugins: RefCell::new(Vec::new()),
             chain_library: RefCell::new(chain_library.clone()),
             open_editors: RefCell::new(Vec::new()),
             shutting_down: std::cell::Cell::new(false),

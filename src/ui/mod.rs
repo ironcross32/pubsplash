@@ -25,7 +25,7 @@ mod stream_info_dialog;
 use crate::audio::{
     AudioEngine, EngineCommand, FeedKind, RoutingUpdate, SourceSpec, capture::CaptureKind,
 };
-use crate::config::{Config, SiteConfig, SourceKindConfig, StreamingServiceType};
+use crate::config::{Config, SiteConfig, SourceConfig, SourceKindConfig, StreamingServiceType};
 use crate::net::{NetCommand, NetEvent, NetHandle, ServiceProfile};
 use crate::source_name::NameContext;
 use std::cell::RefCell;
@@ -265,6 +265,142 @@ impl Monitors {
         }
         flags[index] = on;
     }
+
+    pub fn remap_sources(&mut self, previous: &[SourceConfig], current: &[SourceConfig]) {
+        self.sources = remapped_source_monitors(&self.sources, previous, current);
+    }
+}
+
+fn remapped_source_monitors(
+    flags: &[bool],
+    previous: &[SourceConfig],
+    current: &[SourceConfig],
+) -> Vec<bool> {
+    let mut previous_by_name = HashMap::new();
+    for (index, source) in previous.iter().enumerate() {
+        let name = source.name.as_str();
+        if name.trim().is_empty() || previous_by_name.insert(name, index).is_some() {
+            return Vec::new();
+        }
+    }
+
+    let mut current_names = HashSet::new();
+    let mut remapped = Vec::with_capacity(current.len());
+    for source in current {
+        let name = source.name.as_str();
+        if name.trim().is_empty() || !current_names.insert(name) {
+            return Vec::new();
+        }
+        remapped.push(
+            previous_by_name
+                .get(name)
+                .and_then(|index| flags.get(*index))
+                .copied()
+                .unwrap_or(false),
+        );
+    }
+
+    while remapped.last().copied() == Some(false) {
+        remapped.pop();
+    }
+    remapped
+}
+
+#[cfg(test)]
+mod monitor_tests {
+    use super::Monitors;
+    use crate::config::SourceConfig;
+
+    fn source(name: &str) -> SourceConfig {
+        SourceConfig {
+            name: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn source_remap_preserves_existing_sources_when_one_is_added() {
+        let previous = vec![source("Microphone"), source("Text-to-Speech")];
+        let current = vec![
+            source("Microphone"),
+            source("Text-to-Speech"),
+            source("Application"),
+        ];
+        let mut monitors = Monitors {
+            sources: vec![false, true],
+            ..Default::default()
+        };
+
+        monitors.remap_sources(&previous, &current);
+
+        assert!(!monitors.source(0));
+        assert!(monitors.source(1));
+        assert!(!monitors.source(2));
+    }
+
+    #[test]
+    fn source_remap_follows_reordered_sources() {
+        let previous = vec![
+            source("Microphone"),
+            source("Text-to-Speech"),
+            source("Application"),
+        ];
+        let current = vec![
+            source("Application"),
+            source("Microphone"),
+            source("Text-to-Speech"),
+        ];
+        let mut monitors = Monitors {
+            sources: vec![true, false, true],
+            ..Default::default()
+        };
+
+        monitors.remap_sources(&previous, &current);
+
+        assert!(monitors.source(0));
+        assert!(monitors.source(1));
+        assert!(!monitors.source(2));
+    }
+
+    #[test]
+    fn source_remap_drops_removed_sources() {
+        let previous = vec![
+            source("Microphone"),
+            source("Text-to-Speech"),
+            source("Application"),
+        ];
+        let current = vec![source("Microphone"), source("Application")];
+        let mut monitors = Monitors {
+            sources: vec![true, true, true],
+            ..Default::default()
+        };
+
+        monitors.remap_sources(&previous, &current);
+
+        assert!(monitors.source(0));
+        assert!(monitors.source(1));
+        assert!(!monitors.source(2));
+    }
+
+    #[test]
+    fn source_remap_clears_ambiguous_source_names() {
+        let mut monitors = Monitors {
+            sources: vec![true],
+            ..Default::default()
+        };
+        monitors.remap_sources(
+            &[source("Microphone"), source("Microphone")],
+            &[source("Microphone")],
+        );
+        assert!(monitors.sources.is_empty());
+
+        let mut monitors = Monitors {
+            sources: vec![true],
+            ..Default::default()
+        };
+        monitors.remap_sources(&[source("Microphone")], &[source("")]);
+        assert!(monitors.sources.is_empty());
+    }
 }
 
 impl Default for Runtime {
@@ -424,6 +560,10 @@ pub struct App {
     pub scan: RefCell<Option<ScanUi>>,
     /// Live plugin instances, mirroring `config.buses`.
     pub fx: RefCell<FxRuntime>,
+    /// Plugin instances taken out of [`App::fx`] and not yet released. See
+    /// [`fx::orphan`] — dropping one runs third-party teardown code that can
+    /// re-enter the UI, so it must not happen under a `RefCell` borrow.
+    pub orphaned_plugins: RefCell<Vec<Arc<crate::vst::PluginInstance>>>,
     /// Named FX chains saved to fx_chains.json.
     pub chain_library: RefCell<crate::fx::FxChainLibrary>,
     /// Open native plugin editor windows.
@@ -474,9 +614,6 @@ pub struct FxRuntime {
     pub buses: Vec<Vec<Option<Arc<crate::vst::PluginInstance>>>>,
     /// Matching `config.buses.master_chain`.
     pub master: Vec<Option<Arc<crate::vst::PluginInstance>>>,
-    /// Instances removed from a chain, dropped once the engine acknowledges
-    /// the swap (so the audio thread never holds the last reference).
-    pub retiring: Vec<Arc<crate::vst::PluginInstance>>,
 }
 
 /// Plays an event through each enabled Sound Events source in the active scene.
@@ -608,6 +745,7 @@ fn speak_chat(app: &Rc<App>, user: &str, content: &str) {
                 rate: tts.rate,
                 volume: tts.volume,
                 pitch: tts.pitch,
+                provider_settings: tts.provider_settings.clone(),
             },
             source_name: source.name.clone(),
             // A network engine has no local voice, so the mixer is its only
@@ -767,16 +905,35 @@ impl App {
         }
     }
 
-    /// Forgets which sources were being monitored. Source monitoring is held by
-    /// position, so any edit that moves, adds, or removes a source would leave
-    /// the flags pointing at a different strip than the user chose — and the
-    /// mistake is one you hear. Call this before re-syncing the engine, which
-    /// carries the flags in `SourceSpec`.
+    /// Forgets which sources were being monitored. Use this when the active
+    /// scene changes, because the new scene's strips only share positions by
+    /// coincidence.
     pub fn clear_source_monitors(&self) {
         self.run.borrow_mut().monitors.sources.clear();
     }
 
-    /// The bus equivalent of [`App::clear_source_monitors`].
+    /// Carries source monitoring from one active-scene source list to another.
+    ///
+    /// Source monitoring is session-only and indexed in the engine, but
+    /// `SourceConfig.name` is the stable identity within a scene. Remapping here
+    /// keeps edits and reorders attached to the intended strip while dropping
+    /// deleted or ambiguous sources.
+    pub fn remap_source_monitors(&self, previous_sources: &[SourceConfig]) {
+        let current_sources = {
+            let config = self.config.borrow();
+            config.scenes.active_scene().map(|s| s.sources.clone())
+        };
+        let Some(current_sources) = current_sources else {
+            self.clear_source_monitors();
+            return;
+        };
+        self.run
+            .borrow_mut()
+            .monitors
+            .remap_sources(previous_sources, &current_sources);
+    }
+
+    /// The bus equivalent of [App::clear_source_monitors].
     pub fn clear_bus_monitors(&self) {
         self.run.borrow_mut().monitors.buses.clear();
     }
@@ -1961,14 +2118,20 @@ fn pump_events(app: &Rc<App>) {
                 labels_dirty |= app.run.borrow_mut().failing.remove(&name);
             }
             crate::audio::EngineEvent::EncodingStopped => {}
-            // The audio thread has swapped to the new bus set and no longer
-            // references any plugin instances the UI retired; dropping them
-            // here (the UI thread, per the hosting contract) is now safe.
+            // The audio thread has swapped to the new FX chains and returned
+            // the replaced ones. Reclaim them here so plugin teardown follows
+            // the UI-thread hosting contract.
             crate::audio::EngineEvent::BusesApplied => {
-                app.fx.borrow_mut().retiring.clear();
+                app.engine.reclaim_retired_chains();
             }
         }
     }
+    // Instances the UI took out of a chain but did not release, for the same
+    // reason: plugin teardown runs third-party code and belongs here, where no
+    // `RefCell` is borrowed, not inside the edit that removed it. Unconditional
+    // rather than folded into the arm above — a plugin whose slot never reached
+    // the engine is retired without a `BusesApplied` to hang it on.
+    fx::release_orphans(app);
 
     if labels_dirty {
         // In place, exactly as the application poll does it: rebuilding the

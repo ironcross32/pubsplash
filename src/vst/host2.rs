@@ -15,14 +15,43 @@
 //! - **Either thread**: [`Vst2Plugin::get_parameter`] /
 //!   [`Vst2Plugin::set_parameter`] — plugins are required to tolerate these
 //!   during processing, and hosts universally call them from the UI thread.
+//!
+//! ## Staying out of the audio thread's way
+//!
+//! "UI thread only" and "engine thread only" divide *which* thread may call
+//! what; they do not stop the two happening at the same instant, and they did
+//! not. Deleting a plugin from a chain closes its editor and reads its chunk
+//! (`effEditClose`, `effGetChunk`) while the plugin is still in the engine's
+//! live chain being handed `process_replacing` every 10 ms — and plugins,
+//! JUCE-wrapped ones especially, reallocate internal state in exactly those
+//! opcodes. So dispatching goes through `serialize`, the same
+//! [`SuspendFlag`](crate::vst::suspend::SuspendFlag) arrangement `host3.rs`
+//! uses for VST3:
+//!
+//! - [`Vst2Plugin::process_replacing`] takes the lock with `try_lock` and
+//!   reports [`Processed::Passthrough`] rather than ever blocking the mixer;
+//! - an operation that will hold the plugin for longer than a block (chunks,
+//!   the editor, `Drop`) raises the flag and waits `SETTLE` first, so the
+//!   engine fades the plugin out of circuit over real audio before the lock is
+//!   taken, and fades it back in afterwards;
+//! - short dispatches (parameter names) just take the lock; paying the settle
+//!   on each would stall the UI. `effEditIdle` uses `try_lock` and skips —
+//!   plugins pump the message queue from it, which can re-enter the timer and
+//!   deadlock a blocking take on a non-reentrant mutex.
+//!
+//! `get_parameter`/`set_parameter` stay outside all of this, per the contract
+//! above — locking them would deadlock [`Vst2Plugin::snapshot`], which reads
+//! every parameter with the plugin already held.
 
 use crate::config::{FxSlotConfig, ParamValue, PluginRef};
 use crate::vst::PluginInfo;
+use crate::vst::instance::Processed;
+use crate::vst::suspend::SuspendFlag;
 use std::ffi::{CStr, c_void};
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use windows::Win32::Foundation::{FreeLibrary, HMODULE};
 use windows::Win32::System::LibraryLoader::{
     GetProcAddress, LOAD_WITH_ALTERED_SEARCH_PATH, LoadLibraryExW,
@@ -144,17 +173,37 @@ static SAMPLE_POS: AtomicU64 = AtomicU64::new(0);
 
 /// Requests from `audioMasterSizeWindow`, drained by the UI pump to resize
 /// open editor frames. Each entry is (AEffect pointer as usize, width,
-/// height).
+/// height) — the callback has nothing else to identify itself with. The
+/// pointer is translated to a stable instance id on the way out; see
+/// [`take_size_requests`].
 static SIZE_REQUESTS: Mutex<Vec<(usize, i32, i32)>> = Mutex::new(Vec::new());
+
+/// AEffect pointer to instance id, for exactly that translation. A plugin's
+/// entry goes when the plugin does, so a resize request that arrives just as
+/// its instance is destroyed is discarded rather than resolving to whichever
+/// plugin the allocator later hands that address to.
+static EFFECT_IDS: Mutex<Option<std::collections::HashMap<usize, u64>>> = Mutex::new(None);
+
+fn effect_ids() -> MutexGuard<'static, Option<std::collections::HashMap<usize, u64>>> {
+    EFFECT_IDS.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Called by the engine once per block.
 pub fn advance_transport(frames: u64) {
     SAMPLE_POS.fetch_add(frames, Ordering::Relaxed);
 }
 
-/// Drains pending editor-resize requests (UI thread).
-pub fn take_size_requests() -> Vec<(usize, i32, i32)> {
-    std::mem::take(&mut SIZE_REQUESTS.lock().unwrap())
+/// Drains pending editor-resize requests (UI thread), keyed by instance id.
+/// Requests from an instance that no longer exists are dropped.
+pub fn take_size_requests() -> Vec<(u64, i32, i32)> {
+    let raw = std::mem::take(&mut *SIZE_REQUESTS.lock().unwrap_or_else(|e| e.into_inner()));
+    let ids = effect_ids();
+    let Some(ids) = ids.as_ref() else {
+        return Vec::new();
+    };
+    raw.into_iter()
+        .filter_map(|(effect, w, h)| ids.get(&effect).map(|&id| (id, w, h)))
+        .collect()
 }
 
 thread_local! {
@@ -319,7 +368,18 @@ pub struct Vst2Plugin {
     pub num_outputs: i32,
     pub has_editor: bool,
     pub uses_chunks: bool,
+    /// Never-reused identity for editor and resize-request matching. See
+    /// [`crate::vst::instance::next_effect_id`].
+    id: u64,
     editor_open: AtomicBool,
+    /// Held for the duration of any dispatch and of each processed block, so
+    /// the two can never overlap. Guards nothing of its own — the `AEffect` it
+    /// protects is reached through a raw pointer — which is why every path that
+    /// touches the plugin has to take it. See the module docs.
+    serialize: Mutex<()>,
+    /// Raised while a UI operation is about to hold, or is holding,
+    /// `serialize` for longer than a mix block.
+    suspend: SuspendFlag,
 }
 
 // SAFETY: upheld by the threading contract documented at the module top.
@@ -330,6 +390,10 @@ impl Vst2Plugin {
     /// Loads and prepares a plugin for processing. UI thread only; may take
     /// hundreds of milliseconds. `slot` supplies saved state to restore.
     pub fn load(info: &PluginInfo, slot: &FxSlotConfig) -> Result<Vst2Plugin, String> {
+        // Taken before our own reference, and never released, so the
+        // `FreeLibrary` in `Drop` can never unmap the image out from under
+        // whatever the plugin left running. See `module_pin`.
+        super::module_pin::pin(&info.path);
         let wide: Vec<u16> = Path::new(&info.path)
             .as_os_str()
             .encode_wide()
@@ -395,8 +459,15 @@ impl Vst2Plugin {
                 num_outputs: (*effect).num_outputs,
                 has_editor: flags & EFF_FLAGS_HAS_EDITOR != 0,
                 uses_chunks: flags & EFF_FLAGS_PROGRAM_CHUNKS != 0,
+                id: crate::vst::instance::next_effect_id(),
                 editor_open: AtomicBool::new(false),
+                serialize: Mutex::new(()),
+                suspend: SuspendFlag::new(),
             };
+
+            effect_ids()
+                .get_or_insert_with(Default::default)
+                .insert(effect as usize, plugin.id);
 
             // Restore saved state before switching processing on.
             plugin.restore(slot);
@@ -410,6 +481,17 @@ impl Vst2Plugin {
         unsafe { (*self.effect).dispatcher.unwrap_unchecked() }
     }
 
+    /// Takes the serialization lock, recovering from poisoning rather than
+    /// propagating it: a panic under the lock must not turn every later call
+    /// into a silent no-op, which would lose the user's saved plugin state and
+    /// leave the plugin permanently out of circuit.
+    fn lock(&self) -> MutexGuard<'_, ()> {
+        self.serialize.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Load-time only, from [`Vst2Plugin::load`], before the instance can be
+    /// reached by anything else — so unlike every other dispatching method here
+    /// it takes no lock, and must not start taking one.
     fn restore(&self, slot: &FxSlotConfig) {
         if self.uses_chunks {
             if let Some(chunk) = slot.chunk.as_ref().and_then(|c| base64_decode(c)) {
@@ -442,6 +524,7 @@ impl Vst2Plugin {
     }
 
     fn param_string(&self, opcode: i32, index: i32) -> String {
+        let _guard = self.lock();
         let mut buf = [0u8; 256];
         unsafe {
             self.dispatcher()(
@@ -477,6 +560,7 @@ impl Vst2Plugin {
     pub fn string_to_parameter(&self, index: i32, text: &str) -> bool {
         // The plugin reads (and may write) a null-terminated string in this
         // buffer, so it must be writable and large enough.
+        let _guard = self.lock();
         let mut buf = [0u8; 256];
         let bytes = text.as_bytes();
         let n = bytes.len().min(buf.len() - 1);
@@ -494,6 +578,7 @@ impl Vst2Plugin {
     }
 
     pub fn can_be_automated(&self, index: i32) -> bool {
+        let _guard = self.lock();
         unsafe {
             self.dispatcher()(
                 self.effect,
@@ -506,6 +591,7 @@ impl Vst2Plugin {
         }
     }
 
+    /// Callers hold `serialize` (see [`Vst2Plugin::snapshot`]).
     fn get_chunk(&self) -> Option<Vec<u8>> {
         let mut data: *mut c_void = std::ptr::null_mut();
         unsafe {
@@ -525,6 +611,7 @@ impl Vst2Plugin {
         }
     }
 
+    /// Load-time only, through [`Vst2Plugin::restore`]; takes no lock.
     fn set_chunk(&self, data: &[u8]) {
         unsafe {
             self.dispatcher()(
@@ -541,6 +628,10 @@ impl Vst2Plugin {
     /// Captures the plugin's current state for persistence: a base64 chunk
     /// when supported, otherwise the full parameter list.
     pub fn snapshot(&self) -> (Option<String>, Vec<ParamValue>) {
+        // `effGetChunk` on a large plugin is milliseconds and megabytes, so the
+        // engine is told to fade this plugin out before the lock is taken.
+        let _suspended = self.suspend.raise();
+        let _guard = self.lock();
         if self.uses_chunks {
             if let Some(chunk) = self.get_chunk() {
                 return (Some(base64_encode(&chunk)), Vec::new());
@@ -561,6 +652,7 @@ impl Vst2Plugin {
         if !self.has_editor {
             return None;
         }
+        let _guard = self.lock();
         let mut rect_ptr: *mut ERect = std::ptr::null_mut();
         unsafe {
             let ok = self.dispatcher()(
@@ -581,6 +673,9 @@ impl Vst2Plugin {
 
     /// Opens the plugin editor as a child of `hwnd`.
     pub fn editor_open(&self, hwnd: *mut c_void) {
+        // Building a plugin's GUI is routinely 50-500 ms of work.
+        let _suspended = self.suspend.raise();
+        let _guard = self.lock();
         unsafe {
             self.dispatcher()(self.effect, EFF_EDIT_OPEN, 0, 0, hwnd, 0.0);
         }
@@ -588,6 +683,14 @@ impl Vst2Plugin {
     }
 
     pub fn editor_close(&self) {
+        let _suspended = self.suspend.raise();
+        let _guard = self.lock();
+        self.editor_close_locked();
+    }
+
+    /// The body of [`Vst2Plugin::editor_close`] for callers already holding
+    /// `serialize` — `Drop`, which cannot re-enter a `std` mutex.
+    fn editor_close_locked(&self) {
         if self.editor_open.swap(false, Ordering::Relaxed) {
             unsafe {
                 self.dispatcher()(self.effect, EFF_EDIT_CLOSE, 0, 0, std::ptr::null_mut(), 0.0);
@@ -596,19 +699,31 @@ impl Vst2Plugin {
     }
 
     pub fn editor_idle(&self) {
+        // No settle: this runs on a 100 ms timer, and 60 ms of sleep per tick
+        // would make the whole UI treacle. And `try_lock`, not `lock`: JUCE
+        // editors pump the Windows message queue from `effEditIdle`, which can
+        // re-enter the timer and land back here on the same plugin — a
+        // blocking take would deadlock the UI outright. A skipped idle tick
+        // costs nothing; there is another in 100 ms.
+        let Ok(_guard) = self.serialize.try_lock() else {
+            return;
+        };
         unsafe {
             self.dispatcher()(self.effect, EFF_EDIT_IDLE, 0, 0, std::ptr::null_mut(), 0.0);
         }
     }
 
-    /// The AEffect pointer as an integer, matching `audioMasterSizeWindow`
-    /// requests to this instance.
-    pub fn effect_id(&self) -> usize {
-        self.effect as usize
+    pub fn effect_id(&self) -> u64 {
+        self.id
     }
 
-    /// Processes one block. Engine thread only. `inputs`/`outputs` are arrays
-    /// of channel pointers of length `num_inputs`/`num_outputs`.
+    /// Processes one block. Engine thread only, and never concurrently with
+    /// itself. `inputs`/`outputs` are arrays of channel pointers of length
+    /// `num_inputs`/`num_outputs`.
+    ///
+    /// Never blocks: if a UI dispatch holds the plugin, or is about to, the
+    /// caller is told to fade it out of circuit rather than being handed a
+    /// block the plugin did not write.
     ///
     /// # Safety
     /// The pointers must be valid for `frames` samples each.
@@ -617,17 +732,39 @@ impl Vst2Plugin {
         inputs: *const *mut f32,
         outputs: *const *mut f32,
         frames: i32,
-    ) {
-        if let Some(process) = unsafe { (*self.effect).process_replacing } {
-            unsafe { process(self.effect, inputs, outputs, frames) };
+    ) -> Processed {
+        let retiring = self.suspend.raised();
+        let _guard = match self.serialize.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::Poisoned(p)) => p.into_inner(),
+            Err(TryLockError::WouldBlock) => return Processed::Passthrough,
+        };
+        let Some(process) = (unsafe { (*self.effect).process_replacing }) else {
+            return Processed::Passthrough;
+        };
+        unsafe { process(self.effect, inputs, outputs, frames) };
+        if retiring {
+            Processed::Retiring
+        } else {
+            Processed::Wet
         }
     }
 }
 
 impl Drop for Vst2Plugin {
     fn drop(&mut self) {
-        // UI thread by contract.
-        self.editor_close();
+        // Breadcrumbs, not chatter — see the matching comment in `host3.rs`.
+        // `effClose` runs third-party code that can fault the process outright,
+        // and which of these lines is the last one in the log is the evidence.
+        log::info!("VST2 teardown starting for {}", self.info.path);
+        // UI thread by contract. Suspend first, so the engine has faded this
+        // plugin out of circuit before `effClose` starts pulling it apart --
+        // the engine cannot be inside `process_replacing` here (it no longer
+        // holds a reference) but a chain that is still mid-fade would
+        // otherwise take the last block it produced straight to dry.
+        let _suspended = self.suspend.raise();
+        let _guard = self.lock();
+        self.editor_close_locked();
         unsafe {
             let dispatcher = self.dispatcher();
             dispatcher(
@@ -638,9 +775,24 @@ impl Drop for Vst2Plugin {
                 std::ptr::null_mut(),
                 0.0,
             );
+            log::info!("VST2 teardown: mains off for {}, closing", self.info.path);
             dispatcher(self.effect, EFF_CLOSE, 0, 0, std::ptr::null_mut(), 0.0);
+            // Balances the `LoadLibraryExW` in `load`, and only that: the
+            // permanent reference `module_pin` took first is the floor, so this
+            // can never bring the refcount to zero and unmap the image while
+            // something the plugin started is still running in it.
             let _ = FreeLibrary(self.module);
         }
+        // Both keyed by the AEffect pointer, which stops meaning this plugin
+        // the moment `effClose` returns and can be handed to the next one.
+        if let Some(ids) = effect_ids().as_mut() {
+            ids.remove(&(self.effect as usize));
+        }
+        SIZE_REQUESTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(effect, _, _)| *effect != self.effect as usize);
+        log::info!("VST2 teardown complete for {}", self.info.path);
     }
 }
 

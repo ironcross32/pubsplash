@@ -8,11 +8,11 @@
 //! Requests are split at the 200-character limit and the MP3 fragments
 //! concatenated, which is what gTTS itself does.
 
+use crate::config::TtsEngineSettings;
 use crate::tts::decode::decode_compressed;
 use crate::tts::engine::{SpeechEngine, SynthRequest, TtsError, Voice};
 use crate::tts::net::{block_on, body_bytes, client};
 
-const URL: &str = "https://translate.google.com/translate_tts";
 const SERVICE: &str = "Google Translate";
 /// The endpoint refuses anything longer in a single request.
 const MAX_CHUNK: usize = 200;
@@ -104,9 +104,19 @@ impl SpeechEngine for GoogleTranslate {
         } else {
             &request.voice
         };
-        // The endpoint has no rate control beyond a "slow" mode, so a negative
-        // rate is the closest thing to slowing it down that exists.
-        let speed = if request.rate < 0 { "0.24" } else { "1" };
+        let selected = match &request.provider_settings {
+            Some(TtsEngineSettings::Gtts(settings)) => Some(settings),
+            _ => None,
+        };
+        let endpoint = endpoint_for_tld(selected.map(|settings| settings.tld.as_str()))?;
+        // Legacy sources retain the old negative-rate mapping. New sources use
+        // the provider's actual normal/slow switch.
+        let slow = match (&request.provider_settings, selected) {
+            (None, _) => request.rate < 0,
+            (_, Some(settings)) => settings.slow.unwrap_or(false),
+            _ => false,
+        };
+        let speed = if slow { "0.24" } else { "1" };
         let chunks = split_for_endpoint(&request.text);
         if chunks.is_empty() {
             return Ok(Vec::new());
@@ -116,7 +126,7 @@ impl SpeechEngine for GoogleTranslate {
             let mut combined: Vec<u8> = Vec::new();
             for (index, chunk) in chunks.iter().enumerate() {
                 let response = client()
-                    .get(URL)
+                    .get(&endpoint)
                     .query(&[
                         ("ie", "UTF-8"),
                         ("client", "tw-ob"),
@@ -146,6 +156,27 @@ impl SpeechEngine for GoogleTranslate {
             .map(|(code, name)| Voice::new(*code, format!("{name} ({code})")))
             .collect())
     }
+}
+
+fn endpoint_for_tld(tld: Option<&str>) -> Result<String, TtsError> {
+    let tld = tld.unwrap_or("").trim();
+    let tld = tld.strip_prefix('.').unwrap_or(tld);
+    let tld = if tld.is_empty() { "com" } else { tld };
+    let valid = tld
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.')
+        && !tld.starts_with('-')
+        && !tld.starts_with('.')
+        && !tld.ends_with('-')
+        && !tld.ends_with('.')
+        && !tld.contains("..")
+        && tld.contains(|character: char| character.is_ascii_alphabetic());
+    if !valid {
+        return Err(TtsError::Other(format!(
+            "Google Translate domain suffix {tld:?} is invalid"
+        )));
+    }
+    Ok(format!("https://translate.google.{tld}/translate_tts"))
 }
 
 /// Splits text into pieces the endpoint will accept, preferring to break at a
@@ -232,6 +263,7 @@ mod tests {
                 rate: 0,
                 volume: 100,
                 pitch: 0,
+                provider_settings: None,
             })
             .expect("synthesis");
         let seconds = samples.len() as f32
@@ -247,5 +279,15 @@ mod tests {
         assert_eq!(voices.len(), LANGUAGES.len());
         let english = voices.iter().find(|v| v.id == "en").unwrap();
         assert_eq!(english.label, "English (en)");
+    }
+
+    #[test]
+    fn accent_domains_are_validated_before_building_a_url() {
+        assert_eq!(
+            endpoint_for_tld(Some("co.uk")).unwrap(),
+            "https://translate.google.co.uk/translate_tts"
+        );
+        assert!(endpoint_for_tld(Some("com/path")).is_err());
+        assert!(endpoint_for_tld(Some("..com")).is_err());
     }
 }

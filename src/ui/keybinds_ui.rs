@@ -37,7 +37,9 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     // already claim (a, b, i, k, l, m, n, r) — which is why Add binding is
     // ALT+G and not the obvious ALT+A or ALT+B.
     let add = Button::builder(panel).with_label("Add bindin&g...").build();
-    let edit = Button::builder(panel).with_label("&Edit binding...").build();
+    let edit = Button::builder(panel)
+        .with_label("&Edit binding...")
+        .build();
     let remove = Button::builder(panel).with_label("Remove bin&ding").build();
     let reset = Button::builder(panel)
         .with_label("Reset to de&faults")

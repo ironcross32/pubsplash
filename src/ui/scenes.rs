@@ -4,7 +4,11 @@
 use super::home::on_sources_changed;
 use super::slider_uia::SliderAnnouncer;
 use super::{App, WXK_DELETE, WXK_DOWN, WXK_UP, show_error};
-use crate::config::{SoundEventsSourceConfig, SourceConfig, SourceKindConfig, TtsSourceConfig};
+use crate::config::{
+    AzureTtsSettings, ElevenLabsTtsSettings, GoogleTtsSettings, GttsTtsSettings, OpenAiTtsSettings,
+    PollyTtsSettings, SoundEventsSourceConfig, SourceConfig, SourceKindConfig, TtsEngineSettings,
+    TtsSourceConfig,
+};
 use crate::soundpack::StreamEvent;
 use crate::state::{ListEdit, move_down, move_up};
 use std::rc::Rc;
@@ -287,13 +291,29 @@ pub fn refresh_sources_list(app: &Rc<App>) {
     });
 }
 
+fn active_sources(app: &Rc<App>) -> Option<Vec<SourceConfig>> {
+    app.config
+        .borrow()
+        .scenes
+        .active_scene()
+        .map(|scene| scene.sources.clone())
+}
+
 fn after_scene_edit(app: &Rc<App>) {
+    after_scene_edit_with_sources(app, None);
+}
+
+fn after_source_edit(app: &Rc<App>, previous_sources: Option<Vec<SourceConfig>>) {
+    after_scene_edit_with_sources(app, previous_sources);
+}
+
+fn after_scene_edit_with_sources(app: &Rc<App>, previous_sources: Option<Vec<SourceConfig>>) {
     app.save_config();
     refresh_scenes_list(app);
     // The sources list is refreshed last, after `on_sources_changed` has
     // re-resolved Application sources: an edit may have named a new
     // application, and the labels read the resolved process out of that cache.
-    on_sources_changed(app);
+    on_sources_changed(app, previous_sources.as_deref());
     refresh_sources_list(app);
 }
 
@@ -383,6 +403,7 @@ fn move_source(app: &Rc<App>, list: &ListBox, up: bool) {
     let Some(index) = super::list::selection(list, source_count(app, scene_index)) else {
         return;
     };
+    let previous_sources = active_sources(app);
     let changed = {
         let mut config = app.config.borrow_mut();
         let Some(scene) = config.scenes.scenes.get_mut(scene_index) else {
@@ -396,7 +417,7 @@ fn move_source(app: &Rc<App>, list: &ListBox, up: bool) {
     };
     if changed == ListEdit::Changed {
         let new_index = if up { index - 1 } else { index + 1 };
-        after_scene_edit(app);
+        after_source_edit(app, previous_sources);
         app.widgets(|w| w.sources_list.set_selection(new_index as u32, true));
     }
 }
@@ -406,6 +427,7 @@ fn remove_source(app: &Rc<App>, list: &ListBox) {
     let Some(index) = super::list::selection(list, source_count(app, scene_index)) else {
         return;
     };
+    let previous_sources = active_sources(app);
     {
         let mut config = app.config.borrow_mut();
         let Some(scene) = config.scenes.scenes.get_mut(scene_index) else {
@@ -416,7 +438,7 @@ fn remove_source(app: &Rc<App>, list: &ListBox) {
         }
         scene.sources.remove(index);
     }
-    after_scene_edit(app);
+    after_source_edit(app, previous_sources);
 }
 
 /// Ensures a unique source name within a scene by appending a number.
@@ -462,6 +484,7 @@ fn add_source(app: &Rc<App>) {
     };
 
     let scene_index = selected_scene_index(app);
+    let previous_sources = active_sources(app);
     let new_index = {
         let mut config = app.config.borrow_mut();
         let Some(scene) = config.scenes.scenes.get_mut(scene_index) else {
@@ -475,7 +498,7 @@ fn add_source(app: &Rc<App>) {
         });
         scene.sources.len() - 1
     };
-    after_scene_edit(app);
+    after_source_edit(app, previous_sources);
     app.widgets(|w| w.sources_list.set_selection(new_index as u32, true));
     // Open the parameter dialog right away for types that need setup.
     if let Some(w) = app.widgets(|w| w.sources_list.clone()) {
@@ -525,6 +548,7 @@ fn edit_source(app: &Rc<App>, list: &ListBox) {
 }
 
 fn set_source_kind(app: &Rc<App>, scene_index: usize, source_index: usize, kind: SourceKindConfig) {
+    let previous_sources = active_sources(app);
     {
         let mut config = app.config.borrow_mut();
         match config
@@ -542,9 +566,8 @@ fn set_source_kind(app: &Rc<App>, scene_index: usize, source_index: usize, kind:
             ),
         }
     }
-    after_scene_edit(app);
+    after_source_edit(app, previous_sources);
 }
-
 fn edit_microphone(
     app: &Rc<App>,
     scene_index: usize,
@@ -632,15 +655,19 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         return;
     };
     let dialog = Dialog::builder(&frame, "Text-to-Speech source")
-        .with_style(DialogStyle::DefaultDialogStyle)
-        .with_size(440, 520)
+        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
+        .with_size(560, 640)
         .build();
     // Voice fetches and previews finish on the pump, which keeps running
     // inside this dialog's modal loop — and can outlive the dialog if the user
     // closes it mid-request. Cleared just before `destroy()`, so those
     // callbacks bail instead of touching freed widgets.
     let alive = Rc::new(std::cell::Cell::new(true));
-    let panel = Panel::builder(&dialog).build();
+    let scrolled = ScrolledWindow::builder(&dialog)
+        .with_style(ScrolledWindowStyle::VScroll)
+        .build();
+    scrolled.set_scroll_rate(0, 12);
+    let panel = Panel::builder(&scrolled).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     let engine_label = StaticText::builder(&panel).with_label("Engine").build();
@@ -669,22 +696,12 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     // so a selection of n maps to `voices[n - 1]`.
     let voices: Rc<std::cell::RefCell<Vec<crate::tts::engine::Voice>>> =
         Rc::new(std::cell::RefCell::new(Vec::new()));
-    fill_voice_choice(&voice_choice, &voices, selected_id, &current.voice);
+    fill_voice_choice(&voice_choice, &voices, selected_id, "", &current.voice);
     // How many voices this engine has, as a real label rather than only an
     // accessible name — and refreshed with the engine, so it can never report
     // the previous engine's count.
     let voice_count_label = StaticText::builder(&panel).build();
     update_voice_status(&voice_count_label, &voice_choice, selected_id);
-
-    let fetch_voices = Button::builder(&panel)
-        .with_label("&Get available voices")
-        .build();
-    super::set_accessible_name(&fetch_voices, "Get available voices");
-    super::help::tag(
-        &fetch_voices,
-        "dialog.ttsSource.fetchVoices",
-        "Get available voices button",
-    );
 
     let volume_label = StaticText::builder(&panel)
         .with_label("Voice volume")
@@ -737,6 +754,10 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     // that silently does nothing is worse than one that says so.
     set_pitch_name(&pitch_slider, &pitch_announcer, selected_id);
 
+    let provider_controls =
+        TtsProviderControls::build(&panel, &current, &app.config.borrow().speech, selected_id);
+    provider_controls.show(selected_id);
+
     let output_check = CheckBox::builder(&panel)
         .with_label("Send speech to the stream")
         .build();
@@ -769,20 +790,37 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     sizer.add(&voice_label, 0, SizerFlag::All, 4);
     sizer.add(&voice_choice, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&voice_count_label, 0, SizerFlag::All, 4);
-    sizer.add(&fetch_voices, 0, SizerFlag::All, 4);
     sizer.add(&volume_label, 0, SizerFlag::All, 4);
     sizer.add(&volume_slider, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&rate_label, 0, SizerFlag::All, 4);
     sizer.add(&rate_slider, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&pitch_label, 0, SizerFlag::All, 4);
     sizer.add(&pitch_slider, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    for provider_panel in provider_controls.panels() {
+        sizer.add(&provider_panel, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    }
     sizer.add(&output_check, 0, SizerFlag::All, 8);
     sizer.add(&preview, 0, SizerFlag::All, 4);
     sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight, 0);
     panel.set_sizer(sizer, true);
+    let scrolled_sizer = BoxSizer::builder(Orientation::Vertical).build();
+    scrolled_sizer.add(&panel, 1, SizerFlag::Expand, 0);
+    scrolled.set_sizer(scrolled_sizer, true);
     let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
-    dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
+    dialog_sizer.add(&scrolled, 1, SizerFlag::Expand, 0);
     dialog.set_sizer(dialog_sizer, true);
+
+    let rate_supported = rate_is_supported(selected_id);
+    rate_label.show(rate_supported);
+    rate_slider.show(rate_supported);
+    let initial_pitch_supported = pitch_is_supported(selected_id)
+        && (selected_id != crate::tts::engines::AWS
+            || matches!(
+                provider_controls.polly_engine_value().as_str(),
+                "" | "standard"
+            ));
+    pitch_label.show(initial_pitch_supported);
+    pitch_slider.show(initial_pitch_supported);
 
     // Reads the engine id the picker currently shows.
     let engines_for_read = engines.clone();
@@ -830,12 +868,17 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         let voice_choice = voice_choice.clone();
         let voice_count_label = voice_count_label.clone();
         let pitch_slider = pitch_slider.clone();
+        let pitch_label = pitch_label.clone();
+        let rate_slider = rate_slider.clone();
+        let rate_label = rate_label.clone();
         let pitch_announcer = pitch_announcer.clone();
         let voices = voices.clone();
         let selected_engine = selected_engine.clone();
         let applied = applied.clone();
         let voice_memory = voice_memory.clone();
         let pitch_supported = pitch_supported.clone();
+        let provider_controls = provider_controls.clone();
+        let panel = panel.clone();
         Rc::new(move || {
             let engine = selected_engine();
             if engine == applied.get() {
@@ -847,16 +890,124 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
                 .cloned()
                 .unwrap_or_default();
             voice_choice.freeze();
-            fill_voice_choice(&voice_choice, &voices, engine, &wanted);
+            fill_voice_choice(
+                &voice_choice,
+                &voices,
+                engine,
+                &provider_controls.model_value(engine),
+                &wanted,
+            );
             voice_choice.thaw();
             update_voice_status(&voice_count_label, &voice_choice, engine);
-            let supported = pitch_is_supported(engine);
+            provider_controls.show(engine);
+            let supported = pitch_is_supported(engine)
+                && (engine != crate::tts::engines::AWS
+                    || matches!(
+                        provider_controls.polly_engine_value().as_str(),
+                        "" | "standard"
+                    ));
             if supported != pitch_supported.replace(supported) {
                 set_pitch_name(&pitch_slider, &pitch_announcer, engine);
             }
+            pitch_label.show(supported);
+            pitch_slider.show(supported);
+            let rate_supported = rate_is_supported(engine);
+            rate_label.show(rate_supported);
+            rate_slider.show(rate_supported);
+            if engine == crate::tts::engines::AZURE {
+                let selected = voice_choice
+                    .get_selection()
+                    .and_then(|index| index.checked_sub(1))
+                    .and_then(|index| voices.borrow().get(index as usize).cloned());
+                provider_controls.refresh_azure_voice(selected.as_ref());
+            }
+            panel.layout();
             applied.set(engine);
         })
     };
+
+    {
+        let controls = provider_controls.clone();
+        let choice = voice_choice.clone();
+        let voices_for_model = voices.clone();
+        provider_controls
+            .eleven_model
+            .clone()
+            .on_selection_changed(move |_| {
+                let wanted = selected_voice(&choice, &voices_for_model);
+                fill_voice_choice(
+                    &choice,
+                    &voices_for_model,
+                    crate::tts::engines::ELEVENLABS,
+                    &controls.model_value(crate::tts::engines::ELEVENLABS),
+                    &wanted,
+                );
+                controls.refresh_compatibility();
+            });
+    }
+    {
+        let controls = provider_controls.clone();
+        let choice = voice_choice.clone();
+        let voices_for_model = voices.clone();
+        provider_controls
+            .openai_model
+            .clone()
+            .on_selection_changed(move |_| {
+                let wanted = selected_voice(&choice, &voices_for_model);
+                fill_voice_choice(
+                    &choice,
+                    &voices_for_model,
+                    crate::tts::engines::OPENAI,
+                    &controls.model_value(crate::tts::engines::OPENAI),
+                    &wanted,
+                );
+                controls.refresh_compatibility();
+            });
+    }
+    {
+        let controls = provider_controls.clone();
+        provider_controls
+            .azure_style
+            .clone()
+            .on_selection_changed(move |_| {
+                controls.refresh_compatibility();
+            });
+    }
+    {
+        let controls = provider_controls.clone();
+        let pitch_slider = pitch_slider.clone();
+        let pitch_label = pitch_label.clone();
+        let choice = voice_choice.clone();
+        let voices_for_model = voices.clone();
+        provider_controls
+            .polly_engine
+            .clone()
+            .on_selection_changed(move |_| {
+                let wanted = selected_voice(&choice, &voices_for_model);
+                fill_voice_choice(
+                    &choice,
+                    &voices_for_model,
+                    crate::tts::engines::AWS,
+                    &controls.model_value(crate::tts::engines::AWS),
+                    &wanted,
+                );
+                let supported = matches!(controls.polly_engine_value().as_str(), "" | "standard");
+                pitch_label.show(supported);
+                pitch_slider.show(supported);
+            });
+    }
+    {
+        let controls = provider_controls.clone();
+        let voice_choice = voice_choice.clone();
+        let voices = voices.clone();
+        voice_choice.clone().on_selection_changed(move |_| {
+            let selected = voice_choice
+                .get_selection()
+                .and_then(|index| index.checked_sub(1))
+                .and_then(|index| voices.borrow().get(index as usize).cloned());
+            controls.refresh_azure_voice(selected.as_ref());
+        });
+    }
 
     // Owned here so it dies with the dialog: a timer whose owner window has
     // been destroyed keeps firing into freed memory (see the pump timer in
@@ -899,80 +1050,37 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         });
     }
 
+    let catalog_generation = Rc::new(std::cell::Cell::new(crate::tts::catalog::generation()));
     {
-        let voice_choice = voice_choice.clone();
-        let fetch_voices_btn = fetch_voices.clone();
-        let voices = voices.clone();
-        let selected_engine = selected_engine.clone();
-        let app = app.clone();
-        let panel = panel.clone();
         let alive = alive.clone();
-        let apply_engine = apply_engine.clone();
+        let generation = catalog_generation.clone();
+        let selected_engine = selected_engine.clone();
+        let voice_choice = voice_choice.clone();
+        let voices = voices.clone();
+        let provider_controls = provider_controls.clone();
         let voice_count_label = voice_count_label.clone();
-        fetch_voices.on_click(move |_| {
-            // The picker may have changed within the settle window; fetching
-            // the previous engine's voices would be a wasted round trip.
-            apply_engine();
-            let engine = selected_engine();
-            crate::tts::forget_voices(engine);
-            // Blocking the UI thread on a voice fetch would freeze the dialog
-            // for as long as the service takes, so the button reports its own
-            // progress and the work happens off-thread.
-            fetch_voices_btn.set_label("Fetching voices…");
-            fetch_voices_btn.enable(false);
-            super::set_accessible_name(&fetch_voices_btn, "Fetching voices");
-
-            let speech = app.config.borrow().speech.clone();
-            let (sender, receiver) = crossbeam_channel::bounded(1);
-            std::thread::Builder::new()
-                .name("tts-voice-fetch".into())
-                .spawn(move || {
-                    let result = match crate::tts::engines::build(engine, &speech) {
-                        Some(built) => built.voices(),
-                        None => Ok(crate::tts::cached_voices(engine).unwrap_or_default()),
-                    };
-                    let _ = sender.send(result);
-                })
-                .ok();
-
-            let voice_choice = voice_choice.clone();
-            let voices = voices.clone();
-            let button = fetch_voices_btn.clone();
-            let panel = panel.clone();
-            let alive = alive.clone();
-            let voice_count_label = voice_count_label.clone();
-            // wxdragon has no cross-thread post, so the result is collected on
-            // the next idle tick rather than by blocking here.
-            super::run_when_ready(move || {
-                if !alive.get() {
-                    return true;
-                }
-                let Ok(result) = receiver.try_recv() else {
-                    return false;
-                };
-                button.set_label("&Get available voices");
-                button.enable(true);
-                super::set_accessible_name(&button, "Get available voices");
-                match result {
-                    Ok(fetched) if fetched.is_empty() => {
-                        crate::tts::store_voices(engine, fetched);
-                        update_voice_status(&voice_count_label, &voice_choice, engine);
-                        super::show_info(&panel, "Voices", "That engine reported no voices.");
-                    }
-                    Ok(fetched) => {
-                        crate::tts::store_voices(engine, fetched);
-                        fill_voice_choice(&voice_choice, &voices, engine, "");
-                        update_voice_status(&voice_count_label, &voice_choice, engine);
-                    }
-                    Err(error) => {
-                        super::show_error(&panel, "Voices", &error.to_string());
-                    }
-                }
-                true
-            });
+        super::run_when_ready(move || {
+            if !alive.get() {
+                return true;
+            }
+            let current_generation = crate::tts::catalog::generation();
+            if current_generation != generation.get() {
+                generation.set(current_generation);
+                let engine = selected_engine();
+                let wanted = selected_voice(&voice_choice, &voices);
+                provider_controls.refresh_catalog();
+                fill_voice_choice(
+                    &voice_choice,
+                    &voices,
+                    engine,
+                    &provider_controls.model_value(engine),
+                    &wanted,
+                );
+                update_voice_status(&voice_count_label, &voice_choice, engine);
+            }
+            false
         });
     }
-
     {
         let app = app.clone();
         let panel = panel.clone();
@@ -984,6 +1092,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         let selected_engine = selected_engine.clone();
         let alive = alive.clone();
         let apply_engine = apply_engine.clone();
+        let provider_controls = provider_controls.clone();
         preview.on_click(move |_| {
             apply_engine();
             let engine = selected_engine();
@@ -993,6 +1102,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
                 rate: rate_slider.value().clamp(-10, 10),
                 volume: volume_slider.value().clamp(0, 100) as u32,
                 pitch: pitch_slider.value().clamp(-50, 50),
+                provider_settings: provider_controls.settings(engine),
             };
             preview_voice(&app, &panel, engine, synth, &alive);
         });
@@ -1022,6 +1132,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
                 volume: volume_slider.value().clamp(0, 100) as u32,
                 rate: rate_slider.value().clamp(-10, 10),
                 pitch: pitch_slider.value().clamp(-50, 50),
+                provider_settings: provider_controls.settings(selected_engine()),
                 output_to_stream: output_check.get_value(),
             }),
         );
@@ -1041,12 +1152,763 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
 /// stopping, short enough to feel immediate once you land.
 const SETTLE_MS: i32 = 300;
 
+fn rate_is_supported(engine: &str) -> bool {
+    !matches!(
+        engine,
+        crate::tts::engines::GTTS | crate::tts::engines::STAR
+    )
+}
+
 /// Whether an engine honours the pitch slider at all.
 fn pitch_is_supported(engine: &str) -> bool {
     use crate::tts::engines;
-    matches!(engine, engines::EDGE | engines::AZURE | engines::GOOGLE)
+    matches!(
+        engine,
+        engines::EDGE | engines::AZURE | engines::GOOGLE | engines::AWS
+    )
 }
 
+#[derive(Clone)]
+struct TtsProviderControls {
+    none_panel: Panel,
+    eleven_panel: Panel,
+    eleven_model: Choice,
+    eleven_language: TextCtrl,
+    eleven_stability_override: CheckBox,
+    eleven_stability: SpinCtrlDouble,
+    eleven_similarity_override: CheckBox,
+    eleven_similarity: SpinCtrlDouble,
+    eleven_style_override: CheckBox,
+    eleven_style: SpinCtrlDouble,
+    eleven_boost: Choice,
+    openai_panel: Panel,
+    openai_model: Choice,
+    openai_instructions: TextCtrl,
+    azure_panel: Panel,
+    azure_style: Choice,
+    azure_degree: SpinCtrlDouble,
+    azure_role: Choice,
+    google_panel: Panel,
+    google_language: TextCtrl,
+    google_effect: Choice,
+    polly_panel: Panel,
+    polly_engine: Choice,
+    polly_language: TextCtrl,
+    gtts_panel: Panel,
+    gtts_tld: TextCtrl,
+    gtts_speed: Choice,
+}
+
+impl TtsProviderControls {
+    fn build(
+        parent: &Panel,
+        current: &TtsSourceConfig,
+        speech: &crate::config::SpeechConfig,
+        selected_engine: &str,
+    ) -> Self {
+        let eleven = match &current.provider_settings {
+            Some(TtsEngineSettings::ElevenLabs(settings)) => settings.clone(),
+            None if selected_engine == crate::tts::engines::ELEVENLABS => ElevenLabsTtsSettings {
+                model: speech.elevenlabs_model.clone(),
+                ..Default::default()
+            },
+            _ => ElevenLabsTtsSettings::default(),
+        };
+        let openai = match &current.provider_settings {
+            Some(TtsEngineSettings::OpenAi(settings)) => settings.clone(),
+            None if selected_engine == crate::tts::engines::OPENAI => OpenAiTtsSettings {
+                model: "tts-1".into(),
+                instructions: String::new(),
+            },
+            _ => OpenAiTtsSettings::default(),
+        };
+        let azure = match &current.provider_settings {
+            Some(TtsEngineSettings::Azure(settings)) => settings.clone(),
+            _ => AzureTtsSettings::default(),
+        };
+        let google = match &current.provider_settings {
+            Some(TtsEngineSettings::Google(settings)) => settings.clone(),
+            None if selected_engine == crate::tts::engines::GOOGLE => GoogleTtsSettings {
+                language_code: speech.google_language_code.clone(),
+                ..Default::default()
+            },
+            _ => GoogleTtsSettings::default(),
+        };
+        let polly = match &current.provider_settings {
+            Some(TtsEngineSettings::Polly(settings)) => settings.clone(),
+            None if selected_engine == crate::tts::engines::AWS => PollyTtsSettings {
+                engine: speech.aws_engine.clone(),
+                ..Default::default()
+            },
+            _ => PollyTtsSettings::default(),
+        };
+        let gtts = match &current.provider_settings {
+            Some(TtsEngineSettings::Gtts(settings)) => settings.clone(),
+            _ => GttsTtsSettings::default(),
+        };
+
+        let none_panel = Panel::builder(parent).build();
+        let none_sizer = BoxSizer::builder(Orientation::Vertical).build();
+        let none_label = StaticText::builder(&none_panel)
+            .with_label("This engine has no additional voice settings.")
+            .build();
+        none_sizer.add(&none_label, 0, SizerFlag::All, 4);
+        none_panel.set_sizer(none_sizer, true);
+
+        let eleven_panel = Panel::builder(parent).build();
+        let eleven_sizer = StaticBoxSizerBuilder::new_with_label(
+            Orientation::Vertical,
+            &eleven_panel,
+            "ElevenLabs voice settings",
+        )
+        .build();
+        let eleven_model = Choice::builder(&eleven_panel).build();
+        fill_model_choice(
+            &eleven_model,
+            crate::tts::engines::ELEVENLABS,
+            &eleven.model,
+        );
+        super::set_accessible_name(
+            &eleven_model,
+            "ElevenLabs model; blank uses provider default",
+        );
+        super::help::tag(
+            &eleven_model,
+            "dialog.ttsSource.elevenModel",
+            "ElevenLabs model",
+        );
+        eleven_sizer.add(
+            &StaticText::builder(&eleven_panel)
+                .with_label("Model (blank uses provider default)")
+                .build(),
+            0,
+            SizerFlag::All,
+            3,
+        );
+        eleven_sizer.add(&eleven_model, 0, SizerFlag::Expand | SizerFlag::All, 3);
+        let eleven_language = TextCtrl::builder(&eleven_panel)
+            .with_value(&eleven.language_code)
+            .build();
+        super::set_accessible_name(
+            &eleven_language,
+            "ElevenLabs language code; blank uses provider default",
+        );
+        super::help::tag(
+            &eleven_language,
+            "dialog.ttsSource.elevenLanguage",
+            "ElevenLabs language code",
+        );
+        eleven_sizer.add(
+            &StaticText::builder(&eleven_panel)
+                .with_label("Language code (optional)")
+                .build(),
+            0,
+            SizerFlag::All,
+            3,
+        );
+        eleven_sizer.add(&eleven_language, 0, SizerFlag::Expand | SizerFlag::All, 3);
+
+        let eleven_stability_override = CheckBox::builder(&eleven_panel)
+            .with_label("Override stability")
+            .build();
+        super::set_accessible_name(&eleven_stability_override, "Override stability");
+        eleven_stability_override.set_value(eleven.stability.is_some());
+        let eleven_stability = SpinCtrlDouble::builder(&eleven_panel)
+            .with_range(0.0, 1.0)
+            .build();
+        eleven_stability.set_value(eleven.stability.unwrap_or(0.5));
+        eleven_stability.set_digits(2);
+        eleven_stability.set_increment(0.05);
+        eleven_stability.enable(eleven.stability.is_some());
+        super::set_accessible_name(&eleven_stability, "ElevenLabs stability, zero to one");
+        super::help::tag(
+            &eleven_stability,
+            "dialog.ttsSource.elevenStability",
+            "ElevenLabs stability",
+        );
+        eleven_sizer.add(&eleven_stability_override, 0, SizerFlag::All, 3);
+        eleven_sizer.add(&eleven_stability, 0, SizerFlag::All, 3);
+
+        let eleven_similarity_override = CheckBox::builder(&eleven_panel)
+            .with_label("Override similarity boost")
+            .build();
+        super::set_accessible_name(&eleven_similarity_override, "Override similarity boost");
+        eleven_similarity_override.set_value(eleven.similarity_boost.is_some());
+        let eleven_similarity = SpinCtrlDouble::builder(&eleven_panel)
+            .with_range(0.0, 1.0)
+            .build();
+        eleven_similarity.set_value(eleven.similarity_boost.unwrap_or(0.75));
+        eleven_similarity.set_digits(2);
+        eleven_similarity.set_increment(0.05);
+        eleven_similarity.enable(eleven.similarity_boost.is_some());
+        super::set_accessible_name(
+            &eleven_similarity,
+            "ElevenLabs similarity boost, zero to one",
+        );
+        super::help::tag(
+            &eleven_similarity,
+            "dialog.ttsSource.elevenSimilarity",
+            "ElevenLabs similarity boost",
+        );
+        eleven_sizer.add(&eleven_similarity_override, 0, SizerFlag::All, 3);
+        eleven_sizer.add(&eleven_similarity, 0, SizerFlag::All, 3);
+
+        let eleven_style_override = CheckBox::builder(&eleven_panel)
+            .with_label("Override style exaggeration")
+            .build();
+        super::set_accessible_name(&eleven_style_override, "Override style exaggeration");
+        eleven_style_override.set_value(eleven.style.is_some());
+        let eleven_style = SpinCtrlDouble::builder(&eleven_panel)
+            .with_range(0.0, 1.0)
+            .build();
+        eleven_style.set_value(eleven.style.unwrap_or(0.0));
+        eleven_style.set_digits(2);
+        eleven_style.set_increment(0.05);
+        eleven_style.enable(eleven.style.is_some());
+        super::set_accessible_name(&eleven_style, "ElevenLabs style exaggeration, zero to one");
+        super::help::tag(
+            &eleven_style,
+            "dialog.ttsSource.elevenStyle",
+            "ElevenLabs style exaggeration",
+        );
+        eleven_sizer.add(&eleven_style_override, 0, SizerFlag::All, 3);
+        eleven_sizer.add(&eleven_style, 0, SizerFlag::All, 3);
+
+        let eleven_boost = Choice::builder(&eleven_panel).build();
+        for label in [
+            "Speaker boost: provider default",
+            "Speaker boost: on",
+            "Speaker boost: off",
+        ] {
+            eleven_boost.append(label);
+        }
+        eleven_boost.set_selection(match eleven.speaker_boost {
+            None => 0,
+            Some(true) => 1,
+            Some(false) => 2,
+        });
+        super::set_accessible_name(&eleven_boost, "ElevenLabs speaker boost");
+        super::help::tag(
+            &eleven_boost,
+            "dialog.ttsSource.elevenBoost",
+            "ElevenLabs speaker boost",
+        );
+        eleven_sizer.add(&eleven_boost, 0, SizerFlag::Expand | SizerFlag::All, 3);
+        eleven_panel.set_sizer(eleven_sizer, true);
+
+        bind_optional_double(&eleven_stability_override, &eleven_stability);
+        bind_optional_double(&eleven_similarity_override, &eleven_similarity);
+        bind_optional_double(&eleven_style_override, &eleven_style);
+
+        let openai_panel = Panel::builder(parent).build();
+        let openai_sizer = StaticBoxSizerBuilder::new_with_label(
+            Orientation::Vertical,
+            &openai_panel,
+            "OpenAI voice settings",
+        )
+        .build();
+        let openai_model = Choice::builder(&openai_panel).build();
+        fill_model_choice(&openai_model, crate::tts::engines::OPENAI, &openai.model);
+        super::set_accessible_name(&openai_model, "OpenAI speech model");
+        super::help::tag(
+            &openai_model,
+            "dialog.ttsSource.openaiModel",
+            "OpenAI speech model",
+        );
+        openai_sizer.add(
+            &StaticText::builder(&openai_panel)
+                .with_label("Model")
+                .build(),
+            0,
+            SizerFlag::All,
+            3,
+        );
+        openai_sizer.add(&openai_model, 0, SizerFlag::Expand | SizerFlag::All, 3);
+        let openai_instructions = TextCtrl::builder(&openai_panel)
+            .with_value(&openai.instructions)
+            .build();
+        super::set_accessible_name(&openai_instructions, "OpenAI voice instructions");
+        super::help::tag(
+            &openai_instructions,
+            "dialog.ttsSource.openaiInstructions",
+            "OpenAI voice instructions",
+        );
+        openai_sizer.add(
+            &StaticText::builder(&openai_panel)
+                .with_label("Voice instructions (GPT-4o mini TTS)")
+                .build(),
+            0,
+            SizerFlag::All,
+            3,
+        );
+        openai_sizer.add(
+            &openai_instructions,
+            0,
+            SizerFlag::Expand | SizerFlag::All,
+            3,
+        );
+        openai_panel.set_sizer(openai_sizer, true);
+
+        let azure_panel = Panel::builder(parent).build();
+        let azure_sizer = StaticBoxSizerBuilder::new_with_label(
+            Orientation::Vertical,
+            &azure_panel,
+            "Azure voice settings",
+        )
+        .build();
+        let azure_style = Choice::builder(&azure_panel).build();
+        super::set_accessible_name(&azure_style, "Azure speaking style");
+        fill_default_choice(&azure_style, &[], &azure.style, "Default speaking style");
+        super::help::tag(
+            &azure_style,
+            "dialog.ttsSource.azureStyle",
+            "Azure speaking style",
+        );
+        azure_sizer.add(&azure_style, 0, SizerFlag::Expand | SizerFlag::All, 3);
+        let azure_degree = SpinCtrlDouble::builder(&azure_panel)
+            .with_range(0.01, 2.0)
+            .build();
+        azure_degree.set_value(azure.style_degree.clamp(0.01, 2.0));
+        azure_degree.set_digits(2);
+        azure_degree.set_increment(0.05);
+        super::set_accessible_name(
+            &azure_degree,
+            "Azure style intensity, zero point zero one to two",
+        );
+        super::help::tag(
+            &azure_degree,
+            "dialog.ttsSource.azureDegree",
+            "Azure style intensity",
+        );
+        azure_sizer.add(
+            &StaticText::builder(&azure_panel)
+                .with_label("Style intensity")
+                .build(),
+            0,
+            SizerFlag::All,
+            3,
+        );
+        azure_sizer.add(&azure_degree, 0, SizerFlag::All, 3);
+        let azure_role = Choice::builder(&azure_panel).build();
+        super::set_accessible_name(&azure_role, "Azure speaking role");
+        fill_default_choice(&azure_role, &[], &azure.role, "Default speaking role");
+        super::help::tag(
+            &azure_role,
+            "dialog.ttsSource.azureRole",
+            "Azure speaking role",
+        );
+        azure_sizer.add(&azure_role, 0, SizerFlag::Expand | SizerFlag::All, 3);
+        azure_panel.set_sizer(azure_sizer, true);
+
+        let google_panel = Panel::builder(parent).build();
+        let google_sizer = StaticBoxSizerBuilder::new_with_label(
+            Orientation::Vertical,
+            &google_panel,
+            "Google Cloud voice settings",
+        )
+        .build();
+        let google_language = TextCtrl::builder(&google_panel)
+            .with_value(&google.language_code)
+            .build();
+        super::set_accessible_name(
+            &google_language,
+            "Google Cloud language code; blank infers it from the voice",
+        );
+        super::help::tag(
+            &google_language,
+            "dialog.ttsSource.googleLanguage",
+            "Google Cloud language code",
+        );
+        google_sizer.add(
+            &StaticText::builder(&google_panel)
+                .with_label("Language code (blank infers from voice)")
+                .build(),
+            0,
+            SizerFlag::All,
+            3,
+        );
+        google_sizer.add(&google_language, 0, SizerFlag::Expand | SizerFlag::All, 3);
+        let google_effect = Choice::builder(&google_panel).build();
+        super::set_accessible_name(&google_effect, "Google Cloud audio effects profile");
+        google_effect.append("No effects profile");
+        let mut effect_selection = 0;
+        for (index, (id, label)) in crate::tts::engines::google::EFFECTS_PROFILES
+            .iter()
+            .enumerate()
+        {
+            google_effect.append(label);
+            if *id == google.effects_profile {
+                effect_selection = index + 1;
+            }
+        }
+        google_effect.set_selection(effect_selection as u32);
+        super::help::tag(
+            &google_effect,
+            "dialog.ttsSource.googleEffect",
+            "Google Cloud audio effects profile",
+        );
+        google_sizer.add(
+            &StaticText::builder(&google_panel)
+                .with_label("Audio effects profile")
+                .build(),
+            0,
+            SizerFlag::All,
+            3,
+        );
+        google_sizer.add(&google_effect, 0, SizerFlag::Expand | SizerFlag::All, 3);
+        google_panel.set_sizer(google_sizer, true);
+
+        let polly_panel = Panel::builder(parent).build();
+        let polly_sizer = StaticBoxSizerBuilder::new_with_label(
+            Orientation::Vertical,
+            &polly_panel,
+            "AWS Polly voice settings",
+        )
+        .build();
+        let polly_engine = Choice::builder(&polly_panel).build();
+        super::set_accessible_name(&polly_engine, "AWS Polly synthesis engine");
+        let polly_engines = [
+            ("", "Provider default (standard)"),
+            ("standard", "Standard"),
+            ("neural", "Neural"),
+            ("long-form", "Long-form"),
+            ("generative", "Generative"),
+        ];
+        let mut polly_selection = 0;
+        for (index, (id, label)) in polly_engines.iter().enumerate() {
+            polly_engine.append(label);
+            if *id == polly.engine.trim() {
+                polly_selection = index;
+            }
+        }
+        polly_engine.set_selection(polly_selection as u32);
+        fill_model_choice(&polly_engine, crate::tts::engines::AWS, &polly.engine);
+        super::help::tag(
+            &polly_engine,
+            "dialog.ttsSource.pollyEngine",
+            "Polly engine",
+        );
+        polly_sizer.add(
+            &StaticText::builder(&polly_panel)
+                .with_label("Synthesis engine")
+                .build(),
+            0,
+            SizerFlag::All,
+            3,
+        );
+        polly_sizer.add(&polly_engine, 0, SizerFlag::Expand | SizerFlag::All, 3);
+        let polly_language = TextCtrl::builder(&polly_panel)
+            .with_value(&polly.language_code)
+            .build();
+        super::set_accessible_name(
+            &polly_language,
+            "Polly language code; blank uses the voice default",
+        );
+        super::help::tag(
+            &polly_language,
+            "dialog.ttsSource.pollyLanguage",
+            "Polly language code",
+        );
+        polly_sizer.add(
+            &StaticText::builder(&polly_panel)
+                .with_label("Language code (optional)")
+                .build(),
+            0,
+            SizerFlag::All,
+            3,
+        );
+        polly_sizer.add(&polly_language, 0, SizerFlag::Expand | SizerFlag::All, 3);
+        polly_panel.set_sizer(polly_sizer, true);
+
+        let gtts_panel = Panel::builder(parent).build();
+        let gtts_sizer = StaticBoxSizerBuilder::new_with_label(
+            Orientation::Vertical,
+            &gtts_panel,
+            "Google Translate voice settings",
+        )
+        .build();
+        let gtts_tld = TextCtrl::builder(&gtts_panel).with_value(&gtts.tld).build();
+        super::set_accessible_name(
+            &gtts_tld,
+            "Google Translate accent domain suffix; blank uses com",
+        );
+        super::help::tag(
+            &gtts_tld,
+            "dialog.ttsSource.gttsTld",
+            "Google Translate accent domain",
+        );
+        gtts_sizer.add(
+            &StaticText::builder(&gtts_panel)
+                .with_label("Accent domain suffix, for example co.uk")
+                .build(),
+            0,
+            SizerFlag::All,
+            3,
+        );
+        gtts_sizer.add(&gtts_tld, 0, SizerFlag::Expand | SizerFlag::All, 3);
+        let gtts_speed = Choice::builder(&gtts_panel).build();
+        super::set_accessible_name(&gtts_speed, "Google Translate speed mode");
+        for label in ["Speed: provider default", "Speed: normal", "Speed: slow"] {
+            gtts_speed.append(label);
+        }
+        gtts_speed.set_selection(match gtts.slow {
+            None => 0,
+            Some(false) => 1,
+            Some(true) => 2,
+        });
+        super::help::tag(
+            &gtts_speed,
+            "dialog.ttsSource.gttsSpeed",
+            "Google Translate speed mode",
+        );
+        gtts_sizer.add(&gtts_speed, 0, SizerFlag::Expand | SizerFlag::All, 3);
+        gtts_panel.set_sizer(gtts_sizer, true);
+
+        let controls = Self {
+            none_panel,
+            eleven_panel,
+            eleven_model,
+            eleven_language,
+            eleven_stability_override,
+            eleven_stability,
+            eleven_similarity_override,
+            eleven_similarity,
+            eleven_style_override,
+            eleven_style,
+            eleven_boost,
+            openai_panel,
+            openai_model,
+            openai_instructions,
+            azure_panel,
+            azure_style,
+            azure_degree,
+            azure_role,
+            google_panel,
+            google_language,
+            google_effect,
+            polly_panel,
+            polly_engine,
+            polly_language,
+            gtts_panel,
+            gtts_tld,
+            gtts_speed,
+        };
+        controls.refresh_compatibility();
+        controls
+    }
+
+    fn panels(&self) -> [Panel; 7] {
+        [
+            self.none_panel.clone(),
+            self.eleven_panel.clone(),
+            self.openai_panel.clone(),
+            self.azure_panel.clone(),
+            self.google_panel.clone(),
+            self.polly_panel.clone(),
+            self.gtts_panel.clone(),
+        ]
+    }
+
+    fn refresh_catalog(&self) {
+        let eleven = model_choice_value(&self.eleven_model);
+        let openai = model_choice_value(&self.openai_model);
+        let polly = self.polly_engine_value();
+        fill_model_choice(&self.eleven_model, crate::tts::engines::ELEVENLABS, &eleven);
+        fill_model_choice(&self.openai_model, crate::tts::engines::OPENAI, &openai);
+        fill_model_choice(&self.polly_engine, crate::tts::engines::AWS, &polly);
+        self.refresh_compatibility();
+    }
+    fn show(&self, engine: &str) {
+        use crate::tts::engines;
+        self.eleven_panel.show(engine == engines::ELEVENLABS);
+        self.openai_panel.show(engine == engines::OPENAI);
+        self.azure_panel.show(engine == engines::AZURE);
+        self.google_panel.show(engine == engines::GOOGLE);
+        self.polly_panel.show(engine == engines::AWS);
+        self.gtts_panel.show(engine == engines::GTTS);
+        self.none_panel.show(matches!(
+            engine,
+            engines::SAPI | engines::EDGE | engines::STAR
+        ));
+        self.refresh_compatibility();
+    }
+
+    fn refresh_compatibility(&self) {
+        let eleven_v3 = model_choice_value(&self.eleven_model) == "eleven_v3";
+        self.eleven_similarity_override.enable(!eleven_v3);
+        self.eleven_similarity
+            .enable(!eleven_v3 && self.eleven_similarity_override.get_value());
+        self.eleven_boost.enable(!eleven_v3);
+        self.openai_instructions
+            .enable(model_choice_value(&self.openai_model).starts_with("gpt-4o-mini-tts"));
+        self.azure_degree
+            .enable(self.azure_style.get_selection().unwrap_or(0) > 0);
+    }
+
+    fn refresh_azure_voice(&self, voice: Option<&crate::tts::engine::Voice>) {
+        let wanted_style = selected_choice_value(&self.azure_style);
+        let wanted_role = selected_choice_value(&self.azure_role);
+        let styles = voice.map(|voice| voice.styles.as_slice()).unwrap_or(&[]);
+        let roles = voice.map(|voice| voice.roles.as_slice()).unwrap_or(&[]);
+        fill_default_choice(
+            &self.azure_style,
+            styles,
+            &wanted_style,
+            "Default speaking style",
+        );
+        fill_default_choice(
+            &self.azure_role,
+            roles,
+            &wanted_role,
+            "Default speaking role",
+        );
+        self.refresh_compatibility();
+    }
+
+    fn model_value(&self, engine: &str) -> String {
+        match engine {
+            crate::tts::engines::ELEVENLABS => model_choice_value(&self.eleven_model),
+            crate::tts::engines::OPENAI => model_choice_value(&self.openai_model),
+            crate::tts::engines::AWS => self.polly_engine_value(),
+            _ => String::new(),
+        }
+    }
+    fn polly_engine_value(&self) -> String {
+        model_choice_value(&self.polly_engine)
+    }
+
+    fn settings(&self, engine: &str) -> Option<TtsEngineSettings> {
+        use crate::tts::engines;
+        match engine {
+            engines::ELEVENLABS => Some(TtsEngineSettings::ElevenLabs(ElevenLabsTtsSettings {
+                model: model_choice_value(&self.eleven_model),
+                language_code: self.eleven_language.get_value().trim().to_string(),
+                stability: self
+                    .eleven_stability_override
+                    .get_value()
+                    .then(|| self.eleven_stability.get_value()),
+                similarity_boost: self
+                    .eleven_similarity_override
+                    .get_value()
+                    .then(|| self.eleven_similarity.get_value()),
+                style: self
+                    .eleven_style_override
+                    .get_value()
+                    .then(|| self.eleven_style.get_value()),
+                speaker_boost: match self.eleven_boost.get_selection().unwrap_or(0) {
+                    1 => Some(true),
+                    2 => Some(false),
+                    _ => None,
+                },
+            })),
+            engines::OPENAI => Some(TtsEngineSettings::OpenAi(OpenAiTtsSettings {
+                model: model_choice_value(&self.openai_model),
+                instructions: self.openai_instructions.get_value().trim().to_string(),
+            })),
+            engines::AZURE => Some(TtsEngineSettings::Azure(AzureTtsSettings {
+                style: selected_choice_value(&self.azure_style),
+                style_degree: self.azure_degree.get_value(),
+                role: selected_choice_value(&self.azure_role),
+            })),
+            engines::GOOGLE => Some(TtsEngineSettings::Google(GoogleTtsSettings {
+                language_code: self.google_language.get_value().trim().to_string(),
+                effects_profile: self
+                    .google_effect
+                    .get_selection()
+                    .and_then(|index| index.checked_sub(1))
+                    .and_then(|index| {
+                        crate::tts::engines::google::EFFECTS_PROFILES.get(index as usize)
+                    })
+                    .map(|(id, _)| (*id).to_string())
+                    .unwrap_or_default(),
+            })),
+            engines::AWS => Some(TtsEngineSettings::Polly(PollyTtsSettings {
+                engine: self.polly_engine_value(),
+                language_code: self.polly_language.get_value().trim().to_string(),
+            })),
+            engines::GTTS => Some(TtsEngineSettings::Gtts(GttsTtsSettings {
+                tld: self.gtts_tld.get_value().trim().to_string(),
+                slow: match self.gtts_speed.get_selection().unwrap_or(0) {
+                    1 => Some(false),
+                    2 => Some(true),
+                    _ => None,
+                },
+            })),
+            _ => None,
+        }
+    }
+}
+
+fn bind_optional_double(check: &CheckBox, input: &SpinCtrlDouble) {
+    let check = check.clone();
+    let input = input.clone();
+    check
+        .clone()
+        .on_toggled(move |_| input.enable(check.get_value()));
+}
+
+fn fill_default_choice(choice: &Choice, values: &[String], wanted: &str, default_label: &str) {
+    choice.clear();
+    choice.append(default_label);
+    let mut selection = 0;
+    for value in values {
+        choice.append(value);
+        if value == wanted {
+            selection = choice.get_count().saturating_sub(1);
+        }
+    }
+    if !wanted.is_empty() && !values.iter().any(|value| value == wanted) {
+        choice.append(wanted);
+        selection = choice.get_count().saturating_sub(1);
+    }
+    choice.set_selection(selection);
+}
+
+fn selected_choice_value(choice: &Choice) -> String {
+    choice
+        .get_selection()
+        .filter(|selection| *selection > 0)
+        .and_then(|selection| choice.get_string(selection))
+        .unwrap_or_default()
+}
+
+fn fill_model_choice(choice: &Choice, engine: &str, wanted: &str) {
+    choice.clear();
+    choice.append("Provider default");
+    let models = crate::tts::catalog::models(engine);
+    for model in &models {
+        choice.append(&model.id);
+    }
+    let wanted = wanted.trim();
+    let selection = if wanted.is_empty() {
+        0
+    } else if let Some(index) = models.iter().position(|model| model.id == wanted) {
+        index + 1
+    } else {
+        choice.append(&format!("{wanted} (unavailable)"));
+        models.len() + 1
+    };
+    choice.set_selection(selection as u32);
+    super::set_accessible_name(
+        choice,
+        &format!("{} model", crate::tts::engines::display_name(engine)),
+    );
+}
+
+fn model_choice_value(choice: &Choice) -> String {
+    let value = choice
+        .get_selection()
+        .and_then(|index| choice.get_string(index))
+        .unwrap_or_default();
+    if value == "Provider default" {
+        String::new()
+    } else {
+        value
+            .strip_suffix(" (unavailable)")
+            .unwrap_or(&value)
+            .to_string()
+    }
+}
 /// The count line for `engine`, given what is cached for it.
 ///
 /// Split out from the widget so the three cases can be tested: "never fetched"
@@ -1057,7 +1919,7 @@ fn voice_status_text(engine: &str, count: Option<usize>) -> String {
         Some(0) => format!("{name} reported no voices."),
         Some(1) => format!("1 voice available for {name}."),
         Some(n) => format!("{n} voices available for {name}."),
-        None => format!("Voices for {name} not fetched yet. Use Get available voices."),
+        None => format!("Voice catalog for {name} is refreshing automatically."),
     }
 }
 
@@ -1079,9 +1941,10 @@ fn fill_voice_choice(
     choice: &Choice,
     voices: &Rc<std::cell::RefCell<Vec<crate::tts::engine::Voice>>>,
     engine: &str,
+    model: &str,
     wanted: &str,
 ) {
-    let fetched = crate::tts::cached_voices(engine).unwrap_or_default();
+    let fetched = crate::tts::cached_voices_for_model(engine, model).unwrap_or_default();
     choice.clear();
     choice.append("Default voice");
     for voice in &fetched {
@@ -1364,12 +2227,15 @@ mod tests {
     #[test]
     fn voice_status_distinguishes_unfetched_from_empty() {
         let unfetched = voice_status_text(engines::AZURE, None);
-        assert!(unfetched.contains("not fetched"), "{unfetched}");
+        assert!(
+            unfetched.contains("refreshing automatically"),
+            "{unfetched}"
+        );
         assert!(unfetched.contains("Azure"), "{unfetched}");
 
         let empty = voice_status_text(engines::AZURE, Some(0));
         assert!(empty.contains("no voices"), "{empty}");
-        assert!(!empty.contains("not fetched"), "{empty}");
+        assert!(!empty.contains("refreshing automatically"), "{empty}");
     }
 
     #[test]
@@ -1388,14 +2254,13 @@ mod tests {
     /// docs record the same split from the other side.
     #[test]
     fn only_the_ssml_engines_support_pitch() {
-        for engine in [engines::EDGE, engines::AZURE, engines::GOOGLE] {
+        for engine in [engines::EDGE, engines::AZURE, engines::GOOGLE, engines::AWS] {
             assert!(pitch_is_supported(engine), "{engine}");
         }
         for engine in [
             engines::SAPI,
             engines::OPENAI,
             engines::GTTS,
-            engines::AWS,
             engines::ELEVENLABS,
             engines::STAR,
         ] {

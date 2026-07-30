@@ -425,6 +425,7 @@ mod tests {
             rate: 0,
             volume: 100,
             pitch: 0,
+            provider_settings: None,
         }
     }
 

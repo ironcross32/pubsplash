@@ -319,7 +319,9 @@ impl Drop for SliderAnnouncer {
 /// 100. The result is always clamped to `min..=max`, so a caller can announce it
 /// unconditionally.
 pub fn key_step(code: i32, current: i32, min: i32, max: i32, page: i32) -> Option<i32> {
-    use super::{WXK_DOWN, WXK_END, WXK_HOME, WXK_LEFT, WXK_PAGEDOWN, WXK_PAGEUP, WXK_RIGHT, WXK_UP};
+    use super::{
+        WXK_DOWN, WXK_END, WXK_HOME, WXK_LEFT, WXK_PAGEDOWN, WXK_PAGEUP, WXK_RIGHT, WXK_UP,
+    };
     let value = match code {
         WXK_UP | WXK_RIGHT => current.saturating_add(1),
         WXK_DOWN | WXK_LEFT => current.saturating_sub(1),

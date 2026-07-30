@@ -13,15 +13,26 @@ use super::host2::Vst2Plugin;
 use super::host3::Vst3Plugin;
 use crate::audio::mixer::CHANNELS;
 use crate::config::{ParamValue, PluginRef};
-use std::sync::Arc;
 
-/// Deliberately not `Clone`: every owner holds an `Arc<PluginInstance>`, and
-/// cloning the *inner* `Arc` instead would hand the engine an owning reference
-/// the `FxRuntime.retiring` bookkeeping does not track — letting the audio
-/// thread become the last owner and run COM teardown.
+/// Deliberately not `Clone`, and deliberately holding each plugin **by value**
+/// rather than behind an inner `Arc`.
+///
+/// Every owner reaches a plugin through an `Arc<PluginInstance>`, and the rule
+/// that keeps hosting sound is that the last of those references is always
+/// released on the UI thread, through the retirement path in `ui::fx` and
+/// `AudioEngine::reclaim_retired_chains`. An inner `Arc` would be a second way
+/// to own a plugin, outside that path — one clone captured in a closure or
+/// handed to the engine and the audio thread could become the last owner and
+/// run COM teardown and `FreeLibrary` itself. Owning by value makes that
+/// unrepresentable instead of merely discouraged.
+// The VST3 variant is much the larger of the two, and boxing it would put back
+// exactly the extra indirection this type exists to remove. Nothing here is
+// ever moved by value: `load_slot` builds one and wraps it in an `Arc`
+// immediately, and every other owner holds that `Arc`.
+#[allow(clippy::large_enum_variant)]
 pub enum PluginInstance {
-    Vst2(Arc<Vst2Plugin>),
-    Vst3(Arc<Vst3Plugin>),
+    Vst2(Vst2Plugin),
+    Vst3(Vst3Plugin),
 }
 
 /// What a plugin did with a block, and therefore how much of its output the
@@ -36,6 +47,19 @@ pub enum Processed {
     Retiring,
     /// The plugin could not run this block and `out` was not written.
     Passthrough,
+}
+
+/// Hands out the identity used to match an instance to its editor window and to
+/// the resize requests it makes.
+///
+/// It used to be the instance's *address*, which is only unique among instances
+/// that are alive at the same time: delete a plugin and add another and the
+/// allocator (or the module loader) will happily hand back the address the dead
+/// one had, so a stale editor entry or a queued resize request resolves to a
+/// completely different plugin. A counter cannot be reused.
+pub fn next_effect_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// How a plugin's output combines with the signal already in the chain.
@@ -232,7 +256,8 @@ impl PluginInstance {
         }
     }
 
-    pub fn effect_id(&self) -> usize {
+    /// Stable, never-reused identity for this instance. See [`next_effect_id`].
+    pub fn effect_id(&self) -> u64 {
         match self {
             Self::Vst2(plugin) => plugin.effect_id(),
             Self::Vst3(plugin) => plugin.effect_id(),
@@ -303,19 +328,25 @@ impl PluginInstance {
                 // every one of them points at a buffer of at least `frames`
                 // f32s owned by the calling chain. Engine thread only, per the
                 // host2 threading contract.
-                unsafe {
+                let result = unsafe {
                     plugin.process_replacing(
                         scratch.in_ptrs.as_ptr(),
                         scratch.out_ptrs.as_ptr(),
                         frames as i32,
-                    );
+                    )
+                };
+                if result == Processed::Passthrough {
+                    // A UI dispatch has the plugin. `out` was not written, so
+                    // saying anything else here would promote whatever the
+                    // buffer happened to hold.
+                    return result;
                 }
 
                 // Mono-out plugin: mirror its single output to both channels.
                 if n_out == 1 {
                     right_out[0][..frames].copy_from_slice(&left_out[0][..frames]);
                 }
-                Processed::Wet
+                result
             }
             Self::Vst3(plugin) => plugin.process_stereo(dry, out),
         }

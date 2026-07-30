@@ -90,11 +90,9 @@ pub enum EngineCommand {
     /// independent. Sends address buses by index, so a bus reorder that landed
     /// a block before the matching source update would route a send to the
     /// wrong bus. And splitting the FX halves used to mean two
-    /// [`EngineEvent::BusesApplied`]s for one edit, so the UI could release the
-    /// last reference to a plugin the engine still held — leaving the *engine*
-    /// to run plugin teardown and `FreeLibrary`, which the hosting contract in
-    /// `vst::host2` puts on the UI thread. One command, one apply point, one
-    /// `BusesApplied`.
+    /// [`EngineEvent::BusesApplied`]s for one edit, making it impossible for the
+    /// UI to know which returned chains were ready to reclaim. One command, one
+    /// apply point, one `BusesApplied`.
     ///
     /// `sources` index order matches the mixer order; buses are addressed by
     /// index too.
@@ -148,8 +146,8 @@ pub enum EngineEvent {
     SourceRecovered { name: String },
     /// Encoding stopped because the outgoing channel closed.
     EncodingStopped,
-    /// The engine finished applying a `SetBuses`; any plugin instances the
-    /// UI retired are now unreferenced by the audio thread.
+    /// The engine finished applying the FX portion of a `SetRouting` and queued
+    /// every replaced chain for reclamation on the UI thread.
     BusesApplied,
 }
 
@@ -315,8 +313,8 @@ pub struct AudioEngine {
     /// Used by the TTS and sound-event subsystems (upcoming milestone).
     #[allow(dead_code)]
     pub external_feeds: ExternalFeeds,
-    /// FX chains the engine hands back at shutdown so they are dropped here
-    /// rather than on the audio thread. See the `Shutdown` arm of `engine_loop`.
+    /// FX chains the engine hands back after routing swaps and at shutdown so
+    /// they are dropped here rather than on the audio thread.
     retired: Receiver<FxChain>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -344,6 +342,24 @@ impl AudioEngine {
     pub fn send(&self, command: EngineCommand) {
         let _ = self.commands.send(command);
     }
+
+    /// Drops every chain the audio thread has finished with on the calling
+    /// thread. The UI calls this after `BusesApplied`; the return value also
+    /// makes the lifetime contract directly assertable in engine tests.
+    pub(crate) fn reclaim_retired_chains(&self) -> usize {
+        let mut reclaimed = 0;
+        while let Ok(chain) = self.retired.try_recv() {
+            // Dropping a chain can run plugin teardown, which is third-party
+            // code that can take the process with it (see `crash.rs`). Say so
+            // before and after, so a log that stops in between is diagnostic.
+            if !chain.is_empty() {
+                log::info!("Reclaiming a retired FX chain of {} plugins", chain.len());
+            }
+            drop(chain);
+            reclaimed += 1;
+        }
+        reclaimed
+    }
 }
 
 impl Drop for AudioEngine {
@@ -355,9 +371,7 @@ impl Drop for AudioEngine {
         // Now that the engine thread is gone, release the chains it parked:
         // dropping a plugin runs its teardown and `FreeLibrary`, which belongs
         // on this thread.
-        while let Ok(chain) = self.retired.try_recv() {
-            drop(chain);
-        }
+        self.reclaim_retired_chains();
     }
 }
 
@@ -433,8 +447,14 @@ fn engine_loop(
         if idle && parked_command.is_none() {
             match commands.recv() {
                 Ok(command) => parked_command = Some(command),
-                // The UI is gone; nothing will ever wake us again.
-                Err(_) => return,
+                // The UI is gone; nothing will ever wake us again. Returning
+                // straight out would drop the live chains here, on the audio
+                // thread — `idle` says nothing about buses, so a bus with FX
+                // and no sources parks in exactly this state.
+                Err(_) => {
+                    park_chains(&mut buses, &mut master_chain, &retired);
+                    return;
+                }
             }
             // Re-anchor the cadence: `next_tick` is however long ago the park
             // started, and the catch-up branch would otherwise chase it.
@@ -506,7 +526,7 @@ fn engine_loop(
                         }
                     }
                     if let Some(specs) = new_buses {
-                        buses = specs
+                        let mut replacement: Vec<ActiveBus> = specs
                             .into_iter()
                             .map(|spec| ActiveBus {
                                 strip: ChannelStrip::new(spec.volume, spec.muted),
@@ -515,9 +535,21 @@ fn engine_loop(
                                 monitor: spec.monitor,
                             })
                             .collect();
+                        // Paired by index only to find a likely donor; the
+                        // carry-over itself matches plugins by identity, so a
+                        // bus reorder simply finds nothing here.
+                        for (new, old) in replacement.iter_mut().zip(buses.iter()) {
+                            new.chain.adopt_fades_from(&old.chain);
+                        }
+                        let replaced = std::mem::replace(&mut buses, replacement);
+                        for bus in replaced {
+                            let _ = retired.send(bus.chain);
+                        }
                     }
-                    if let Some(chain) = new_master_chain {
-                        master_chain = chain;
+                    if let Some(mut chain) = new_master_chain {
+                        chain.adopt_fades_from(&master_chain);
+                        let replaced = std::mem::replace(&mut master_chain, chain);
+                        let _ = retired.send(replaced);
                     }
                     if touched_fx {
                         events.send(EngineEvent::BusesApplied);
@@ -605,16 +637,7 @@ fn engine_loop(
                 Ok(EngineCommand::Shutdown) => {
                     finalize_recording(&mut rec_encoder, &mut recorder);
                     stop_sources(&mut sources);
-                    // Returning here would drop every live `FxChain` — and any
-                    // still sitting in the command queue — on this thread,
-                    // running plugin teardown and `FreeLibrary` from the audio
-                    // thread. Park them on the retirement channel instead;
-                    // `AudioEngine::drop` drains it after the join, on the UI
-                    // thread, as the hosting contract requires.
-                    for bus in buses.drain(..) {
-                        let _ = retired.send(bus.chain);
-                    }
-                    let _ = retired.send(std::mem::replace(&mut master_chain, FxChain::empty()));
+                    park_chains(&mut buses, &mut master_chain, &retired);
                     while let Ok(command) = commands.try_recv() {
                         if let EngineCommand::SetRouting(update) = command {
                             for bus in update.buses.into_iter().flatten() {
@@ -828,6 +851,20 @@ fn mix_one_block(
     }
 }
 
+/// Hands every live `FxChain` back for the UI thread to drop.
+///
+/// The audio thread must never be the last owner of a plugin: dropping one runs
+/// its teardown and `FreeLibrary`, which `vst::host2` and `vst::host3` both put
+/// on the UI thread. So no exit from `engine_loop` may simply let `buses` and
+/// `master_chain` fall out of scope — every one of them calls this first, and
+/// `AudioEngine::drop` drains the channel after the join.
+fn park_chains(buses: &mut Vec<ActiveBus>, master_chain: &mut FxChain, retired: &Sender<FxChain>) {
+    for bus in buses.drain(..) {
+        let _ = retired.send(bus.chain);
+    }
+    let _ = retired.send(std::mem::replace(master_chain, FxChain::empty()));
+}
+
 fn stop_sources(sources: &mut Vec<ActiveSource>) {
     for source in sources.iter() {
         source.stop.store(true, Ordering::Relaxed);
@@ -1035,5 +1072,90 @@ mod routing_tests {
         let mut buses = vec![test_bus(100, false)];
         let out = run_block(&mut sources, &mut buses);
         assert!((out[0] - 1.0).abs() < 1e-6, "direct path unaffected");
+    }
+
+    #[test]
+    fn routing_replacements_are_reclaimed_after_acknowledgement() {
+        fn bus_spec() -> BusSpec {
+            BusSpec {
+                volume: 100,
+                muted: false,
+                chain: FxChain::empty(),
+                monitor: false,
+            }
+        }
+
+        let engine = AudioEngine::start();
+        engine.send(EngineCommand::SetMasterMonitor(true));
+
+        // Queue every replacement before handling any acknowledgement. Master
+        // monitoring keeps the engine processing even with no sources.
+        for bus_count in [2, 1, 3] {
+            engine.send(EngineCommand::SetRouting(Box::new(RoutingUpdate {
+                buses: Some((0..bus_count).map(|_| bus_spec()).collect()),
+                master_chain: Some(FxChain::empty()),
+                ..Default::default()
+            })));
+        }
+
+        let mut reclaimed = 0;
+        for _ in 0..3 {
+            assert!(matches!(
+                engine.events.recv_timeout(Duration::from_secs(2)),
+                Ok(EngineEvent::BusesApplied)
+            ));
+            reclaimed += engine.reclaim_retired_chains();
+        }
+
+        // The updates replace 0, then 2, then 1 bus chain, plus one master
+        // chain each time. The final three buses and master remain active.
+        assert_eq!(reclaimed, 6);
+        assert_eq!(engine.reclaim_retired_chains(), 0);
+    }
+
+    /// The engine has two ways out, and both must hand their chains back: a
+    /// `Shutdown` command, and the command channel simply closing. The second
+    /// one only happens if a sender is dropped without a `Shutdown` — and if it
+    /// ever does, letting the loop `return` would run plugin teardown and
+    /// `FreeLibrary` on the audio thread, which is the one thing the hosting
+    /// contract forbids.
+    #[test]
+    fn chains_are_handed_back_when_the_command_channel_closes() {
+        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+        let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+        let (retired_tx, retired_rx) = crossbeam_channel::unbounded();
+        let feeds = ExternalFeeds::default();
+
+        let thread = std::thread::spawn(move || {
+            engine_loop(cmd_rx, EventSender(event_tx), retired_tx, feeds)
+        });
+
+        // Two buses and a master chain live in the engine, with no sources and
+        // nothing monitoring — the state that parks the loop in `commands.recv`.
+        cmd_tx
+            .send(EngineCommand::SetRouting(Box::new(RoutingUpdate {
+                buses: Some(
+                    (0..2)
+                        .map(|_| BusSpec {
+                            volume: 100,
+                            muted: false,
+                            chain: FxChain::empty(),
+                            monitor: false,
+                        })
+                        .collect(),
+                ),
+                master_chain: Some(FxChain::empty()),
+                ..Default::default()
+            })))
+            .expect("engine is listening");
+
+        // No `Shutdown`: just let the last sender go.
+        drop(cmd_tx);
+        thread.join().expect("the engine thread exits cleanly");
+
+        // One chain per bus, one for the master, plus the two the first routing
+        // update replaced (the empty initial set has only the master chain).
+        let handed_back = retired_rx.try_iter().count();
+        assert_eq!(handed_back, 4, "every live chain came back to this thread");
     }
 }

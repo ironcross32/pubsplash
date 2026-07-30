@@ -9,10 +9,13 @@
 //! engine that genuinely needs resampling.
 
 use crate::audio::convert::pcm16_to_engine;
-use crate::config::SpeechConfig;
+#[cfg(test)]
+use crate::config::PollyTtsSettings;
+use crate::config::{SpeechConfig, TtsEngineSettings};
 use crate::tts::clock::{self, now_unix};
 use crate::tts::engine::{SpeechEngine, SynthRequest, TtsError, Voice};
 use crate::tts::net::{block_on, body_bytes, body_json, client, require};
+use crate::tts::ssml;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
@@ -117,21 +120,10 @@ impl SpeechEngine for Polly {
         } else {
             &request.voice
         };
-        let body = serde_json::json!({
-            "Text": request.text,
-            "OutputFormat": "pcm",
-            "SampleRate": SOURCE_RATE.to_string(),
-            "VoiceId": voice,
-            "Engine": self.engine,
-        })
-        .to_string();
+        let body = request_body(request, voice, &self.engine).to_string();
 
         let pcm = block_on(self.call("POST", "/v1/speech", &body))?;
-        let mut samples = pcm16_to_engine(&pcm, SOURCE_RATE, SOURCE_CHANNELS);
-        // Polly has no rate or volume parameter outside SSML, and its SSML
-        // mode rejects plain text, so the slider is applied to the samples.
-        request.apply_volume(&mut samples);
-        Ok(samples)
+        Ok(pcm16_to_engine(&pcm, SOURCE_RATE, SOURCE_CHANNELS))
     }
 
     fn voices(&self) -> Result<Vec<Voice>, TtsError> {
@@ -183,13 +175,72 @@ fn parse_voices(body: &serde_json::Value) -> Vec<Voice> {
                     } else {
                         format!("{id} ({language})")
                     };
-                    Some(Voice::new(id, label))
+                    let mut voice = Voice::new(id, label);
+                    voice.language_code = language.to_string();
+                    voice.supported_engines = entry
+                        .get("SupportedEngines")
+                        .and_then(|value| value.as_array())
+                        .map(|values| {
+                            values
+                                .iter()
+                                .filter_map(|value| value.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Some(voice)
                 })
                 .collect()
         })
         .unwrap_or_default();
     voices.sort_by(|a, b| a.id.cmp(&b.id));
     voices
+}
+
+fn request_body(request: &SynthRequest, voice: &str, legacy_engine: &str) -> serde_json::Value {
+    let selected = match &request.provider_settings {
+        Some(TtsEngineSettings::Polly(settings)) => Some(settings),
+        _ => None,
+    };
+    let engine = match (&request.provider_settings, selected) {
+        (None, _) => legacy_engine.trim(),
+        (_, Some(settings)) => settings.engine.trim(),
+        _ => "",
+    };
+    let rate = (100 + request.rate_percent()).clamp(20, 200);
+    let volume = if request.volume_percent() == 0 {
+        -96.0
+    } else {
+        20.0 * (request.volume_percent() as f64 / 100.0).log10()
+    };
+    let pitch = if engine.is_empty() || engine == "standard" {
+        format!(
+            r#" pitch="{}""#,
+            ssml::percent(request.pitch.clamp(-50, 50))
+        )
+    } else {
+        String::new()
+    };
+    let text = format!(
+        r#"<speak><prosody rate="{rate}%" volume="{volume:.1}dB"{pitch}>{}</prosody></speak>"#,
+        ssml::escape(&request.text)
+    );
+    let mut body = serde_json::json!({
+        "Text": text,
+        "TextType": "ssml",
+        "OutputFormat": "pcm",
+        "SampleRate": SOURCE_RATE.to_string(),
+        "VoiceId": voice,
+    });
+    if !engine.is_empty() {
+        body["Engine"] = serde_json::json!(engine);
+    }
+    if let Some(language) = selected
+        .map(|settings| settings.language_code.trim())
+        .filter(|language| !language.is_empty())
+    {
+        body["LanguageCode"] = serde_json::json!(language);
+    }
+    body
 }
 
 // ── SigV4 ───────────────────────────────────────────────────────────────────
@@ -407,6 +458,39 @@ mod tests {
     }
 
     #[test]
+    fn per_source_settings_build_safe_ssml_and_respect_engine_capabilities() {
+        let mut request = SynthRequest {
+            text: "hello <listener>".into(),
+            voice: "Amy".into(),
+            rate: 10,
+            volume: 50,
+            pitch: 20,
+            provider_settings: Some(TtsEngineSettings::Polly(PollyTtsSettings {
+                engine: "neural".into(),
+                language_code: "en-GB".into(),
+            })),
+        };
+        let body = request_body(&request, "Amy", "legacy");
+        assert_eq!(body["Engine"], "neural");
+        assert_eq!(body["LanguageCode"], "en-GB");
+        assert_eq!(body["TextType"], "ssml");
+        let text = body["Text"].as_str().unwrap();
+        assert!(text.contains(r#"rate="200%""#));
+        assert!(text.contains("hello &lt;listener&gt;"));
+        assert!(!text.contains(" pitch="));
+
+        request.provider_settings = Some(TtsEngineSettings::Polly(PollyTtsSettings::default()));
+        let standard = request_body(&request, "Amy", "legacy");
+        assert!(standard.get("Engine").is_none());
+        assert!(
+            standard["Text"]
+                .as_str()
+                .unwrap()
+                .contains(r#"pitch="+20%""#)
+        );
+    }
+
+    #[test]
     fn the_region_is_lowercased_for_the_endpoint_host() {
         let mut config = SpeechConfig::default();
         config.aws_region = "US-West-2".into();
@@ -438,4 +522,36 @@ mod tests {
         let error = Polly::new(&config).voices().unwrap_err();
         assert!(error.to_string().contains("secret access key"), "{error}");
     }
+}
+
+/// Discovers every supported Polly engine and its compatible voices.
+pub fn discover(config: &SpeechConfig) -> Result<crate::tts::catalog::EngineCatalog, TtsError> {
+    use crate::tts::catalog::{CatalogModel, EngineCatalog};
+    let mut by_id = std::collections::BTreeMap::<String, Voice>::new();
+    for engine_id in ["standard", "neural", "long-form", "generative"] {
+        let mut speech = config.clone();
+        speech.aws_engine = engine_id.into();
+        for mut voice in Polly::new(&speech).voices()? {
+            if voice.supported_engines.is_empty() {
+                voice.supported_engines.push(engine_id.into());
+            }
+            by_id
+                .entry(voice.id.clone())
+                .and_modify(|known| {
+                    known
+                        .supported_engines
+                        .extend(voice.supported_engines.clone());
+                    known.supported_engines.sort();
+                    known.supported_engines.dedup();
+                })
+                .or_insert(voice);
+        }
+    }
+    Ok(EngineCatalog::from_voices(
+        ["standard", "neural", "long-form", "generative"]
+            .into_iter()
+            .map(CatalogModel::plain)
+            .collect(),
+        by_id.into_values().collect(),
+    ))
 }

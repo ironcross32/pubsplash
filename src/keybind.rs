@@ -285,7 +285,9 @@ impl BindAction {
             BindAction::ToggleMonitorSource { .. } | BindAction::ToggleMuteSource { .. } => {
                 Specifier::Source
             }
-            BindAction::ToggleMonitorBus { .. } | BindAction::ToggleMuteBus { .. } => Specifier::Bus,
+            BindAction::ToggleMonitorBus { .. } | BindAction::ToggleMuteBus { .. } => {
+                Specifier::Bus
+            }
             _ => Specifier::None,
         }
     }
@@ -294,9 +296,8 @@ impl BindAction {
     pub fn specifier(&self) -> Option<&str> {
         match self {
             BindAction::SwitchScene { scene } => Some(scene),
-            BindAction::ToggleMonitorSource { source } | BindAction::ToggleMuteSource { source } => {
-                Some(source)
-            }
+            BindAction::ToggleMonitorSource { source }
+            | BindAction::ToggleMuteSource { source } => Some(source),
             BindAction::ToggleMonitorBus { bus } | BindAction::ToggleMuteBus { bus } => Some(bus),
             _ => None,
         }
@@ -308,9 +309,9 @@ impl BindAction {
         let name = name.to_string();
         match self {
             BindAction::SwitchScene { .. } => BindAction::SwitchScene { scene: name },
-            BindAction::ToggleMonitorSource { .. } => BindAction::ToggleMonitorSource {
-                source: name,
-            },
+            BindAction::ToggleMonitorSource { .. } => {
+                BindAction::ToggleMonitorSource { source: name }
+            }
             BindAction::ToggleMuteSource { .. } => BindAction::ToggleMuteSource { source: name },
             BindAction::ToggleMonitorBus { .. } => BindAction::ToggleMonitorBus { bus: name },
             BindAction::ToggleMuteBus { .. } => BindAction::ToggleMuteBus { bus: name },
@@ -380,7 +381,12 @@ impl Targets {
             }
         }
         Self {
-            scenes: config.scenes.scenes.iter().map(|s| s.name.clone()).collect(),
+            scenes: config
+                .scenes
+                .scenes
+                .iter()
+                .map(|s| s.name.clone())
+                .collect(),
             sources,
             buses: config.buses.buses.iter().map(|b| b.name.clone()).collect(),
         }
@@ -547,7 +553,10 @@ mod tests {
     #[test]
     fn chord_labels_put_modifiers_in_a_fixed_order() {
         assert_eq!(Chord::plain(VK_F9).label(), "F9");
-        assert_eq!(Chord::new(b'M' as u32, true, false, false).label(), "CTRL+M");
+        assert_eq!(
+            Chord::new(b'M' as u32, true, false, false).label(),
+            "CTRL+M"
+        );
         assert_eq!(
             Chord::new(VK_F9, true, true, true).label(),
             "CTRL+ALT+SHIFT+F9"
@@ -596,7 +605,10 @@ mod tests {
             Specifier::Source
         );
         assert_eq!(
-            BindAction::ToggleMonitorBus { bus: "Music".into() }.specifier_kind(),
+            BindAction::ToggleMonitorBus {
+                bus: "Music".into()
+            }
+            .specifier_kind(),
             Specifier::Bus
         );
     }
@@ -761,6 +773,9 @@ mod tests {
             }],
         };
         let text = serde_json::to_string(&config).unwrap();
-        assert_eq!(serde_json::from_str::<KeybindsConfig>(&text).unwrap(), config);
+        assert_eq!(
+            serde_json::from_str::<KeybindsConfig>(&text).unwrap(),
+            config
+        );
     }
 }

@@ -22,9 +22,10 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     let archiving_panel = Panel::builder(&notebook).build();
     notebook.add_page(&archiving_panel, "Archiving", true, None);
     build_archiving_tab(app, &dialog, &archiving_panel);
+    let speech_alive = Rc::new(std::cell::Cell::new(true));
     let speech_panel = Panel::builder(&notebook).build();
     notebook.add_page(&speech_panel, "Speech", false, None);
-    build_speech_tab(app, &speech_panel);
+    build_speech_tab(app, &speech_panel, &speech_alive);
     let sounds_panel = Panel::builder(&notebook).build();
     notebook.add_page(&sounds_panel, "Sound packs", false, None);
     let sounds = build_sounds_tab(app, &dialog, &sounds_panel);
@@ -55,6 +56,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     // showing, then make sure its timer cannot outlive the window it belongs to.
     (sounds.apply)();
     sounds.alive.set(false);
+    speech_alive.set(false);
     sounds.settle.stop();
     // A scan can still be running: `ScanEvent::Started` only builds a progress
     // dialog when the folders actually held plugins, so scanning an empty
@@ -198,7 +200,7 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 /// tabbing past OpenAI, Azure, AWS and Google to reach Star. The picker comes
 /// first and everything after it belongs to whichever engine it names, so the
 /// tab order is only ever as long as the engine you are actually configuring.
-fn build_speech_tab(app: &Rc<App>, panel: &Panel) {
+fn build_speech_tab(app: &Rc<App>, panel: &Panel, alive: &Rc<std::cell::Cell<bool>>) {
     use crate::tts::engines;
 
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
@@ -237,7 +239,7 @@ fn build_speech_tab(app: &Rc<App>, panel: &Panel) {
         .map(|(id, _)| {
             let page = Panel::builder(panel).build();
             let page_sizer = BoxSizer::builder(Orientation::Vertical).build();
-            build_engine_page(app, &page, &page_sizer, id);
+            build_engine_page(app, &page, &page_sizer, id, alive);
             page.set_sizer(page_sizer, true);
             sizer.add(&page, 0, SizerFlag::Expand | SizerFlag::All, 4);
             (*id, page)
@@ -348,7 +350,13 @@ fn show_engine_page(panel: &Panel, pages: &[(&'static str, Panel)], engine: &str
 /// scans this file for tag call sites and reads the id and label as *literal*
 /// arguments; a loop passing them as variables makes it scrape whatever string
 /// literal comes next and write nonsense into `help.toml`.
-fn build_engine_page(app: &Rc<App>, page: &Panel, sizer: &BoxSizer, engine: &str) {
+fn build_engine_page(
+    app: &Rc<App>,
+    page: &Panel,
+    sizer: &BoxSizer,
+    engine: &str,
+    alive: &Rc<std::cell::Cell<bool>>,
+) {
     use crate::secret::Secret;
     use crate::tts::engines;
 
@@ -367,7 +375,11 @@ fn build_engine_page(app: &Rc<App>, page: &Panel, sizer: &BoxSizer, engine: &str
                 &key,
                 "dialog.preferences.speech.openaiKey",
                 "OpenAI API key",
-            );
+            ); // validation-openai-marker
+            let draft_key = key.clone();
+            validation_button(app, page, sizer, engines::OPENAI, alive, move |speech| {
+                speech.openai_api_key = Secret::new(draft_key.get_value().trim().to_string());
+            });
         }
         engines::ELEVENLABS => {
             let key = secret_row(
@@ -384,19 +396,17 @@ fn build_engine_page(app: &Rc<App>, page: &Panel, sizer: &BoxSizer, engine: &str
                 "dialog.preferences.speech.elevenlabsKey",
                 "ElevenLabs API key",
             );
-            let model = text_row(
+            let draft_key = key.clone();
+            validation_button(
                 app,
                 page,
                 sizer,
-                "ElevenLabs model",
                 engines::ELEVENLABS,
-                |s| s.elevenlabs_model.clone(),
-                |s, v| s.elevenlabs_model = v,
-            );
-            super::help::tag(
-                &model,
-                "dialog.preferences.speech.elevenlabsModel",
-                "ElevenLabs model",
+                alive,
+                move |speech| {
+                    speech.elevenlabs_api_key =
+                        Secret::new(draft_key.get_value().trim().to_string());
+                },
             );
         }
         engines::AZURE => {
@@ -428,6 +438,12 @@ fn build_engine_page(app: &Rc<App>, page: &Panel, sizer: &BoxSizer, engine: &str
                 "dialog.preferences.speech.azureRegion",
                 "Azure region",
             );
+            let draft_key = key.clone();
+            let draft_region = region.clone();
+            validation_button(app, page, sizer, engines::AZURE, alive, move |speech| {
+                speech.azure_key = Secret::new(draft_key.get_value().trim().to_string());
+                speech.azure_region = draft_region.get_value().trim().to_string();
+            });
         }
         engines::AWS => {
             let id = text_row(
@@ -464,20 +480,15 @@ fn build_engine_page(app: &Rc<App>, page: &Panel, sizer: &BoxSizer, engine: &str
                 |s, v| s.aws_region = v,
             );
             super::help::tag(&region, "dialog.preferences.speech.awsRegion", "AWS region");
-            let polly_engine = text_row(
-                app,
-                page,
-                sizer,
-                "Polly engine, neural or standard",
-                engines::AWS,
-                |s| s.aws_engine.clone(),
-                |s, v| s.aws_engine = v,
-            );
-            super::help::tag(
-                &polly_engine,
-                "dialog.preferences.speech.awsEngine",
-                "Polly engine",
-            );
+            let draft_id = id.clone();
+            let draft_key = key.clone();
+            let draft_region = region.clone();
+            validation_button(app, page, sizer, engines::AWS, alive, move |speech| {
+                speech.aws_access_key_id = draft_id.get_value().trim().to_string();
+                speech.aws_secret_access_key =
+                    Secret::new(draft_key.get_value().trim().to_string());
+                speech.aws_region = draft_region.get_value().trim().to_string();
+            });
         }
         engines::GOOGLE => {
             let key = secret_row(
@@ -494,20 +505,10 @@ fn build_engine_page(app: &Rc<App>, page: &Panel, sizer: &BoxSizer, engine: &str
                 "dialog.preferences.speech.googleKey",
                 "Google Cloud API key",
             );
-            let language = text_row(
-                app,
-                page,
-                sizer,
-                "Google Cloud language code, for example en-US",
-                engines::GOOGLE,
-                |s| s.google_language_code.clone(),
-                |s, v| s.google_language_code = v,
-            );
-            super::help::tag(
-                &language,
-                "dialog.preferences.speech.googleLanguage",
-                "Google Cloud language code",
-            );
+            let draft_key = key.clone();
+            validation_button(app, page, sizer, engines::GOOGLE, alive, move |speech| {
+                speech.google_api_key = Secret::new(draft_key.get_value().trim().to_string());
+            });
         }
         engines::STAR => {
             let host = text_row(
@@ -538,6 +539,115 @@ fn build_engine_page(app: &Rc<App>, page: &Panel, sizer: &BoxSizer, engine: &str
     }
 }
 
+fn validation_button(
+    app: &Rc<App>,
+    page: &Panel,
+    sizer: &BoxSizer,
+    engine: &'static str,
+    alive: &Rc<std::cell::Cell<bool>>,
+    apply_draft: impl Fn(&mut crate::config::SpeechConfig) + 'static,
+) {
+    let button = Button::builder(page).with_label("&Validate").build();
+    super::set_accessible_name(&button, "Validate credentials");
+    let status = StaticText::builder(page)
+        .with_label("Credentials not yet validated.")
+        .build();
+    super::set_accessible_name(&status, "Credential validation status: not yet validated");
+    sizer.add(&button, 0, SizerFlag::All, 4);
+    sizer.add(&status, 0, SizerFlag::All, 4);
+    let apply_draft = Rc::new(apply_draft);
+    {
+        let app = app.clone();
+        let button_for_click = button.clone();
+        let status_for_click = status.clone();
+        let alive = alive.clone();
+        button.on_click(move |_| {
+            let mut draft = app.config.borrow().speech.clone();
+            apply_draft(&mut draft);
+            button_for_click.enable(false);
+            button_for_click.set_label("Validating…");
+            super::set_accessible_name(&button_for_click, "Validating credentials");
+            status_for_click.set_label("Validating credentials…");
+            super::set_accessible_name(
+                &status_for_click,
+                "Credential validation status: validating",
+            );
+            let (sender, receiver) = crossbeam_channel::bounded(1);
+            std::thread::Builder::new()
+                .name(format!("tts-validate-{engine}"))
+                .spawn(move || {
+                    let result = crate::tts::catalog::discover(engine, &draft)
+                        .map(|catalog| (draft, catalog));
+                    let _ = sender.send(result);
+                    wxdragon::wake_up_idle();
+                })
+                .ok();
+            let app = app.clone();
+            let button = button_for_click.clone();
+            let status = status_for_click.clone();
+            let alive = alive.clone();
+            super::run_when_ready(move || {
+                if !alive.get() {
+                    return true;
+                }
+                let Ok(result) = receiver.try_recv() else {
+                    return false;
+                };
+                button.enable(true);
+                button.set_label("&Validate");
+                super::set_accessible_name(&button, "Validate credentials");
+                match result {
+                    Ok((draft, catalog)) => {
+                        commit_validated_credentials(
+                            engine,
+                            &mut app.config.borrow_mut().speech,
+                            &draft,
+                        );
+                        crate::tts::catalog::commit_engine(engine, catalog);
+                        app.save_config();
+                        app.flush_config();
+                        status.set_label("Credentials validated and saved.");
+                        super::set_accessible_name(
+                            &status,
+                            "Credential validation succeeded; credentials saved",
+                        );
+                    }
+                    Err(error) => {
+                        status.set_label(&format!("Validation failed: {error}"));
+                        super::set_accessible_name(
+                            &status,
+                            &format!("Credential validation failed: {error}"),
+                        );
+                    }
+                }
+                true
+            });
+        });
+    }
+}
+
+fn commit_validated_credentials(
+    engine: &str,
+    saved: &mut crate::config::SpeechConfig,
+    draft: &crate::config::SpeechConfig,
+) {
+    use crate::tts::engines;
+    match engine {
+        engines::OPENAI => saved.openai_api_key = draft.openai_api_key.clone(),
+        engines::ELEVENLABS => saved.elevenlabs_api_key = draft.elevenlabs_api_key.clone(),
+        engines::AZURE => {
+            saved.azure_key = draft.azure_key.clone();
+            saved.azure_region = draft.azure_region.clone();
+        }
+        engines::AWS => {
+            saved.aws_access_key_id = draft.aws_access_key_id.clone();
+            saved.aws_secret_access_key = draft.aws_secret_access_key.clone();
+            saved.aws_region = draft.aws_region.clone();
+        }
+        engines::GOOGLE => saved.google_api_key = draft.google_api_key.clone(),
+        _ => {}
+    }
+}
 /// A masked credential field. See [`speech_row`].
 fn secret_row(
     app: &Rc<App>,
@@ -589,16 +699,17 @@ fn speech_row(
     super::set_accessible_name(&input, label);
     sizer.add(&caption, 0, SizerFlag::All, 2);
     sizer.add(&input, 0, SizerFlag::Expand | SizerFlag::All, 2);
-    {
+    // Star has no enumerable catalog and therefore no Validate button. Its URL
+    // remains an ordinary setting; credential-bearing providers stay local to
+    // their widgets until validation succeeds.
+    if engine == crate::tts::engines::STAR {
         let app = app.clone();
-        let input = input.clone();
+        let input_for_update = input.clone();
         input.clone().on_text_updated(move |_| {
             write(
                 &mut app.config.borrow_mut().speech,
-                input.get_value().trim().to_string(),
+                input_for_update.get_value().trim().to_string(),
             );
-            // A voice list fetched under the old credentials is stale.
-            crate::tts::forget_voices(engine);
             app.save_config();
         });
     }
@@ -1161,5 +1272,23 @@ fn begin_scan(app: &Rc<App>, dialog: &Dialog, mode: ScanMode) {
             super::sync_fast_timer(app);
         }
         Err(message) => show_error(dialog, "Scan plugins", &message),
+    }
+}
+
+#[cfg(test)]
+mod speech_validation_tests {
+    use super::*;
+    use crate::secret::Secret;
+
+    #[test]
+    fn validation_commits_only_the_selected_provider() {
+        let mut saved = crate::config::SpeechConfig::default();
+        saved.google_api_key = Secret::new("old-google");
+        let mut draft = saved.clone();
+        draft.openai_api_key = Secret::new("new-openai");
+        draft.google_api_key = Secret::new("draft-google");
+        commit_validated_credentials(crate::tts::engines::OPENAI, &mut saved, &draft);
+        assert_eq!(saved.openai_api_key.as_str(), "new-openai");
+        assert_eq!(saved.google_api_key.as_str(), "old-google");
     }
 }

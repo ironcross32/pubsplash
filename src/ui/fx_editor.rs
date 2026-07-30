@@ -39,7 +39,7 @@ pub struct EditorWindow {
     host: Panel,
     plugin: std::sync::Arc<PluginInstance>,
     close_button: Button,
-    effect_id: usize,
+    effect_id: u64,
     target: ChainTarget,
     slot: usize,
 }
@@ -288,7 +288,7 @@ pub fn open_editor(
 }
 
 /// Closes and destroys one editor by effect id, snapshotting its state.
-fn close_editor(app: &Rc<App>, effect_id: usize) {
+fn close_editor(app: &Rc<App>, effect_id: u64) {
     let editor = {
         let mut editors = app.open_editors.borrow_mut();
         let pos = editors.iter().position(|e| e.effect_id == effect_id);
@@ -308,7 +308,7 @@ fn close_editor(app: &Rc<App>, effect_id: usize) {
 
 /// Closes every open editor (chain structural edit, or app exit).
 pub fn close_all(app: &Rc<App>) {
-    let ids: Vec<usize> = app
+    let ids: Vec<u64> = app
         .open_editors
         .borrow()
         .iter()
@@ -355,7 +355,7 @@ pub fn pump(app: &Rc<App>) {
             .take_editor_resize_request()
             .map(|(w, h)| (plugin.effect_id(), w, h))
     });
-    let size_requests: Vec<(usize, i32, i32)> = size_requests
+    let size_requests: Vec<(u64, i32, i32)> = size_requests
         .into_iter()
         .chain(vst3_size_requests)
         .collect();

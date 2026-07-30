@@ -7,7 +7,7 @@
 
 use crate::audio::convert::pcm16_to_engine;
 use crate::audio::mixer::SAMPLE_RATE;
-use crate::config::SpeechConfig;
+use crate::config::{SpeechConfig, TtsEngineSettings};
 use crate::tts::engine::{SpeechEngine, SynthRequest, TtsError, Voice};
 use crate::tts::net::{block_on, body_bytes, body_json, client, require};
 use crate::tts::ssml;
@@ -58,17 +58,7 @@ impl SpeechEngine for Azure {
         } else {
             &request.voice
         };
-        let body = ssml::document(
-            language_of(voice),
-            voice,
-            &request.text,
-            &format!(
-                r#"rate="{}" pitch="{}" volume="{}""#,
-                ssml::percent(request.rate_percent()),
-                ssml::percent(request.pitch.clamp(-50, 50)),
-                request.volume_percent()
-            ),
-        );
+        let body = request_ssml(request, voice);
 
         let bytes = block_on(async {
             let response = client()
@@ -101,6 +91,52 @@ impl SpeechEngine for Azure {
     }
 }
 
+fn request_ssml(request: &SynthRequest, voice: &str) -> String {
+    let prosody = format!(
+        r#"<prosody rate="{}" pitch="{}" volume="{}">{}</prosody>"#,
+        ssml::percent(request.rate_percent()),
+        ssml::percent(request.pitch.clamp(-50, 50)),
+        request.volume_percent(),
+        ssml::escape(&request.text)
+    );
+    let settings = match &request.provider_settings {
+        Some(TtsEngineSettings::Azure(settings)) => Some(settings),
+        _ => None,
+    };
+    let content = if let Some(settings) = settings {
+        let style = settings.style.trim();
+        let role = settings.role.trim();
+        if !style.is_empty() || !role.is_empty() {
+            let mut attributes = String::new();
+            if !style.is_empty() {
+                attributes.push_str(&format!(
+                    r#" style="{}" styledegree="{:.2}""#,
+                    ssml::escape(style),
+                    settings.style_degree.clamp(0.01, 2.0)
+                ));
+            }
+            if !role.is_empty() {
+                attributes.push_str(&format!(r#" role="{}""#, ssml::escape(role)));
+            }
+            format!(r#"<mstts:express-as{attributes}>{prosody}</mstts:express-as>"#)
+        } else {
+            prosody
+        }
+    } else {
+        prosody
+    };
+    format!(
+        concat!(
+            r#"<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" "#,
+            r#"xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="{}">"#,
+            r#"<voice name="{}">{}</voice></speak>"#
+        ),
+        ssml::escape(language_of(voice)),
+        ssml::escape(voice),
+        content
+    )
+}
+
 /// The locale embedded in an Azure voice name (`en-US-JennyNeural` → `en-US`).
 ///
 /// The document's `xml:lang` has to be a well-formed tag or the service
@@ -127,7 +163,28 @@ fn parse_voices(body: &serde_json::Value) -> Vec<Voice> {
             } else {
                 format!("{id} ({gender})")
             };
-            Some(Voice::new(id, label))
+            let mut voice = Voice::new(id, label);
+            voice.styles = entry
+                .get("StyleList")
+                .and_then(|value| value.as_array())
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            voice.roles = entry
+                .get("RolePlayList")
+                .and_then(|value| value.as_array())
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(voice)
         })
         .collect();
     voices.sort_by(|a, b| a.id.cmp(&b.id));
@@ -151,7 +208,7 @@ mod tests {
     #[test]
     fn voice_lists_are_parsed_and_sorted() {
         let body = serde_json::json!([
-            {"ShortName": "en-US-ZoeNeural", "Gender": "Female"},
+            {"ShortName": "en-US-ZoeNeural", "Gender": "Female", "StyleList": ["chat"], "RolePlayList": ["YoungAdultFemale"]},
             {"ShortName": "en-GB-RyanNeural"},
             {"Gender": "Male"}
         ]);
@@ -160,6 +217,28 @@ mod tests {
         assert_eq!(voices[0].id, "en-GB-RyanNeural");
         assert_eq!(voices[0].label, "en-GB-RyanNeural");
         assert_eq!(voices[1].label, "en-US-ZoeNeural (Female)");
+        assert_eq!(voices[1].styles, ["chat"]);
+        assert_eq!(voices[1].roles, ["YoungAdultFemale"]);
+    }
+
+    #[test]
+    fn expressive_ssml_is_escaped_and_clamped() {
+        let request = SynthRequest {
+            text: "hello <chat>".into(),
+            voice: "en-US-JennyNeural".into(),
+            rate: 0,
+            volume: 100,
+            pitch: 0,
+            provider_settings: Some(TtsEngineSettings::Azure(crate::config::AzureTtsSettings {
+                style: "cheerful".into(),
+                style_degree: 9.0,
+                role: "YoungAdultFemale".into(),
+            })),
+        };
+        let body = request_ssml(&request, &request.voice);
+        assert!(body.contains(r#"style="cheerful" styledegree="2.00""#));
+        assert!(body.contains(r#"role="YoungAdultFemale""#));
+        assert!(body.contains("hello &lt;chat&gt;"));
     }
 
     #[test]

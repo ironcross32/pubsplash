@@ -78,6 +78,41 @@ impl FxChain {
         }
     }
 
+    /// How many live plugins the chain holds.
+    pub fn len(&self) -> usize {
+        self.units.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.units.is_empty()
+    }
+
+    /// Carries each unit's fade state over from the chain this one replaces.
+    ///
+    /// A chain edit builds a whole new `FxChain`, and `FxUnit::new` starts every
+    /// unit at its endpoint — so deleting one plugin from a bus used to snap
+    /// every *other* plugin on it back to fully wet or fully dry, mid-fade,
+    /// with an audible click for something the user did not touch. Units are
+    /// matched by plugin identity, not by position, so a reorder or a removal
+    /// carries the survivors' state across regardless of where they land. A
+    /// unit with no counterpart is genuinely new and keeps its fresh state.
+    pub fn adopt_fades_from(&mut self, old: &FxChain) {
+        for unit in &mut self.units {
+            let Some(previous) = old
+                .units
+                .iter()
+                .find(|u| Arc::ptr_eq(&u.plugin, &unit.plugin))
+            else {
+                continue;
+            };
+            unit.wet = previous.wet;
+            for (target, source) in unit.last_wet.iter_mut().zip(&previous.last_wet) {
+                let n = target.len().min(source.len());
+                target[..n].copy_from_slice(&source[..n]);
+            }
+        }
+    }
+
     pub fn set_bypass(&mut self, slot: usize, bypass: bool) {
         if let Some(unit) = self.units.get_mut(slot) {
             unit.bypass = bypass;

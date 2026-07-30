@@ -625,6 +625,95 @@ impl SourceKindConfig {
     }
 }
 
+/// Provider-specific behavior for one text-to-speech source.
+///
+/// The outer `Option` on [`TtsSourceConfig`] distinguishes an older source,
+/// which still uses the legacy global model/engine/language settings, from a
+/// source saved by the per-source settings dialog.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "provider", content = "settings", rename_all = "snake_case")]
+pub enum TtsEngineSettings {
+    ElevenLabs(ElevenLabsTtsSettings),
+    OpenAi(OpenAiTtsSettings),
+    Azure(AzureTtsSettings),
+    Google(GoogleTtsSettings),
+    Polly(PollyTtsSettings),
+    Gtts(GttsTtsSettings),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct ElevenLabsTtsSettings {
+    /// Empty means let ElevenLabs choose its default model.
+    pub model: String,
+    /// ISO 639-1 language code; empty omits the request field.
+    pub language_code: String,
+    pub stability: Option<f64>,
+    pub similarity_boost: Option<f64>,
+    pub style: Option<f64>,
+    pub speaker_boost: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct OpenAiTtsSettings {
+    pub model: String,
+    /// Voice directions supported by GPT-4o mini TTS; empty is omitted.
+    pub instructions: String,
+}
+
+impl Default for OpenAiTtsSettings {
+    fn default() -> Self {
+        Self {
+            model: "gpt-4o-mini-tts".into(),
+            instructions: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AzureTtsSettings {
+    pub style: String,
+    /// Azure accepts 0.01..=2.0 when a style is selected.
+    pub style_degree: f64,
+    pub role: String,
+}
+
+impl Default for AzureTtsSettings {
+    fn default() -> Self {
+        Self {
+            style: String::new(),
+            style_degree: 1.0,
+            role: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct GoogleTtsSettings {
+    pub language_code: String,
+    pub effects_profile: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct PollyTtsSettings {
+    /// Empty omits Engine and lets Polly use `standard`.
+    pub engine: String,
+    pub language_code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct GttsTtsSettings {
+    /// The translate.google domain suffix, such as `co.uk`; empty means `com`.
+    pub tld: String,
+    /// None preserves the provider default, while Some selects normal/slow.
+    pub slow: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct TtsSourceConfig {
@@ -638,8 +727,10 @@ pub struct TtsSourceConfig {
     /// range — see `tts::engine::SynthRequest`.
     pub rate: i32,
     /// -50..=50, in whatever unit the engine uses. Engines without a pitch
-    /// control (SAPI, OpenAI, gTTS, Polly) ignore it.
+    /// control ignore it; Polly applies it only with its standard engine.
     pub pitch: i32,
+    /// Provider-specific voice behavior. `None` denotes a legacy source.
+    pub provider_settings: Option<TtsEngineSettings>,
     /// Whether synthesized speech is mixed into the outgoing stream.
     pub output_to_stream: bool,
 }
@@ -652,6 +743,7 @@ impl Default for TtsSourceConfig {
             volume: 100,
             rate: 0,
             pitch: 0,
+            provider_settings: None,
             output_to_stream: true,
         }
     }
@@ -659,23 +751,25 @@ impl Default for TtsSourceConfig {
 
 /// Credentials and limits shared by every text-to-speech source.
 ///
-/// These are global rather than per-source on purpose: an ElevenLabs key
-/// retyped into every scene's TTS source is a lot of typing for a screen-reader
-/// user, and a lot of copies of a secret. Sources carry only the engine choice,
-/// voice, and prosody.
+/// Credentials and endpoints are global so secrets are not repeated in every
+/// scene. The model, language, engine mode, and expressive settings live on
+/// each source; the three legacy fields remain as fallbacks for old configs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct SpeechConfig {
     pub openai_api_key: Secret,
     pub elevenlabs_api_key: Secret,
+    /// Legacy fallback for sources without per-source provider settings.
     pub elevenlabs_model: String,
     pub azure_key: Secret,
     pub azure_region: String,
     pub aws_access_key_id: String,
     pub aws_secret_access_key: Secret,
     pub aws_region: String,
+    /// Legacy fallback for sources without per-source provider settings.
     pub aws_engine: String,
     pub google_api_key: Secret,
+    /// Legacy fallback for sources without per-source provider settings.
     pub google_language_code: String,
     /// WebSocket URL of a Star coagulator, e.g. `ws://localhost:4567`.
     pub star_host: String,
@@ -1110,6 +1204,60 @@ mod tests {
                 .iter()
                 .any(|s| s.url == MAIN_SITE_URL)
         );
+    }
+
+    #[test]
+    fn legacy_tts_sources_load_without_provider_settings() {
+        let source: TtsSourceConfig = serde_json::from_str(
+            r#"{"engine":"elevenlabs","voice":"voice-id","volume":75,"rate":2,"pitch":0,"output_to_stream":true}"#,
+        )
+        .unwrap();
+        assert_eq!(source.engine, "elevenlabs");
+        assert_eq!(source.provider_settings, None);
+    }
+
+    #[test]
+    fn every_tts_provider_settings_variant_roundtrips() {
+        let settings = vec![
+            TtsEngineSettings::ElevenLabs(ElevenLabsTtsSettings {
+                model: "eleven_v3".into(),
+                language_code: "fr".into(),
+                stability: Some(0.4),
+                similarity_boost: Some(0.8),
+                style: Some(0.2),
+                speaker_boost: Some(true),
+            }),
+            TtsEngineSettings::OpenAi(OpenAiTtsSettings {
+                model: "gpt-4o-mini-tts".into(),
+                instructions: "warm".into(),
+            }),
+            TtsEngineSettings::Azure(AzureTtsSettings {
+                style: "cheerful".into(),
+                style_degree: 1.2,
+                role: "YoungAdultFemale".into(),
+            }),
+            TtsEngineSettings::Google(GoogleTtsSettings {
+                language_code: "de-DE".into(),
+                effects_profile: "headphone-class-device".into(),
+            }),
+            TtsEngineSettings::Polly(PollyTtsSettings {
+                engine: "neural".into(),
+                language_code: "en-GB".into(),
+            }),
+            TtsEngineSettings::Gtts(GttsTtsSettings {
+                tld: "co.uk".into(),
+                slow: Some(true),
+            }),
+        ];
+        for provider_settings in settings {
+            let source = TtsSourceConfig {
+                provider_settings: Some(provider_settings),
+                ..Default::default()
+            };
+            let json = serde_json::to_string(&source).unwrap();
+            let loaded: TtsSourceConfig = serde_json::from_str(&json).unwrap();
+            assert_eq!(loaded, source);
+        }
     }
 }
 

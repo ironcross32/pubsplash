@@ -2,11 +2,18 @@
 //! live instances (`App.fx`) in lockstep with `config.buses`, and pushing the
 //! resulting chains to the audio engine.
 //!
-//! Plugin instances are format-neutral `PluginInstance`s. The UI registry holds one Arc per
-//! live instance; the engine holds clones inside its chains. Because a plugin
-//! must be destroyed on the UI thread, removals move the Arc into
-//! `FxRuntime.retiring` and it is dropped only after the engine acknowledges
-//! the new bus set with `EngineEvent::BusesApplied`.
+//! Plugin instances are format-neutral `PluginInstance`s. The UI registry holds
+//! one Arc per live instance; the engine holds clones inside its chains.
+//! Replaced engine chains are returned through its retirement channel and
+//! reclaimed on the UI thread after `EngineEvent::BusesApplied`.
+//!
+//! Releasing the UI's own reference is deferred the same way, through
+//! [`orphan`]. Dropping the last one runs the plugin's teardown — arbitrary
+//! third-party code that commonly pumps the Windows message queue, re-entering
+//! wx handlers and, from there, this module. Doing that with `app.fx` mutably
+//! borrowed panics the `RefCell`, and wxdragon swallows the panic, so the only
+//! symptom is a chain edit that half happened. Every structural edit therefore
+//! moves the instances out first and lets the pump release them.
 
 use super::App;
 use crate::audio::fx_chain::{FxChain, FxUnit};
@@ -67,12 +74,8 @@ fn load_slot(app: &Rc<App>, slot: &FxSlotConfig) -> Result<Arc<PluginInstance>, 
         }
     };
     let instance = match info.format {
-        PluginFormat::Vst2 => {
-            Vst2Plugin::load(&info, slot).map(|plugin| PluginInstance::Vst2(Arc::new(plugin)))
-        }
-        PluginFormat::Vst3 => {
-            Vst3Plugin::load(&info, slot).map(|plugin| PluginInstance::Vst3(Arc::new(plugin)))
-        }
+        PluginFormat::Vst2 => Vst2Plugin::load(&info, slot).map(PluginInstance::Vst2),
+        PluginFormat::Vst3 => Vst3Plugin::load(&info, slot).map(PluginInstance::Vst3),
     };
     instance.map(Arc::new).map_err(|e| {
         log::error!("Failed to load plugin {}: {e}", info.path);
@@ -130,6 +133,21 @@ pub fn instantiate_all(app: &Rc<App>) -> Vec<SlotFailure> {
     failures
 }
 
+/// Where a config slot sits in the engine chain built from `instances`.
+///
+/// [`build_chain`] skips slots whose plugin is missing, so the two numberings
+/// are not the same one: with a not-installed plugin at slot 0, config slot 1
+/// is chain unit 0. Anything addressing a *unit* — `EngineCommand::SetFxBypass`
+/// is the only one — has to translate, or it acts on the wrong plugin.
+/// `None` means the slot has no live plugin and so no unit at all.
+///
+/// Generic only so it can be tested: a `PluginInstance` cannot be conjured up
+/// without a real plugin on disk, and all this reads is which slots are filled.
+fn chain_index<T>(instances: &[Option<T>], slot: usize) -> Option<usize> {
+    instances.get(slot)?.as_ref()?;
+    Some(instances[..slot].iter().flatten().count())
+}
+
 /// Builds an engine `FxChain` from the live instances and the config's
 /// bypass flags. Skips `None` (missing) slots.
 fn build_chain(instances: &[Option<Arc<PluginInstance>>], slots: &[FxSlotConfig]) -> FxChain {
@@ -145,24 +163,39 @@ fn build_chain(instances: &[Option<Arc<PluginInstance>>], slots: &[FxSlotConfig]
     FxChain::new(units)
 }
 
-/// Builds the current bus set and master chain (with live plugins), ready to
-/// hand to the engine.
-pub fn routing_specs(app: &Rc<App>) -> (Vec<BusSpec>, FxChain) {
+/// Builds the current bus set (with live plugins), ready to hand to the engine.
+pub fn bus_specs(app: &Rc<App>) -> Vec<BusSpec> {
     let monitors = app.run.borrow().monitors.clone();
     let config = app.config.borrow();
     let fx = app.fx.borrow();
-    let mut specs = Vec::new();
-    for (i, bus) in config.buses.buses.iter().enumerate() {
-        let instances = fx.buses.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
-        specs.push(BusSpec {
+    config
+        .buses
+        .buses
+        .iter()
+        .enumerate()
+        .map(|(i, bus)| BusSpec {
             volume: bus.volume,
             muted: bus.muted,
-            chain: build_chain(instances, &bus.chain),
+            chain: build_chain(
+                fx.buses.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+                &bus.chain,
+            ),
             monitor: monitors.bus(i),
-        });
-    }
-    let master = build_chain(&fx.master, &config.buses.master_chain);
-    (specs, master)
+        })
+        .collect()
+}
+
+/// Builds the current master chain (with live plugins).
+pub fn master_chain_spec(app: &Rc<App>) -> FxChain {
+    let config = app.config.borrow();
+    let fx = app.fx.borrow();
+    build_chain(&fx.master, &config.buses.master_chain)
+}
+
+/// Builds the current bus set and master chain, for the callers that change
+/// both at once.
+pub fn routing_specs(app: &Rc<App>) -> (Vec<BusSpec>, FxChain) {
+    (bus_specs(app), master_chain_spec(app))
 }
 
 /// Pushes the current bus set and master chain (with live plugins) to the
@@ -179,10 +212,50 @@ pub fn sync_engine_buses(app: &Rc<App>) {
         })));
 }
 
+/// Pushes just the chain the edit touched.
+///
+/// Rebuilding *every* chain for a one-plugin edit is not free and not
+/// harmless: each replaced chain allocates fresh scratch, returns the old one
+/// through the retirement channel, and — because `FxUnit::new` resets the
+/// wet/dry gain — snaps every plugin that happened to be mid-fade back to its
+/// endpoint. Editing a plugin on one bus should not audibly disturb the master.
+fn sync_engine_chain(app: &Rc<App>, target: ChainTarget) {
+    let update = match target {
+        ChainTarget::Bus(_) => RoutingUpdate {
+            buses: Some(bus_specs(app)),
+            ..Default::default()
+        },
+        ChainTarget::Master => RoutingUpdate {
+            master_chain: Some(master_chain_spec(app)),
+            ..Default::default()
+        },
+    };
+    app.engine.send(EngineCommand::SetRouting(Box::new(update)));
+}
+
 // --- Structural updates that keep `App.fx` aligned with `config.buses` ---
 
 pub fn on_bus_added(app: &Rc<App>) {
     app.fx.borrow_mut().buses.push(Vec::new());
+}
+
+/// Parks instances taken out of the registry so the pump releases them, rather
+/// than dropping them here. See the module docs.
+fn orphan(app: &Rc<App>, instances: impl IntoIterator<Item = Option<Arc<PluginInstance>>>) {
+    app.orphaned_plugins
+        .borrow_mut()
+        .extend(instances.into_iter().flatten());
+}
+
+/// Releases every parked instance. Called from the pump, where nothing is
+/// borrowed, so a plugin whose teardown re-enters the UI finds it in one piece.
+pub fn release_orphans(app: &Rc<App>) {
+    let orphans = std::mem::take(&mut *app.orphaned_plugins.borrow_mut());
+    if orphans.is_empty() {
+        return;
+    }
+    log::info!("Releasing {} retired plugin instances", orphans.len());
+    drop(orphans);
 }
 
 pub fn on_bus_removed(app: &Rc<App>, index: usize) {
@@ -191,11 +264,11 @@ pub fn on_bus_removed(app: &Rc<App>, index: usize) {
     // Monitoring is held by bus index too, so the same shift would leave it
     // pointing at a bus the user never chose.
     app.clear_bus_monitors();
-    let mut fx = app.fx.borrow_mut();
-    if index < fx.buses.len() {
-        let removed = fx.buses.remove(index);
-        fx.retiring.extend(removed.into_iter().flatten());
-    }
+    let removed = {
+        let mut fx = app.fx.borrow_mut();
+        (index < fx.buses.len()).then(|| fx.buses.remove(index))
+    };
+    orphan(app, removed.into_iter().flatten());
 }
 
 pub fn on_bus_moved(app: &Rc<App>, a: usize, b: usize) {
@@ -260,7 +333,7 @@ pub fn add_plugin(app: &Rc<App>, target: ChainTarget, plugin: PluginRef) -> Resu
     if let Some(list) = instances_mut(&mut app.fx.borrow_mut(), target) {
         list.push(loaded.ok());
     }
-    after_chain_edit(app);
+    after_chain_edit(app, target);
     outcome
 }
 
@@ -272,17 +345,14 @@ pub fn remove_plugin(app: &Rc<App>, target: ChainTarget, slot: usize) {
             slots.remove(slot);
         }
     });
-    {
+    let removed = {
         let mut fx = app.fx.borrow_mut();
-        if let Some(list) = instances_mut(&mut fx, target) {
-            if slot < list.len() {
-                if let Some(instance) = list.remove(slot) {
-                    fx.retiring.push(instance);
-                }
-            }
-        }
-    }
-    after_chain_edit(app);
+        instances_mut(&mut fx, target)
+            .filter(|list| slot < list.len())
+            .map(|list| list.remove(slot))
+    };
+    orphan(app, removed);
+    after_chain_edit(app, target);
 }
 
 pub fn move_plugin(app: &Rc<App>, target: ChainTarget, slot: usize, towards_start: bool) -> bool {
@@ -308,7 +378,7 @@ pub fn move_plugin(app: &Rc<App>, target: ChainTarget, slot: usize, towards_star
         if let Some(list) = instances_mut(&mut app.fx.borrow_mut(), target) {
             list.swap(slot, other);
         }
-        after_chain_edit(app);
+        after_chain_edit(app, target);
     }
     moved
 }
@@ -324,7 +394,18 @@ pub fn set_bypass(app: &Rc<App>, target: ChainTarget, slot: usize, bypass: bool)
         ChainTarget::Bus(i) => Some(i),
         ChainTarget::Master => None,
     };
-    if let Some(instance) = instance_at(app, target, slot) {
+    // The engine addresses chain *units*, and a slot whose plugin is missing
+    // has none — so there is nothing to tell the engine, and the config flag
+    // (which is what the list row shows) is the whole change.
+    let unit = {
+        let fx = app.fx.borrow();
+        let instances = match target {
+            ChainTarget::Bus(i) => fx.buses.get(i).map(|v| v.as_slice()),
+            ChainTarget::Master => Some(fx.master.as_slice()),
+        };
+        instances.and_then(|list| chain_index(list, slot))
+    };
+    if let (Some(slot), Some(instance)) = (unit, instance_at(app, target, slot)) {
         // Order matters. Un-bypassing must start the plugin before the engine
         // is told to bring it back, or the first blocks fail; bypassing tells
         // the engine first so the chain's fade-out runs while the plugin is
@@ -338,9 +419,6 @@ pub fn set_bypass(app: &Rc<App>, target: ChainTarget, slot: usize, bypass: bool)
             app.engine
                 .send(EngineCommand::SetFxBypass { bus, slot, bypass });
         }
-    } else {
-        app.engine
-            .send(EngineCommand::SetFxBypass { bus, slot, bypass });
     }
     app.save_config();
 }
@@ -391,19 +469,19 @@ pub fn snapshot_chain(app: &Rc<App>, target: ChainTarget) {
 /// saved or imported chain.
 pub fn replace_chain(app: &Rc<App>, target: ChainTarget, slots: Vec<FxSlotConfig>) {
     super::fx_editor::close_all(app);
-    {
+    let old = {
         let mut fx = app.fx.borrow_mut();
-        if let Some(list) = instances_mut(&mut fx, target) {
-            let old = std::mem::take(list);
-            fx.retiring.extend(old.into_iter().flatten());
-        }
-    }
+        instances_mut(&mut fx, target)
+            .map(std::mem::take)
+            .unwrap_or_default()
+    };
+    orphan(app, old);
     let instances: Vec<_> = slots.iter().map(|slot| load_slot(app, slot).ok()).collect();
     with_slots_mut(app, target, |c| *c = slots);
     if let Some(list) = instances_mut(&mut app.fx.borrow_mut(), target) {
         *list = instances;
     }
-    after_chain_edit(app);
+    after_chain_edit(app, target);
 }
 
 /// Reads the live instance for a slot, if loaded.
@@ -416,9 +494,9 @@ pub fn instance_at(app: &Rc<App>, target: ChainTarget, slot: usize) -> Option<Ar
     list.and_then(|l| l.get(slot)).and_then(|o| o.clone())
 }
 
-fn after_chain_edit(app: &Rc<App>) {
+fn after_chain_edit(app: &Rc<App>, target: ChainTarget) {
     app.save_config();
-    sync_engine_buses(app);
+    sync_engine_chain(app, target);
 }
 
 /// What a chain entry's live instance is doing, for its list row.
@@ -485,5 +563,44 @@ pub fn with_slots<R>(
     match target {
         ChainTarget::Bus(i) => config.buses.buses.get(i).map(|b| f(&b.chain)),
         ChainTarget::Master => Some(f(&config.buses.master_chain)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Filled slots as `Some`, missing ones as `None` — the only thing
+    /// `chain_index` looks at.
+    fn slots(present: [bool; 4]) -> Vec<Option<()>> {
+        present.iter().map(|p| p.then_some(())).collect()
+    }
+
+    #[test]
+    fn every_slot_is_its_own_unit_when_nothing_is_missing() {
+        let list = slots([true; 4]);
+        for slot in 0..4 {
+            assert_eq!(chain_index(&list, slot), Some(slot));
+        }
+    }
+
+    #[test]
+    fn a_missing_plugin_shifts_every_slot_after_it() {
+        // A not-installed plugin at slot 0 and another at slot 2: the engine
+        // chain holds only the two live ones, as units 0 and 1. Sending the
+        // config index here is what bypassed the wrong plugin.
+        let list = slots([false, true, false, true]);
+        assert_eq!(chain_index(&list, 1), Some(0));
+        assert_eq!(chain_index(&list, 3), Some(1));
+    }
+
+    #[test]
+    fn a_slot_with_no_plugin_has_no_unit() {
+        let list = slots([false, true, false, true]);
+        assert_eq!(chain_index(&list, 0), None);
+        assert_eq!(chain_index(&list, 2), None);
+        // And neither has a slot past the end.
+        assert_eq!(chain_index(&list, 9), None);
+        assert_eq!(chain_index::<()>(&[], 0), None);
     }
 }

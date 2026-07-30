@@ -343,16 +343,10 @@ file = "src/ui/preferences.rs"
 message = "Deletes Pubsplash's copy of the sound pack chosen in the list, after asking you to confirm. The cues go back to the built-in default pack. The dot pspack file you imported from is left alone. This button is unavailable while Built-in default is chosen."
 
 [[control]]
-id = "dialog.preferences.speech.awsEngine"
-label = "Polly engine"
-file = "src/ui/preferences.rs"
-message = "Which Polly voice engine to use. Neural sounds better; standard is cheaper and offers different voices."
-
-[[control]]
 id = "dialog.preferences.speech.awsId"
 label = "AWS access key ID"
 file = "src/ui/preferences.rs"
-message = "Your AWS access key ID, for Polly."
+message = "Enter a draft AWS access key ID together with the secret and region, then press Validate. Both credentials are saved only after Polly discovery succeeds."
 
 [[control]]
 id = "dialog.preferences.speech.awsRegion"
@@ -370,7 +364,7 @@ message = "Your AWS secret access key. It is encrypted for your Windows account 
 id = "dialog.preferences.speech.azureKey"
 label = "Azure subscription key"
 file = "src/ui/preferences.rs"
-message = "Type or paste your Azure Speech subscription key. It is encrypted for your Windows account before being saved."
+message = "Type or paste a draft Azure Speech key and region, then press Validate. Both are saved only after Azure returns its voice catalog successfully."
 
 [[control]]
 id = "dialog.preferences.speech.azureRegion"
@@ -382,13 +376,7 @@ message = "The Azure region your Speech resource lives in, for example eastus. A
 id = "dialog.preferences.speech.elevenlabsKey"
 label = "ElevenLabs API key"
 file = "src/ui/preferences.rs"
-message = "Type or paste your ElevenLabs API key. It is encrypted for your Windows account before being saved."
-
-[[control]]
-id = "dialog.preferences.speech.elevenlabsModel"
-label = "ElevenLabs model"
-file = "src/ui/preferences.rs"
-message = "The ElevenLabs model id to synthesize with, for example eleven multilingual v2. Leave it as it is if you are not sure."
+message = "Type or paste a draft ElevenLabs API key, then press Validate. Failed validation or closing Preferences keeps the last validated key and cached catalog."
 
 [[control]]
 id = "dialog.preferences.speech.engine"
@@ -400,13 +388,7 @@ message = "Choose which speech engine's settings to fill in. Everything below th
 id = "dialog.preferences.speech.googleKey"
 label = "Google Cloud API key"
 file = "src/ui/preferences.rs"
-message = "Type or paste your Google Cloud Text to Speech API key. It is encrypted for your Windows account before being saved."
-
-[[control]]
-id = "dialog.preferences.speech.googleLanguage"
-label = "Google Cloud language code"
-file = "src/ui/preferences.rs"
-message = "The default language code for Google Cloud voices, for example en dash US. Choosing a voice overrides this."
+message = "Type or paste a draft Google Cloud Text to Speech API key, then press Validate. It is saved only after Google returns its voice catalog successfully."
 
 [[control]]
 id = "dialog.preferences.speech.maxChars"
@@ -424,7 +406,7 @@ message = "The shortest gap between two requests to a speech service, in millise
 id = "dialog.preferences.speech.openaiKey"
 label = "OpenAI API key"
 file = "src/ui/preferences.rs"
-message = "Type or paste your OpenAI API key. It is encrypted for your Windows account before being saved."
+message = "Type or paste a draft OpenAI API key, then press Validate. The saved key and voice catalog change only after OpenAI accepts the draft; closing Preferences or a failed validation keeps the last validated key."
 
 [[control]]
 id = "dialog.preferences.speech.starHost"
@@ -559,22 +541,118 @@ file = "src/ui/stream_info_dialog.rs"
 message = "Type the title of your stream here."
 
 [[control]]
+id = "dialog.ttsSource.azureDegree"
+label = "Azure style intensity"
+file = "src/ui/scenes.rs"
+message = "Set how strongly Azure applies the selected speaking style. One is the voice's normal intensity; the allowed range is zero point zero one through two. This control is unavailable while Default speaking style is selected."
+
+[[control]]
+id = "dialog.ttsSource.azureRole"
+label = "Azure speaking role"
+file = "src/ui/scenes.rs"
+message = "Choose an optional character role supported by the selected Azure voice. Default speaking role omits the role and leaves the voice unchanged."
+
+[[control]]
+id = "dialog.ttsSource.azureStyle"
+label = "Azure speaking style"
+file = "src/ui/scenes.rs"
+message = "Choose an expressive style reported by the selected Azure voice, such as cheerful or chat. Default speaking style omits the style setting."
+
+[[control]]
+id = "dialog.ttsSource.elevenBoost"
+label = "ElevenLabs speaker boost"
+file = "src/ui/scenes.rs"
+message = "Choose whether ElevenLabs speaker boost is left at the provider default, explicitly turned on, or explicitly turned off. This setting is unavailable for Eleven version 3."
+
+[[control]]
+id = "dialog.ttsSource.elevenLanguage"
+label = "ElevenLabs language code"
+file = "src/ui/scenes.rs"
+message = "Optionally enter a two-letter language code, such as en or fr, to enforce pronunciation for models that support it. Leave blank to omit the parameter."
+
+[[control]]
+id = "dialog.ttsSource.elevenModel"
+label = "ElevenLabs model"
+file = "src/ui/scenes.rs"
+message = "Choose an ElevenLabs model discovered with your validated credentials. A saved model that is no longer reported remains available as an unavailable legacy choice."
+
+[[control]]
+id = "dialog.ttsSource.elevenSimilarity"
+label = "ElevenLabs similarity boost"
+file = "src/ui/scenes.rs"
+message = "When Override similarity boost is checked, set how closely the output should resemble the original voice, from zero through one. It is unavailable for Eleven version 3."
+
+[[control]]
+id = "dialog.ttsSource.elevenStability"
+label = "ElevenLabs stability"
+file = "src/ui/scenes.rs"
+message = "When Override stability is checked, set consistency from zero through one. Lower values are more expressive and variable; higher values are more consistent."
+
+[[control]]
+id = "dialog.ttsSource.elevenStyle"
+label = "ElevenLabs style exaggeration"
+file = "src/ui/scenes.rs"
+message = "When Override style exaggeration is checked, set the strength of the voice's learned style from zero through one. Leave the override unchecked to omit this parameter."
+
+[[control]]
 id = "dialog.ttsSource.engine"
 label = "TTS engine choice"
 file = "src/ui/scenes.rs"
 message = "Use arrow keys and first letter navigation to select a TTS engine. Arrow through as fast as you like: the voice list is reloaded a moment after you stop, or straight away when you tab out of this box, so passing over engines on the way costs nothing."
 
 [[control]]
-id = "dialog.ttsSource.fetchVoices"
-label = "Get available voices button"
+id = "dialog.ttsSource.googleEffect"
+label = "Google Cloud audio effects profile"
 file = "src/ui/scenes.rs"
-message = "Press to download the list of voices this engine offers. Engines that need an API key will report an error here if the key is missing or wrong. The voice list is remembered until you change the key or restart."
+message = "Optionally optimize Google Cloud speech for a playback device, such as headphones, a telephone, a Bluetooth speaker, a car, or a home entertainment system. No effects profile omits the parameter."
+
+[[control]]
+id = "dialog.ttsSource.googleLanguage"
+label = "Google Cloud language code"
+file = "src/ui/scenes.rs"
+message = "Enter a Google Cloud language code such as en dash US. Leave blank to infer the language from the selected voice name."
+
+[[control]]
+id = "dialog.ttsSource.gttsSpeed"
+label = "Google Translate speed mode"
+file = "src/ui/scenes.rs"
+message = "Choose the Google Translate endpoint's normal or slow speech mode. Provider default omits your preference and currently behaves as normal speed."
+
+[[control]]
+id = "dialog.ttsSource.gttsTld"
+label = "Google Translate accent domain"
+file = "src/ui/scenes.rs"
+message = "Enter the Google domain suffix used to select a regional accent, such as co.uk or com.au. Leave blank for com. Invalid host characters are rejected before a request is sent."
+
+[[control]]
+id = "dialog.ttsSource.openaiInstructions"
+label = "OpenAI voice instructions"
+file = "src/ui/scenes.rs"
+message = "Describe how the OpenAI voice should speak, such as warm, calm, or energetic. Instructions are sent only with GPT-4o mini TTS models and omitted for TTS 1 models."
+
+[[control]]
+id = "dialog.ttsSource.openaiModel"
+label = "OpenAI speech model"
+file = "src/ui/scenes.rs"
+message = "Choose an OpenAI speech model discovered with your validated credentials. Saved legacy models remain selectable when unavailable."
 
 [[control]]
 id = "dialog.ttsSource.pitch"
 label = "TTS voice pitch slider"
 file = "src/ui/scenes.rs"
 message = "Use arrows, page up, page down, home and end to set the pitch of this voice. Only Microsoft Edge, Azure, and Google Cloud support pitch; for other engines this control is announced as unsupported and has no effect."
+
+[[control]]
+id = "dialog.ttsSource.pollyEngine"
+label = "Polly engine"
+file = "src/ui/scenes.rs"
+message = "Choose the AWS Polly synthesis engine for this source: standard, neural, long-form, or generative. Provider default omits the parameter and uses standard. Pitch is available only with standard."
+
+[[control]]
+id = "dialog.ttsSource.pollyLanguage"
+label = "Polly language code"
+file = "src/ui/scenes.rs"
+message = "Optionally enter the Polly language code for a bilingual voice. Leave blank to let the selected voice determine its language."
 
 [[control]]
 id = "dialog.ttsSource.preview"
@@ -869,3 +947,9 @@ id = "dialog.soundEventsSource.packPath"
 label = "Sound pack path input"
 file = "src/ui/scenes.rs"
 message = "The sound pack this source plays from. Type the full path to a compiled dot pspack file, or to a sound pack project folder if you are still working on one, or use the browse button. Until this is filled in, the source stays silent."
+
+[[stale]]
+id = "dialog.ttsSource.fetchVoices"
+label = "Get available voices button"
+file = "src/ui/scenes.rs"
+message = "Voice and model lists refresh automatically at startup and after successful credential validation. Pubsplash keeps the last successful cached list if a provider cannot be reached."

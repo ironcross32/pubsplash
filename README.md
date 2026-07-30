@@ -204,6 +204,8 @@ Pubsplash stores its configuration data in `C:\Users\<Your-user-name>\AppData\Lo
 
 Logs are written to `%LOCALAPPDATA%\pubsplash\logs\`. The log level can be changed in the app, or forced with an environment variable such as `PUBSPLASH_LOG_TRACE=1` (which overrides the in-app setting). Levels: `off`, `error`, `warn`, `info`, `debug`, `trace`.
 
+Pubsplash runs VST plugins inside its own process, so a badly behaved plugin can bring the whole app down without any warning it could otherwise print. If that happens, the last lines of the log name the plugin file that faulted, and a crash dump is written to `%LOCALAPPDATA%\pubsplash\crashes\`. Both are worth attaching to a bug report; the dump is only useful in a debugger and can be deleted freely.
+
 ## Building from source
 
 Prerequisites: Rust (stable), Visual Studio 2019+ with the Windows SDK, CMake, and Ninja. Then:

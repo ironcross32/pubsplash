@@ -10,13 +10,33 @@
 
 use crate::audio::convert::decode_wav;
 use crate::audio::mixer::SAMPLE_RATE;
-use crate::config::SpeechConfig;
+use crate::config::{SpeechConfig, TtsEngineSettings};
 use crate::tts::engine::{SpeechEngine, SynthRequest, TtsError, Voice};
 use crate::tts::net::{block_on, body_json, client, require};
 
 const API_BASE: &str = "https://texttospeech.googleapis.com/v1";
 const SERVICE: &str = "Google Cloud";
 const DEFAULT_VOICE: &str = "en-US-Wavenet-C";
+
+pub const EFFECTS_PROFILES: &[(&str, &str)] = &[
+    ("wearable-class-device", "Wearable device"),
+    ("handset-class-device", "Handset"),
+    ("headphone-class-device", "Headphones"),
+    (
+        "small-bluetooth-speaker-class-device",
+        "Small Bluetooth speaker",
+    ),
+    (
+        "medium-bluetooth-speaker-class-device",
+        "Medium Bluetooth speaker",
+    ),
+    (
+        "large-home-entertainment-class-device",
+        "Home entertainment system",
+    ),
+    ("large-automotive-class-device", "Automotive system"),
+    ("telephony-class-application", "Telephone audio"),
+];
 
 pub struct GoogleCloud {
     api_key: String,
@@ -54,18 +74,7 @@ impl SpeechEngine for GoogleCloud {
             &request.voice
         };
 
-        let body = serde_json::json!({
-            "input": { "text": request.text },
-            "voice": { "languageCode": language_of(voice, &self.language_code), "name": voice },
-            "audioConfig": {
-                "audioEncoding": "LINEAR16",
-                "sampleRateHertz": SAMPLE_RATE,
-                // Documented ranges; outside them the request is rejected.
-                "speakingRate": request.rate_multiplier().clamp(0.25, 4.0),
-                "pitch": (request.pitch as f64 / 2.5).clamp(-20.0, 20.0),
-                "volumeGainDb": volume_gain_db(request.volume_percent()),
-            }
-        });
+        let body = request_body(request, voice, &self.language_code);
 
         let response: serde_json::Value = block_on(async {
             let response = client()
@@ -101,6 +110,39 @@ impl SpeechEngine for GoogleCloud {
         })?;
         Ok(parse_voices(&body))
     }
+}
+
+fn request_body(request: &SynthRequest, voice: &str, legacy_language: &str) -> serde_json::Value {
+    let selected = match &request.provider_settings {
+        Some(TtsEngineSettings::Google(settings)) => Some(settings),
+        _ => None,
+    };
+    let configured_language = match (&request.provider_settings, selected) {
+        (None, _) => legacy_language,
+        (_, Some(settings)) if !settings.language_code.trim().is_empty() => {
+            settings.language_code.trim()
+        }
+        _ => "en-US",
+    };
+    let mut body = serde_json::json!({
+        "input": { "text": request.text },
+        "voice": { "languageCode": language_of(voice, configured_language), "name": voice },
+        "audioConfig": {
+            "audioEncoding": "LINEAR16",
+            "sampleRateHertz": SAMPLE_RATE,
+            // Documented ranges; outside them the request is rejected.
+            "speakingRate": request.rate_multiplier().clamp(0.25, 4.0),
+            "pitch": (request.pitch as f64 / 2.5).clamp(-20.0, 20.0),
+            "volumeGainDb": volume_gain_db(request.volume_percent()),
+        }
+    });
+    if let Some(profile) = selected
+        .map(|settings| settings.effects_profile.trim())
+        .filter(|profile| !profile.is_empty())
+    {
+        body["audioConfig"]["effectsProfileId"] = serde_json::json!([profile]);
+    }
+    body
 }
 
 /// `volumeGainDb` is a gain, not a percentage: 0 is unity and the field is
@@ -190,6 +232,29 @@ mod tests {
         let mut config = SpeechConfig::default();
         config.google_language_code = "   ".into();
         assert_eq!(GoogleCloud::new(&config).language_code, "en-US");
+    }
+
+    #[test]
+    fn effects_profile_and_language_override_are_sent_per_source() {
+        let request = SynthRequest {
+            text: "hello".into(),
+            voice: "odd".into(),
+            rate: 0,
+            volume: 100,
+            pitch: 0,
+            provider_settings: Some(TtsEngineSettings::Google(
+                crate::config::GoogleTtsSettings {
+                    language_code: "de-DE".into(),
+                    effects_profile: "headphone-class-device".into(),
+                },
+            )),
+        };
+        let body = request_body(&request, "odd", "en-US");
+        assert_eq!(body["voice"]["languageCode"], "de-DE");
+        assert_eq!(
+            body["audioConfig"]["effectsProfileId"][0],
+            "headphone-class-device"
+        );
     }
 
     #[test]

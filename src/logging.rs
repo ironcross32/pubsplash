@@ -32,6 +32,22 @@ pub fn env_override() -> Option<LevelFilter> {
         .and_then(|level| parse_level(level))
 }
 
+/// The log spec for `level`.
+///
+/// `vst3_host` is pinned a notch more verbose than everything else, never below
+/// debug. Its module loader logs the `InitDll`/`ExitDll`/`FreeLibrary` steps at
+/// debug, and those are the only breadcrumbs there are for a plugin that faults
+/// the whole process while being torn down — at info the log just stops. The
+/// cost is a burst of lines per plugin load, once, at startup.
+fn spec(level: LevelFilter) -> LogSpecification {
+    let mut builder = LogSpecification::builder();
+    builder.default(level);
+    if level != LevelFilter::Off {
+        builder.module("vst3_host", level.max(LevelFilter::Debug));
+    }
+    builder.build()
+}
+
 pub struct LogHandle {
     handle: LoggerHandle,
     /// True when an env var pinned the level; UI changes are ignored then.
@@ -47,8 +63,7 @@ impl LogHandle {
             return;
         }
         if let Some(filter) = parse_level(level) {
-            self.handle
-                .set_new_spec(LogSpecification::builder().default(filter).build());
+            self.handle.set_new_spec(spec(filter));
         } else {
             log::warn!("Unknown log level {level:?}");
         }
@@ -105,7 +120,7 @@ pub fn init(configured_level: &str) -> Option<LogHandle> {
         .or_else(|| parse_level(configured_level))
         .unwrap_or(LevelFilter::Info);
 
-    let logger = Logger::with(LogSpecification::builder().default(level).build())
+    let logger = Logger::with(spec(level))
         .log_to_file(
             FileSpec::default()
                 .directory(crate::config::config_dir().join("logs"))

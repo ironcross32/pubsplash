@@ -6,7 +6,7 @@ use super::{
     WXK_LEFT, WXK_PAGEDOWN, WXK_PAGEUP, WXK_RIGHT, WXK_UP,
 };
 use crate::audio::EngineCommand;
-use crate::config::max_volume;
+use crate::config::{SourceConfig, max_volume};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use wxdragon::event::{EventType, WxEvtHandler};
@@ -212,7 +212,12 @@ fn neighbouring_scene(names: &[String], active: &str, forward: bool) -> Option<S
 pub fn cycle_scene(app: &Rc<App>, forward: bool) {
     let next = {
         let config = app.config.borrow();
-        let names: Vec<String> = config.scenes.scenes.iter().map(|s| s.name.clone()).collect();
+        let names: Vec<String> = config
+            .scenes
+            .scenes
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
         neighbouring_scene(&names, &config.scenes.active_scene, forward)
     };
     if let Some(name) = next {
@@ -1090,13 +1095,15 @@ fn apply_volume(app: &Rc<App>, target: StripTarget, value: u32) {
 }
 
 /// Used by the scenes tab after edits that affect the mixer.
-pub fn on_sources_changed(app: &Rc<App>) {
+pub fn on_sources_changed(app: &Rc<App>, previous_sources: Option<&[SourceConfig]>) {
     // Resolve applications first: both the engine's pid and the strip names
     // come out of that cache.
     app.refresh_app_processes();
-    // Sources may have been added, removed, or reordered; monitoring is held
-    // by position, so keeping the flags would monitor the wrong strip.
-    app.clear_source_monitors();
+    if let Some(previous_sources) = previous_sources {
+        app.remap_source_monitors(previous_sources);
+    } else {
+        app.clear_source_monitors();
+    }
     app.sync_engine_sources();
     rebuild_mixer(app);
     refresh_scene_list(app);
@@ -1139,8 +1146,14 @@ mod tests {
     // rather than re-selecting it (which would rebuild the mixer and move focus).
     #[test]
     fn scene_cycling_does_nothing_without_a_second_scene() {
-        assert_eq!(neighbouring_scene(&scenes(&["Default"]), "Default", true), None);
-        assert_eq!(neighbouring_scene(&scenes(&["Default"]), "Default", false), None);
+        assert_eq!(
+            neighbouring_scene(&scenes(&["Default"]), "Default", true),
+            None
+        );
+        assert_eq!(
+            neighbouring_scene(&scenes(&["Default"]), "Default", false),
+            None
+        );
         assert_eq!(neighbouring_scene(&[], "Default", true), None);
     }
 

@@ -4,13 +4,36 @@
 
 ### Additions
 
+- Added validation for OpenAI, ElevenLabs, Azure, AWS Polly, and Google Cloud credentials before they are saved.
+
+
+- Added per-source voice settings for ElevenLabs, OpenAI, Azure, Google Cloud, AWS Polly, and Google Translate.
+
 ### Fixes
 
+- Preserved source monitoring when sources are added, edited, reordered, or removed.
+- Fixed ElevenLabs speech-rate requests at the supported speed limits.
+- Applied rate, volume, and supported pitch settings to AWS Polly speech.
+- Added accessible names to per-source speech engine controls.
+- Prevented removed bus and master effects from being destroyed on the audio thread.
+- Fixed a crash when removing an effect from a bus or the master chain. Plugin DLLs are now kept loaded for the session, so a plugin that leaves work running behind it can no longer be unloaded out from under itself, and a plugin module's factory is held for as long as the app runs — shell plugins such as Waves' WaveShell keep their per-process state on it and crashed while shutting down without it.
+- Fixed VST2 effects being asked for their state, or having their interface closed, while the audio engine was still processing them — the two are now serialized, and the effect is faded out of the signal path first, as VST3 effects already were.
+- Stopped bypassing the wrong effect when an earlier effect in the same chain is missing or failed to load.
+- Editing an effect on one bus no longer rebuilds the master chain and the other buses, and effects that are fading in or out are no longer snapped back when an unrelated effect on the same bus is added or removed.
+- Fixed an effect's own interface window, or a resize it requests, being matched to a different effect after the original was removed.
+
 ### Changes
+
+- Added crash reporting: if Pubsplash is brought down by a hosted plugin, the log now names the plugin file responsible and a crash dump is written to `%LOCALAPPDATA%\pubsplash\crashes\`.
+- Added a persistent TTS catalog with automatic startup refresh and stale-result retention.
+- Replaced OpenAI and ElevenLabs model fields and Polly engine selection with catalog-backed dropdowns.
+- Removed manual voice fetching in favor of automatically refreshed voice dropdowns.
+
 
 ## 0.1.2
 
 ### Additions
+
 
 - Added streaming service profiles with Audiopub and direct Icecast service types.
 - Added Icecast server, port, mount point, username, and password settings for direct source streaming.
@@ -72,6 +95,7 @@
 
 ### Changes
 
+
 - Repaired mangled text encoding across the source and documentation. Em and en dashes had been round-tripped through Windows-1252 up to three times and were showing up as runs of six to nine accented Latin and currency characters in `README.md`, `changelog.md`, and several source comments; they are proper dashes again. Byte-order marks were also removed from `README.md`, `changelog.md`, `help.toml`, and `src/bin/soundpack.rs`, so every file in the repository is now plain UTF-8 without a BOM.
 
 - Removed the status bar. Screen readers could no longer find it, and everything it showed is on the Home tab's stream overview list, which is fully keyboard reachable.
@@ -96,6 +120,7 @@
 ## 0.1.1
 
 ### Additions
+
 
 - Added streaming service profiles with Audiopub and direct Icecast service types.
 - Added Icecast server, port, mount point, username, and password settings for direct source streaming.
@@ -187,6 +212,7 @@
 - Screen readers now announce proper names for controls that previously read as bare widgets: the "Send speech to the stream" checkbox, mixer volume sliders and mute buttons (which include the source name and update on toggle), the scene/source/site lists, the chat list and input box, the stream overview, and the email/password fields.
 
 ### Changes
+
 
 - Renamed File > Configure Audio Pub to File > Setup streaming services.
 - The startup cue now plays while Pubsplash is still loading rather than after the window is up, so you hear the app coming to life immediately instead of after a silent pause while plugins are instantiated.

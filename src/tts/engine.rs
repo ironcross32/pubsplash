@@ -8,6 +8,8 @@
 //! [`synth`](SpeechEngine::synth) is called on a worker thread and is allowed
 //! to block on the network. It must never be called from the audio thread.
 
+use crate::config::TtsEngineSettings;
+
 /// A single utterance to render.
 ///
 /// `rate`, `volume`, and `pitch` are carried in the ranges the *UI* uses —
@@ -26,6 +28,9 @@ pub struct SynthRequest {
     pub volume: u32,
     /// -50..=50, 0 being the voice's normal pitch.
     pub pitch: i32,
+    /// Provider-specific behavior selected on this source. `None` is a legacy
+    /// source and lets engines use the old global fallback fields.
+    pub provider_settings: Option<TtsEngineSettings>,
 }
 
 impl SynthRequest {
@@ -80,6 +85,10 @@ pub struct Voice {
     pub id: String,
     /// Shown to the user; may carry a language or gender hint.
     pub label: String,
+    pub styles: Vec<String>,
+    pub roles: Vec<String>,
+    pub language_code: String,
+    pub supported_engines: Vec<String>,
 }
 
 impl Voice {
@@ -89,6 +98,10 @@ impl Voice {
         Self {
             label: id.clone(),
             id,
+            styles: Vec::new(),
+            roles: Vec::new(),
+            language_code: String::new(),
+            supported_engines: Vec::new(),
         }
     }
 
@@ -96,6 +109,10 @@ impl Voice {
         Self {
             id: id.into(),
             label: label.into(),
+            styles: Vec::new(),
+            roles: Vec::new(),
+            language_code: String::new(),
+            supported_engines: Vec::new(),
         }
     }
 }
@@ -161,6 +178,7 @@ mod tests {
             rate,
             volume: 100,
             pitch: 0,
+            provider_settings: None,
         };
         assert_eq!(at(0).rate_percent(), 0);
         assert_eq!(at(10).rate_percent(), 100);
@@ -180,6 +198,7 @@ mod tests {
             rate: 0,
             volume: 50,
             pitch: 0,
+            provider_settings: None,
         };
         let mut samples = vec![1.0, -1.0, 0.5];
         request.apply_volume(&mut samples);
@@ -194,6 +213,7 @@ mod tests {
             rate: 0,
             volume: 100,
             pitch: 0,
+            provider_settings: None,
         };
         assert_eq!(request.truncated(5).text, "héllo…");
         // Short enough already: left alone, no ellipsis.

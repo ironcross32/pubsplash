@@ -23,8 +23,10 @@
 //! `try_lock` and reports [`Processed::Passthrough`] if it cannot have it.
 //! Some UI operations hold the mutex for far longer than one 10 ms block —
 //! `open_editor` is routinely 50–500 ms of GUI construction, and `save_state`
-//! can be megabytes — so those raise [`Vst3Plugin::suspend`] and wait
-//! [`SETTLE`] before taking the lock. The engine sees the flag, keeps
+//! can be megabytes — so those raise the shared
+//! [`SuspendFlag`](crate::vst::suspend::SuspendFlag) and wait
+//! [`SETTLE`](crate::vst::suspend::SETTLE) before taking the lock, exactly as
+//! the VST2 host does. The engine sees the flag, keeps
 //! processing, and reports [`Processed::Retiring`] so `FxChain` can fade the
 //! plugin out of circuit over 50 ms *before* the lock is actually taken. The
 //! result is a clean crossfade in and out instead of a hard switch mid-block.
@@ -40,20 +42,22 @@
 //! - `IPlugView::onSize` has no wrapper either, so a plugin that resizes itself
 //!   is not told about the new rect. See `ui/fx_editor.rs`.
 //! - The crate's Windows module loader has no cache or refcount, so every
-//!   instance `LoadLibrary`s its own copy of the plugin DLL. Spec-conforming
-//!   plugins refcount `InitModule`/`DeinitModule` internally and Windows
-//!   refcounts the `HMODULE`, so this is a deliberate cost (load time and
-//!   memory per instance), not an oversight.
+//!   instance `LoadLibrary`s its own copy of the plugin DLL and calls `ExitDll`
+//!   plus `FreeLibrary` when *that instance* goes away. Windows refcounts the
+//!   `HMODULE`, so the per-instance load is only a cost (load time and memory);
+//!   the unmap when the last instance goes is the hazard, and
+//!   [`crate::vst::module_pin`] holds a permanent reference to stop it. The
+//!   `ExitDll` call is still the crate's to make and we cannot suppress it.
 
 use crate::audio::mixer::{BLOCK_FRAMES, CHANNELS, SAMPLE_RATE};
 use crate::b64;
 use crate::config::{FxSlotConfig, ParamValue, PluginRef};
 use crate::vst::PluginInfo;
 use crate::vst::instance::Processed;
+use crate::vst::suspend::SuspendFlag;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, TryLockError};
-use std::time::Duration;
 use vst3_host::audio::{AudioBuffers, BusArrangements, SpeakerArrangement};
 use vst3_host::{Parameter, Plugin, ProcessMode, Vst3Host, WindowHandle};
 
@@ -61,23 +65,21 @@ use vst3_host::{Parameter, Plugin, ProcessMode, Vst3Host, WindowHandle};
 /// the two can never silently diverge.
 const PLUGIN_SAMPLE_RATE: f64 = SAMPLE_RATE as f64;
 
-/// How long a suspending UI operation waits before taking the mutex, giving
-/// the engine time to fade the plugin out of circuit first. Six 10 ms mix
-/// blocks, comfortably more than the 50 ms fade.
-const SETTLE: Duration = Duration::from_millis(60);
-
 pub struct Vst3Plugin {
     inner: Mutex<Vst3Inner>,
     pub info: PluginRef,
+    /// Never-reused identity for editor and resize-request matching. See
+    /// [`crate::vst::instance::next_effect_id`].
+    id: u64,
     /// Parameter metadata. Re-read on demand rather than cached for the
     /// instance lifetime: VST3 lets a plugin change its parameter set at
     /// runtime (any preset load inside its own editor), and the index→ParamID
     /// map going stale would make the parameters dialog announce one parameter
     /// and edit another. Never read from the engine thread.
     params: RwLock<Arc<Vec<Parameter>>>,
-    /// Non-zero while a UI operation is about to hold, or is holding, `inner`
+    /// Raised while a UI operation is about to hold, or is holding, `inner`
     /// for longer than a mix block. See the module docs.
-    suspend: AtomicUsize,
+    suspend: SuspendFlag,
     /// Latches the first `process_audio` failure so the engine thread logs
     /// once instead of a hundred times a second.
     failed: AtomicBool,
@@ -103,19 +105,11 @@ struct Vst3Layout {
     output_channels: usize,
 }
 
-/// Raised for the lifetime of a UI operation that holds the plugin mutex for
-/// longer than one mix block. Creating it waits [`SETTLE`] so the engine can
-/// fade the plugin out first; dropping it lets the engine fade back in.
-struct Suspended<'a>(&'a Vst3Plugin);
-
-impl Drop for Suspended<'_> {
-    fn drop(&mut self) {
-        self.0.suspend.fetch_sub(1, Ordering::Release);
-    }
-}
-
 impl Vst3Plugin {
     pub fn load(info: &PluginInfo, slot: &FxSlotConfig) -> Result<Vst3Plugin, String> {
+        // Before the crate maps the module, so its own load/unload pair can
+        // never take the last reference. See `module_pin`.
+        super::module_pin::pin(&info.path);
         let mut host = Vst3Host::builder()
             .sample_rate(PLUGIN_SAMPLE_RATE)
             .block_size(BLOCK_FRAMES)
@@ -124,6 +118,10 @@ impl Vst3Plugin {
         let mut plugin = host
             .load_plugin(Path::new(&info.path))
             .map_err(|e| format!("could not load VST3 plugin: {e}"))?;
+        // The crate releases the factory as soon as it has the component. For a
+        // shell module that is what kills us at teardown, so take a reference
+        // that outlives every instance. See `module_pin::pin_factory`.
+        super::module_pin::pin_factory(&info.path);
 
         plugin
             .set_process_mode(ProcessMode::Realtime)
@@ -161,8 +159,9 @@ impl Vst3Plugin {
                 processing: true,
             }),
             info: PluginRef::from_info(info),
+            id: crate::vst::instance::next_effect_id(),
             params: RwLock::new(Arc::new(params)),
-            suspend: AtomicUsize::new(0),
+            suspend: SuspendFlag::new(),
             failed: AtomicBool::new(false),
             layout,
             has_editor,
@@ -177,15 +176,6 @@ impl Vst3Plugin {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Announces a long lock hold to the engine and waits for it to fade the
-    /// plugin out. UI thread only — it sleeps.
-    fn suspend(&self) -> Suspended<'_> {
-        if self.suspend.fetch_add(1, Ordering::AcqRel) == 0 {
-            std::thread::sleep(SETTLE);
-        }
-        Suspended(self)
-    }
-
     /// The current parameter list. Cheap (one `Arc` clone) and lock-free.
     fn params(&self) -> Arc<Vec<Parameter>> {
         self.params
@@ -198,7 +188,7 @@ impl Vst3Plugin {
     /// to the user: the crate cannot tell us when the set changes, so this is
     /// poll-on-use.
     pub fn refresh_params(&self) {
-        let _suspended = self.suspend();
+        let _suspended = self.suspend.raise();
         let mut inner = self.lock();
         Self::reload_params(&mut inner, &self.params);
     }
@@ -296,7 +286,7 @@ impl Vst3Plugin {
     }
 
     pub fn editor_open(&self, hwnd: *mut std::ffi::c_void) -> bool {
-        let _suspended = self.suspend();
+        let _suspended = self.suspend.raise();
         let mut inner = self.lock();
         if inner.editor_open {
             return true;
@@ -315,7 +305,7 @@ impl Vst3Plugin {
     }
 
     pub fn editor_close(&self) {
-        let _suspended = self.suspend();
+        let _suspended = self.suspend.raise();
         let mut inner = self.lock();
         if inner.editor_open {
             let _ = inner.plugin.close_editor();
@@ -342,7 +332,7 @@ impl Vst3Plugin {
     /// as their "flush tails, reset state" hook never see it otherwise, so
     /// un-bypassing resumes with a stale reverb tail.
     pub fn set_processing(&self, on: bool) {
-        let _suspended = self.suspend();
+        let _suspended = self.suspend.raise();
         let mut inner = self.lock();
         if inner.processing == on {
             return;
@@ -365,8 +355,8 @@ impl Vst3Plugin {
         }
     }
 
-    pub fn effect_id(&self) -> usize {
-        self as *const Self as usize
+    pub fn effect_id(&self) -> u64 {
+        self.id
     }
 
     /// The plugin's state for `config.json`, or `None` when there is nothing
@@ -382,7 +372,7 @@ impl Vst3Plugin {
     /// `IEditController::getState` — editor page, zoom, A/B slot — has no
     /// wrapper in `vst3-host` 0.7, so those settings do not survive a restart.
     pub fn snapshot(&self) -> Option<(Option<String>, Vec<ParamValue>)> {
-        let _suspended = self.suspend();
+        let _suspended = self.suspend.raise();
         let mut inner = self.lock();
         Self::reload_params(&mut inner, &self.params);
         let params = self.params();
@@ -418,7 +408,7 @@ impl Vst3Plugin {
         dry: &[Vec<f32>; CHANNELS],
         out: &mut [Vec<f32>; CHANNELS],
     ) -> Processed {
-        let retiring = self.suspend.load(Ordering::Acquire) != 0;
+        let retiring = self.suspend.raised();
         let mut guard = match self.inner.try_lock() {
             Ok(guard) => guard,
             Err(TryLockError::Poisoned(p)) => p.into_inner(),
@@ -457,15 +447,33 @@ impl Vst3Plugin {
 
 impl Drop for Vst3Plugin {
     fn drop(&mut self) {
+        // Breadcrumbs, not chatter. Plugin teardown runs third-party COM code
+        // and `FreeLibrary`, and when that faults the process dies without a
+        // panic or a backtrace (see `crash.rs`) — so which of these lines is
+        // the *last* one in the log is the only evidence of how far it got.
+        log::info!("VST3 teardown starting for {}", self.info.path);
+        // Teardown is the longest hold there is, so it obeys the same rule as
+        // every other one in this file. The engine cannot be inside
+        // `process_stereo` (it no longer holds a reference to us, which is what
+        // let this drop run at all), but a chain still mid-fade would otherwise
+        // take the plugin's last block straight to dry.
+        let _suspended = self.suspend.raise();
         // Unconditional: skipping this on a poisoned lock would leave
         // `IPlugView::removed()` uncalled, with the plugin's view still
         // attached to an HWND wx is about to destroy.
         let mut inner = self.lock();
+        inner.processing = false;
         if inner.editor_open {
             let _ = inner.plugin.close_editor();
+            log::info!("VST3 teardown: editor closed for {}", self.info.path);
         }
         let _ = inner.plugin.set_playing(false);
         let _ = inner.plugin.stop_processing();
+        log::info!(
+            "VST3 teardown: processing stopped for {}; releasing the plugin (terminate, then \
+             ExitDll and the module unload) next",
+            self.info.path
+        );
     }
 }
 
