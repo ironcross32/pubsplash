@@ -1,6 +1,7 @@
 //! Audio Pub web API client: login, stream key retrieval, stream lifecycle,
 //! and chat. Sessions are a `token` JWT cookie set by `POST /login`.
 
+use crate::secret::Secret;
 use serde_json::Value;
 
 #[derive(Debug, thiserror::Error)]
@@ -18,7 +19,7 @@ pub struct StreamIdentity {
     /// Audio Pub user id — also the Icecast mount name.
     pub user_id: String,
     /// The Icecast source password.
-    pub stream_key: String,
+    pub stream_key: Secret,
 }
 
 pub struct AudioPubClient {
@@ -258,7 +259,7 @@ fn parse_stream_identity(body: &Value) -> Option<StreamIdentity> {
         let key_idx = user.get("streamKey")?.as_u64()? as usize;
         Some(StreamIdentity {
             user_id: data.get(id_idx)?.as_str()?.to_string(),
-            stream_key: data.get(key_idx)?.as_str()?.to_string(),
+            stream_key: Secret::new(data.get(key_idx)?.as_str()?),
         })
     })
 }
@@ -303,7 +304,7 @@ mod tests {
         .unwrap();
         let identity = parse_stream_identity(&body).unwrap();
         assert_eq!(identity.user_id, "user-uuid-1");
-        assert_eq!(identity.stream_key, "key-uuid-9");
+        assert_eq!(identity.stream_key.as_str(), "key-uuid-9");
     }
 
     /// Hits the real audiopub.site. Run explicitly with

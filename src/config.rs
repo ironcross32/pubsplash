@@ -291,14 +291,14 @@ pub struct SiteConfig {
     /// Audiopub login email.
     pub email: String,
     /// Audiopub login password.
-    pub password: String,
+    pub password: Secret,
     /// Raw Icecast server host or address, without the port.
     pub icecast_server: String,
     pub icecast_port: u16,
     /// Raw Icecast mount point, with or without a leading slash.
     pub icecast_mount: String,
     pub icecast_username: String,
-    pub icecast_password: String,
+    pub icecast_password: Secret,
 }
 
 impl Default for SiteConfig {
@@ -309,12 +309,12 @@ impl Default for SiteConfig {
             service_type: StreamingServiceType::Audiopub,
             url: String::new(),
             email: String::new(),
-            password: String::new(),
+            password: Secret::default(),
             icecast_server: String::new(),
             icecast_port: 8000,
             icecast_mount: String::new(),
             icecast_username: "source".to_string(),
-            icecast_password: String::new(),
+            icecast_password: Secret::default(),
         }
     }
 }
@@ -1225,6 +1225,10 @@ mod tests {
         assert_eq!(load_from(&path), config);
     }
 
+    /// Also the migration guarantee for credentials: the bare-string
+    /// `"password"` below is what every settings file written before they were
+    /// encrypted looks like, and it must still load (the next save re-writes it
+    /// as `enc:`).
     #[test]
     fn old_audiopub_site_defaults_to_audiopub_with_nickname() {
         let path = temp_path("old_audiopub_site.json");
@@ -1244,7 +1248,7 @@ mod tests {
         assert_eq!(service.service_type, StreamingServiceType::Audiopub);
         assert_eq!(service.nickname, "https://example.org/");
         assert_eq!(service.email, "dj@example.org");
-        assert_eq!(service.password, "secret");
+        assert_eq!(service.password.as_str(), "secret");
     }
 
     #[test]
@@ -1276,7 +1280,7 @@ mod tests {
             icecast_port: 9000,
             icecast_mount: "/live".into(),
             icecast_username: "dj".into(),
-            icecast_password: "secret".into(),
+            icecast_password: Secret::new("secret"),
             ..Default::default()
         });
         save_to(&config, &path);
@@ -1288,8 +1292,45 @@ mod tests {
         assert_eq!(service.icecast_port, 9000);
         assert_eq!(service.icecast_mount, "/live");
         assert_eq!(service.icecast_username, "dj");
-        assert_eq!(service.icecast_password, "secret");
+        assert_eq!(service.icecast_password.as_str(), "secret");
     }
+
+    /// The settings file must never contain a site credential in the clear.
+    ///
+    /// Both passwords were plain `String`s for a long time while the API keys
+    /// beside them were already `Secret`s, so this asserts against the written
+    /// file rather than the type: it fails just the same if a future
+    /// credential field is added to [`SiteConfig`] as a bare `String`.
+    #[test]
+    fn saved_site_credentials_are_never_written_in_the_clear() {
+        let path = temp_path("site_credentials_encrypted.json");
+        let mut config = Config::default();
+        config.connection.sites.push(SiteConfig {
+            id: "site-1".into(),
+            nickname: "Station".into(),
+            service_type: StreamingServiceType::Icecast,
+            email: "dj@example.org".into(),
+            password: Secret::new("hunter2-login"),
+            icecast_server: "ice.example.org".into(),
+            icecast_password: Secret::new("hunter2-source"),
+            ..Default::default()
+        });
+        save_to(&config, &path);
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !written.contains("hunter2-login") && !written.contains("hunter2-source"),
+            "a site password leaked into config.json: {written}"
+        );
+        // The email is not a secret and must still be readable, so this is not
+        // passing merely because nothing was written.
+        assert!(written.contains("dj@example.org"));
+
+        let service = load_from(&path).connection.site("site-1").unwrap().clone();
+        assert_eq!(service.password.as_str(), "hunter2-login");
+        assert_eq!(service.icecast_password.as_str(), "hunter2-source");
+    }
+
     #[test]
     fn main_site_is_restored_if_deleted() {
         let path = temp_path("nosite.json");

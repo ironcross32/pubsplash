@@ -23,12 +23,8 @@ pub fn engine_names() -> Vec<(&'static str, &'static str)> {
     engines::ALL.to_vec()
 }
 
-/// Cached catalog voices for an engine, or `None` if it has never refreshed.
-pub fn cached_voices(engine: &str) -> Option<Vec<Voice>> {
-    catalog::voices(engine, "")
-}
-
-/// Cached voices filtered for a provider model. Engine-wide voices remain.
+/// Cached voices filtered for a provider model. Engine-wide voices remain, and
+/// an empty `model` filters nothing, which is how a caller asks for all of them.
 pub fn cached_voices_for_model(engine: &str, model: &str) -> Option<Vec<Voice>> {
     catalog::voices(engine, model)
 }
@@ -39,9 +35,11 @@ pub fn cached_voice_label(engine: &str, voice_id: &str) -> Option<String> {
     catalog::voice_label(engine, voice_id)
 }
 
-/// How many engine-wide voices are cached; `None` means never refreshed.
-pub fn voice_count(engine: &str) -> Option<usize> {
-    cached_voices(engine).map(|voices| voices.len())
+/// How many cached voices [`cached_voices_for_model`] would return, without
+/// building the list — see [`catalog::voice_count_for_model`]. `None` means the
+/// engine has never refreshed, which is not the same as no matching voice.
+pub fn voice_count_for_model(engine: &str, model: &str) -> Option<usize> {
+    catalog::voice_count_for_model(engine, model)
 }
 
 /// Loads the persistent catalog before the UI is constructed.
@@ -56,8 +54,8 @@ mod tests {
     #[test]
     fn an_absent_catalog_has_no_voices() {
         catalog::install(catalog::TtsCatalog::default());
-        assert_eq!(cached_voices(engines::OPENAI), None);
-        assert_eq!(voice_count(engines::OPENAI), None);
+        assert_eq!(cached_voices_for_model(engines::OPENAI, ""), None);
+        assert_eq!(voice_count_for_model(engines::OPENAI, ""), None);
     }
 
     #[test]

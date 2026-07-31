@@ -170,11 +170,10 @@ fn view_selected(app: &Rc<App>, list: &ListBox) {
         .with_value(&format!("{user}: {content}"))
         .build();
     super::help::tag(&text, "dialog.chatView.text", "Full chat message text");
-    // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
-    let close = Button::builder(&panel)
-        .with_id(ID_CANCEL)
-        .with_label("Close")
-        .build();
+    // Dismiss-only, so `dismiss_button` puts both Escape and Enter on it. The
+    // message body above is `MultiLine`, which wx exempts from the default-item
+    // handling, so Enter there still moves the caret rather than closing.
+    let close = super::dismiss_button(&panel, "Close");
     {
         let dialog = dialog.clone();
         close.on_click(move |_| dialog.end_modal(ID_CANCEL));

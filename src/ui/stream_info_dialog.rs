@@ -100,7 +100,7 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
     record_check.set_value(default_record);
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let ok_button = Button::builder(&panel).with_label("OK").build();
+    let ok_button = super::ok_button(&panel, "OK");
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
     let cancel_button = Button::builder(&panel)
         .with_id(ID_CANCEL)

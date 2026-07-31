@@ -731,7 +731,7 @@ fn pick_chain(app: &Rc<App>, frame: &Frame, names: &[String]) -> Option<usize> {
         list.set_selection(0, true);
     }
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let load = Button::builder(&panel).with_label("&Load").build();
+    let load = super::ok_button(&panel, "&Load");
     let delete = Button::builder(&panel).with_label("&Delete").build();
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
     let cancel = Button::builder(&panel)
@@ -933,13 +933,14 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let has_valid = !resolution.valid.is_empty();
     if has_valid {
-        let apply = Button::builder(&panel)
-            .with_label(&format!(
+        let apply = super::ok_button(
+            &panel,
+            &format!(
                 "&Apply with {} available plugin{}",
                 resolution.valid.len(),
                 if resolution.valid.len() == 1 { "" } else { "s" }
-            ))
-            .build();
+            ),
+        );
         // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
         let cancel = Button::builder(&panel)
             .with_id(ID_CANCEL)
@@ -966,11 +967,9 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
             .build();
         sizer.add(&note, 0, SizerFlag::All, 8);
         // Dismiss-only, so it carries `ID_CANCEL` despite the label: that id is
-        // what wx maps Escape to, and it matches the `end_modal` below.
-        let ok = Button::builder(&panel)
-            .with_id(ID_CANCEL)
-            .with_label("&OK")
-            .build();
+        // what wx maps Escape to, and it matches the `end_modal` below. Being the
+        // default item as well, it answers Enter too.
+        let ok = super::dismiss_button(&panel, "&OK");
         buttons.add(&ok, 0, SizerFlag::All, 4);
         let dialog = dialog.clone();
         ok.on_click(move |_| dialog.end_modal(ID_CANCEL));

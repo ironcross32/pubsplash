@@ -547,13 +547,32 @@ mod tests {
 }
 
 /// Discovers every supported Polly engine and its compatible voices.
+///
+/// One query per engine, and a failing one is skipped rather than fatal: the
+/// newer engines are not offered in every region, and `DescribeVoices` answers
+/// for an engine the region does not have with an error. Letting that abort the
+/// walk would leave the user with *no* Polly voices or engines at all because
+/// their region has no generative tier. Only a run in which every engine failed
+/// — which is what bad credentials look like — is reported as a failure, so the
+/// Validate button still says so.
 pub fn discover(config: &SpeechConfig) -> Result<crate::tts::catalog::EngineCatalog, TtsError> {
     use crate::tts::catalog::{CatalogModel, EngineCatalog};
     let mut by_id = std::collections::BTreeMap::<String, Voice>::new();
+    let mut available: Vec<CatalogModel> = Vec::new();
+    let mut last_error = None;
     for engine_id in ["standard", "neural", "long-form", "generative"] {
         let mut speech = config.clone();
         speech.aws_engine = engine_id.into();
-        for mut voice in Polly::new(&speech).voices()? {
+        let voices = match Polly::new(&speech).voices() {
+            Ok(voices) => voices,
+            Err(error) => {
+                log::warn!("Polly listed no {engine_id} voices: {error}");
+                last_error = Some(error);
+                continue;
+            }
+        };
+        available.push(CatalogModel::plain(engine_id));
+        for mut voice in voices {
             if voice.supported_engines.is_empty() {
                 voice.supported_engines.push(engine_id.into());
             }
@@ -569,11 +588,12 @@ pub fn discover(config: &SpeechConfig) -> Result<crate::tts::catalog::EngineCata
                 .or_insert(voice);
         }
     }
+    if available.is_empty() {
+        return Err(last_error
+            .unwrap_or_else(|| TtsError::Other("Polly reported no synthesis engines.".into())));
+    }
     Ok(EngineCatalog::from_voices(
-        ["standard", "neural", "long-form", "generative"]
-            .into_iter()
-            .map(CatalogModel::plain)
-            .collect(),
+        available,
         by_id.into_values().collect(),
     ))
 }

@@ -702,7 +702,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     // accessible name — and refreshed with the engine, so it can never report
     // the previous engine's count.
     let voice_count_label = StaticText::builder(&panel).build();
-    update_voice_status(&voice_count_label, &voice_choice, selected_id);
+    update_voice_status(&voice_count_label, &voice_choice, selected_id, "");
 
     let volume_label = StaticText::builder(&panel)
         .with_label("Voice volume")
@@ -787,7 +787,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     );
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let ok = Button::builder(&panel).with_label("OK").build();
+    let ok = super::ok_button(&panel, "OK");
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
     let cancel = Button::builder(&panel)
         .with_id(ID_CANCEL)
@@ -960,7 +960,12 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
                 &wanted,
             );
             voice_choice.thaw();
-            update_voice_status(&voice_count_label, &voice_choice, engine);
+            update_voice_status(
+                &voice_count_label,
+                &voice_choice,
+                engine,
+                &provider_controls.model_value(engine),
+            );
             provider_controls.show(engine);
             let supported = pitch_is_supported(engine)
                 && (engine != crate::tts::engines::AWS
@@ -992,18 +997,16 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         let controls = provider_controls.clone();
         let choice = voice_choice.clone();
         let voices_for_model = voices.clone();
+        let count_label = voice_count_label.clone();
         provider_controls
             .eleven_model
             .clone()
             .on_selection_changed(move |_| {
+                let engine = crate::tts::engines::ELEVENLABS;
                 let wanted = selected_voice(&choice, &voices_for_model);
-                fill_voice_choice(
-                    &choice,
-                    &voices_for_model,
-                    crate::tts::engines::ELEVENLABS,
-                    &controls.model_value(crate::tts::engines::ELEVENLABS),
-                    &wanted,
-                );
+                let model = controls.model_value(engine);
+                fill_voice_choice(&choice, &voices_for_model, engine, &model, &wanted);
+                update_voice_status(&count_label, &choice, engine, &model);
                 controls.refresh_compatibility();
             });
     }
@@ -1011,18 +1014,16 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         let controls = provider_controls.clone();
         let choice = voice_choice.clone();
         let voices_for_model = voices.clone();
+        let count_label = voice_count_label.clone();
         provider_controls
             .openai_model
             .clone()
             .on_selection_changed(move |_| {
+                let engine = crate::tts::engines::OPENAI;
                 let wanted = selected_voice(&choice, &voices_for_model);
-                fill_voice_choice(
-                    &choice,
-                    &voices_for_model,
-                    crate::tts::engines::OPENAI,
-                    &controls.model_value(crate::tts::engines::OPENAI),
-                    &wanted,
-                );
+                let model = controls.model_value(engine);
+                fill_voice_choice(&choice, &voices_for_model, engine, &model, &wanted);
+                update_voice_status(&count_label, &choice, engine, &model);
                 controls.refresh_compatibility();
             });
     }
@@ -1041,18 +1042,16 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         let pitch_label = pitch_label.clone();
         let choice = voice_choice.clone();
         let voices_for_model = voices.clone();
+        let count_label = voice_count_label.clone();
         provider_controls
             .polly_engine
             .clone()
             .on_selection_changed(move |_| {
+                let engine = crate::tts::engines::AWS;
                 let wanted = selected_voice(&choice, &voices_for_model);
-                fill_voice_choice(
-                    &choice,
-                    &voices_for_model,
-                    crate::tts::engines::AWS,
-                    &controls.model_value(crate::tts::engines::AWS),
-                    &wanted,
-                );
+                let model = controls.model_value(engine);
+                fill_voice_choice(&choice, &voices_for_model, engine, &model, &wanted);
+                update_voice_status(&count_label, &choice, engine, &model);
                 let supported = matches!(controls.polly_engine_value().as_str(), "" | "standard");
                 pitch_label.show(supported);
                 pitch_slider.show(supported);
@@ -1133,7 +1132,12 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
                     &provider_controls.model_value(engine),
                     &wanted,
                 );
-                update_voice_status(&voice_count_label, &voice_choice, engine);
+                update_voice_status(
+                    &voice_count_label,
+                    &voice_choice,
+                    engine,
+                    &provider_controls.model_value(engine),
+                );
             }
             false
         });
@@ -1209,7 +1213,12 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
                 &provider_controls.model_value(engine),
                 &profile.voice,
             );
-            update_voice_status(&voice_count_label, &voice_choice, engine);
+            update_voice_status(
+                &voice_count_label,
+                &voice_choice,
+                engine,
+                &provider_controls.model_value(engine),
+            );
             // Polly's engine mode decides whether pitch applies, and the reset
             // has just put it back to the provider default.
             let supported = pitch_is_supported(engine);
@@ -1765,22 +1774,9 @@ impl TtsProviderControls {
         )
         .build();
         let polly_engine = Choice::builder(&polly_panel).build();
-        super::set_accessible_name(&polly_engine, "AWS Polly synthesis engine");
-        let polly_engines = [
-            ("", "Provider default (standard)"),
-            ("standard", "Standard"),
-            ("neural", "Neural"),
-            ("long-form", "Long-form"),
-            ("generative", "Generative"),
-        ];
-        let mut polly_selection = 0;
-        for (index, (id, label)) in polly_engines.iter().enumerate() {
-            polly_engine.append(label);
-            if *id == polly.engine.trim() {
-                polly_selection = index;
-            }
-        }
-        polly_engine.set_selection(polly_selection as u32);
+        // Filled the same way as every other model picker — including its
+        // accessible name, so nothing here may pre-populate it: `clear()` is the
+        // first thing `fill_model_choice` does.
         fill_model_choice(&polly_engine, crate::tts::engines::AWS, &polly.engine);
         super::help::tag(
             &polly_engine,
@@ -2179,10 +2175,32 @@ fn selected_choice_value(choice: &Choice) -> String {
         .unwrap_or_default()
 }
 
+/// The models to offer before — or without — a successful catalog refresh.
+///
+/// Polly's four synthesis engines and ElevenLabs' and OpenAI's speech models are
+/// fixed, documented lists that the app already hard-codes elsewhere, so a
+/// source can be configured on a machine whose catalog has never been fetched
+/// (no credentials yet, discovery blocked, first run). Without this the picker
+/// offers nothing but "Provider default" and the engine is unselectable.
+fn builtin_models(engine: &str) -> Vec<crate::tts::catalog::CatalogModel> {
+    use crate::tts::catalog::CatalogModel;
+    use crate::tts::engines;
+    let ids: &[&str] = match engine {
+        engines::AWS => &["standard", "neural", "long-form", "generative"],
+        engines::ELEVENLABS => engines::elevenlabs::MODELS,
+        engines::OPENAI => &["gpt-4o-mini-tts", "tts-1", "tts-1-hd"],
+        _ => &[],
+    };
+    ids.iter().copied().map(CatalogModel::plain).collect()
+}
+
 fn fill_model_choice(choice: &Choice, engine: &str, wanted: &str) {
     choice.clear();
     choice.append("Provider default");
-    let models = crate::tts::catalog::models(engine);
+    let mut models = crate::tts::catalog::models(engine);
+    if models.is_empty() {
+        models = builtin_models(engine);
+    }
     for model in &models {
         choice.append(&model.id);
     }
@@ -2196,9 +2214,17 @@ fn fill_model_choice(choice: &Choice, engine: &str, wanted: &str) {
         models.len() + 1
     };
     choice.set_selection(selection as u32);
+    // Polly's "model" is its synthesis engine, and that is what the label above
+    // the picker calls it — announcing it as a model would be a third name for
+    // the same control.
+    let noun = if engine == crate::tts::engines::AWS {
+        "synthesis engine"
+    } else {
+        "model"
+    };
     super::set_accessible_name(
         choice,
-        &format!("{} model", crate::tts::engines::display_name(engine)),
+        &format!("{} {noun}", crate::tts::engines::display_name(engine)),
     );
 }
 
@@ -2232,8 +2258,13 @@ fn voice_status_text(engine: &str, count: Option<usize>) -> String {
 
 /// Refreshes the count label, and the picker's accessible name from the same
 /// text so the spoken and the visible answer can never disagree.
-fn update_voice_status(label: &StaticText, choice: &Choice, engine: &str) {
-    let text = voice_status_text(engine, crate::tts::voice_count(engine));
+///
+/// Counted under `model`, not engine-wide, so the number matches what
+/// [`fill_voice_choice`] just put in the picker — an engine whose API states a
+/// real per-voice model constraint (Polly) would otherwise have the label
+/// claiming every voice on the account beside a dropdown holding three.
+fn update_voice_status(label: &StaticText, choice: &Choice, engine: &str, model: &str) {
+    let text = voice_status_text(engine, crate::tts::voice_count_for_model(engine, model));
     label.set_label(&text);
     super::set_accessible_name(choice, &format!("Voice. {text}"));
 }
@@ -2468,7 +2499,7 @@ fn edit_sound_events(
     output_check.set_value(current.output_to_stream);
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let ok = Button::builder(&panel).with_label("OK").build();
+    let ok = super::ok_button(&panel, "OK");
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
     let cancel = Button::builder(&panel)
         .with_id(ID_CANCEL)

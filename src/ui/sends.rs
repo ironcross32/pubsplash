@@ -109,7 +109,7 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     );
 
     let ok_cancel = BoxSizer::builder(Orientation::Horizontal).build();
-    let ok = Button::builder(&panel).with_label("OK").build();
+    let ok = super::ok_button(&panel, "OK");
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
     let cancel = Button::builder(&panel)
         .with_id(ID_CANCEL)

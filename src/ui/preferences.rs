@@ -36,11 +36,8 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     notebook.add_page(&keybinds_panel, "Keybinds", false, None);
     super::keybinds_ui::build_tab(app, &dialog, &keybinds_panel);
 
-    // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
-    let close_button = Button::builder(&dialog)
-        .with_id(ID_CANCEL)
-        .with_label("C&lose")
-        .build();
+    // Dismiss-only, so `dismiss_button` puts both Escape and Enter on it.
+    let close_button = super::dismiss_button(&dialog, "C&lose");
     {
         let dialog = dialog.clone();
         close_button.on_click(move |_| dialog.end_modal(ID_CANCEL));

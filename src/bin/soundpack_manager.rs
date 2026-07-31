@@ -400,8 +400,15 @@ fn show_new_project_dialog(frame: &Frame) -> Option<(String, PathBuf)> {
     folder_row.add(&browse, 0, SizerFlag::All, 4);
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
+    // The id-plus-`set_default()` pair is what puts Enter on this button; see
+    // `ui::ok_button` in the main binary, which this hand-rolls because a
+    // standalone bin cannot reach that module. `ID_CONFIRM` rather than `ID_OK`
+    // for the reason given there: `wxDialogBase` binds `wxID_OK` to a handler
+    // that ends the dialog, and the click propagates to it, which would close
+    // this dialog behind the three validation `return`s below.
+    const ID_CONFIRM: i32 = 2301;
     let ok = Button::builder(&panel)
-        .with_id(ID_OK)
+        .with_id(ID_CONFIRM)
         .with_label("OK")
         .build();
     let cancel = Button::builder(&panel)

@@ -38,8 +38,7 @@ impl Secret {
         &self.0
     }
 
-    #[cfg(test)]
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 }

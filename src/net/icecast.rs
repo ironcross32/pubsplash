@@ -4,6 +4,7 @@
 //! `PUT http://<host>:<port>/<mount>` with Basic auth,
 //! `Expect: 100-continue`, then an endless body of encoded audio frames.
 
+use crate::secret::Secret;
 use std::io::ErrorKind;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -17,7 +18,7 @@ pub struct IcecastTarget {
     /// Source username, usually `source`.
     pub username: String,
     /// Source password or stream key.
-    pub password: String,
+    pub password: Secret,
     /// e.g. `audio/mpeg`.
     pub content_type: String,
 }
@@ -77,7 +78,7 @@ impl IcecastConnection {
         } else {
             target.username.trim()
         };
-        let auth = authorization_header(username, &target.password);
+        let auth = authorization_header(username, target.password.as_str());
         let request = format!(
             "PUT /{mount} HTTP/1.1\r\n\
              Host: {host}\r\n\
@@ -184,7 +185,7 @@ mod tests {
             host: addr.to_string(),
             mount: "user-123".into(),
             username: "source".into(),
-            password: "key".into(),
+            password: Secret::new("key"),
             content_type: "audio/mpeg".into(),
         };
         let mut conn = IcecastConnection::connect(&target).await.unwrap();
@@ -214,7 +215,7 @@ mod tests {
             host: addr.to_string(),
             mount: "u".into(),
             username: "source".into(),
-            password: "bad".into(),
+            password: Secret::new("bad"),
             content_type: "audio/mpeg".into(),
         };
         match IcecastConnection::connect(&target).await {

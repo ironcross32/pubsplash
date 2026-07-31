@@ -55,6 +55,7 @@ The **Stream overview** at the top of the Home tab is a list you can arrow throu
 | `ALT+W` | Switch to the selected scene (Home tab) |
 | `ALT+V` | View the focused chat message in a window (Chat tab) |
 | `ALT+F` | Refresh account balances (API tab) |
+| `Enter` | Press the current dialog's OK button (or its Close button, in a dialog that only closes) |
 | `Escape` | Close the current dialog; in the chat input box, clear the box |
 | `CTRL+,` | Open Preferences |
 | `CTRL+M` | Toggle monitoring for the focused mixer strip |
@@ -101,6 +102,8 @@ Use **File > Setup streaming services** to manage the services Pubsplash can con
 The permanent **Audiopub** service points to audiopub.site. You can add other Audiopub services for self-hosted instances by entering their URL, email address, and password.
 
 Icecast services use direct source streaming. Enter the server, port, mount point, username, and source password from your Icecast host. The username defaults to `source` if left blank. Direct Icecast streams do not provide Audiopub chat, listener counts, server archiving, or a public Audiopub stream page.
+
+Both passwords are encrypted for your Windows account, the same way speech-engine keys are, so copying `config.json` to another machine will not carry them with it.
 
 ## Capturing an application
 
@@ -176,7 +179,7 @@ Credentials go on the **Speech** tab of **File → Preferences** (`CTRL+,`), onc
 
 That tab starts with a **Speech engine** picker, and everything after it belongs to whichever engine the picker names so tabbing to the ElevenLabs key does not take you past OpenAI, Azure, AWS and Google first. The three engines that need no setup say so. The tab reopens on the engine you were last looking at.
 
-Engines other than SAPI 5 and Google Translate publish their voice lists over the network, so their voice pickers start out holding only **Default voice**. The lists refresh by themselves at startup and after credentials are validated, and the last successful list is kept until then. The line under the picker says how many voices the selected engine has, or that they are still being fetched. Press **Preview voice** (`ALT+P`) to hear the current settings; this is the quickest way to find out whether a key is wrong, because it reports the reason rather than just going quiet.
+Engines other than SAPI 5 and Google Translate publish their voice lists over the network, so their voice pickers start out holding only **Default voice**. The lists refresh by themselves at startup and after credentials are validated, and the last successful list is kept until then. The line under the picker says how many voices are in it, or that they are still being fetched. On an engine whose voices are tied to particular models — AWS Polly is the one — that count follows the model you have chosen; on the rest, including ElevenLabs, every voice on your account is available to every model. Press **Preview voice** (`ALT+P`) to hear the current settings; this is the quickest way to find out whether a key is wrong, because it reports the reason rather than just going quiet.
 
 Under the voice picker is a group of settings belonging to the selected engine, empty for the engines that have none. ElevenLabs' group ends with **Stream audio as it is generated**, on by default: speech starts playing as ElevenLabs produces it rather than after the whole message has been generated, which is most of the delay before a chat message is read. Uncheck it to wait for the complete clip. Eleven v3 has no streaming endpoint, so the box is unavailable there, as similarity boost and speaker boost already are.
 

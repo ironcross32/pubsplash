@@ -68,6 +68,10 @@ const ID_MENU_CHANGELOG: i32 = 2103;
 pub const ID_MIXER_BOOST: i32 = 2201;
 /// Command id of the "Monitor this strip" item in the same menu.
 pub const ID_MIXER_MONITOR: i32 = 2202;
+/// Id worn by every dialog's confirm button, so that ENTER can reach it. See
+/// `ok_button`, which is the only thing that should ever use it — and which
+/// documents why it is this private id rather than `ID_OK`.
+const ID_CONFIRM: i32 = 2301;
 
 /// Where the Help menu goes when the copy installed with this build cannot be
 /// found or will not open.
@@ -1390,6 +1394,57 @@ pub fn show_info(parent: &dyn WxWidget, caption: &str, message: &str) {
         .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconInformation)
         .build();
     dialog.show_modal();
+}
+
+/// Builds a dialog's confirm button as the **default item** — the one ENTER fires.
+///
+/// The real wx id is load-bearing, and the two keys get there by different routes.
+/// Escape maps to the cancel id on its own, but Enter reaches a button only through
+/// the dialog's *default item*, and that is a native mechanism (`DM_SETDEFID`) which
+/// needs a real control id: builders leave the id at `ID_ANY`, so wx hands out a
+/// negative auto-id and `set_default()` alone silently does nothing — verified, Enter
+/// produced no event at all. `with_id(ID_OK)` plus `set_default()` is what makes it
+/// work, and every hand-built dialog in the app goes through here (or through
+/// `dismiss_button`) so that neither half can be forgotten.
+///
+/// The button is returned so the caller still binds its own `on_click` — validation
+/// that refuses to close lives there, and Enter routes through it like a click does.
+///
+/// The id is deliberately **`ID_CONFIRM`, not `ID_OK`**, and that is load-bearing for
+/// the validating dialogs. Any real id satisfies `DM_SETDEFID`, but `ID_OK` is one wx
+/// answers itself: `wxDialogBase`'s table binds `EVT_BUTTON(wxID_OK)` to a handler that
+/// calls `EndModal(wxID_OK)`. A click is a command event and propagates from the button
+/// up to the dialog unless a handler consumes it, and wxdragon's trampoline
+/// (`wxdragon-sys/cpp/src/event.cpp`) calls `event.Skip(true)` *before* each closure, so
+/// a closure that does not call `skip(false)` leaves it propagating. Under `ID_OK` the
+/// dialog would then close itself behind handlers that deliberately `return` without
+/// closing — the shortcut-conflict and empty-nickname paths in `keybinds_ui` and
+/// `connect_dialog` — and the refusal would flash an error and confirm anyway. With an
+/// id wx has no handler for, the event propagates to the dialog, finds nothing, and
+/// stops; no call site has to remember to consume it.
+pub fn ok_button(parent: &dyn WxWidget, label: &str) -> Button {
+    let button = Button::builder(parent)
+        .with_id(ID_CONFIRM)
+        .with_label(label)
+        .build();
+    button.set_default();
+    button
+}
+
+/// The same, for a dismiss-only dialog whose single button is both OK and Cancel.
+///
+/// It keeps `ID_CANCEL` — that is the id wx maps Escape to, and it is what the
+/// `end_modal` on these dialogs reports — and `set_default()` brings Enter to the
+/// same button, so both keys close the dialog. Unlike `ok_button` the real id is
+/// wanted here: none of these dialogs refuses to close, so `wxDialogBase`'s own
+/// `wxID_CANCEL` handler doing the same thing a second time changes nothing.
+pub fn dismiss_button(parent: &dyn WxWidget, label: &str) -> Button {
+    let button = Button::builder(parent)
+        .with_id(ID_CANCEL)
+        .with_label(label)
+        .build();
+    button.set_default();
+    button
 }
 
 /// Builds the whole UI. Called from inside `wxdragon::main`.

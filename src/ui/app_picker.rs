@@ -57,16 +57,9 @@ pub fn pick_application(frame: &Frame, current: &str) -> Pick {
     );
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    // The real wx ids matter. Escape maps to the cancel id on its own, but Enter
-    // reaches a button only through the dialog's *default item*, and that is a
-    // native mechanism (`DM_SETDEFID`) which needs a real control id: builders
-    // leave the id at `ID_ANY`, so wx hands out a negative auto-id and
-    // `set_default()` alone silently does nothing — verified, Enter produced no
-    // event at all. `with_id(ID_OK)` plus `set_default()` is what makes it work.
-    let select = Button::builder(&panel)
-        .with_id(ID_OK)
-        .with_label("&Select")
-        .build();
+    // `ui::ok_button` carries the id-plus-`set_default()` rule Enter depends on;
+    // see its doc comment for why either half alone is silently useless.
+    let select = super::ok_button(&panel, "&Select");
     let refresh = Button::builder(&panel).with_label("&Refresh").build();
     let type_name = Button::builder(&panel)
         .with_label("&Type a name...")
@@ -75,7 +68,6 @@ pub fn pick_application(frame: &Frame, current: &str) -> Pick {
         .with_id(ID_CANCEL)
         .with_label("&Cancel")
         .build();
-    select.set_default();
     super::help::tag(
         &select,
         "dialog.appPicker.select",

@@ -279,7 +279,10 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
     );
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let ok_button = Button::builder(&panel).with_label("OK").build();
+    // Enter reaching this button costs nothing in the shortcut field: while that
+    // field has focus `keybinds::capture_key` swallows Enter as a chord, so it
+    // never gets as far as the dialog's default item.
+    let ok_button = super::ok_button(&panel, "OK");
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
     let cancel_button = Button::builder(&panel)
         .with_id(ID_CANCEL)

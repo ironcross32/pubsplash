@@ -7,7 +7,20 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
-pub const SCHEMA_VERSION: u32 = 1;
+/// Bumped whenever a cached entry's *meaning* changes, not just its shape.
+///
+/// [`load_from`] discards a file written under any other version rather than
+/// migrating it: the catalog is a cache of two API calls that
+/// [`start_refresh`] already makes at every startup, so throwing it away costs
+/// one launch with empty pickers and buys not having to write a migration for
+/// each engine's quirks.
+///
+/// - 2: ElevenLabs voices no longer carry `model_ids` derived from the
+///   payload's rendition-quality and fine-tuning hints. Reading those as a
+///   compatibility allowlist emptied the voice picker under `eleven_v3` (see
+///   `engines::elevenlabs::parse_voices`), and a v1 file on disk would have
+///   kept doing so until a refresh happened to succeed.
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CatalogModel {
@@ -144,6 +157,9 @@ impl Default for TtsCatalog {
 
 impl TtsCatalog {
     fn normalize(&mut self) {
+        // Whatever is in memory is by definition current, so this stamps
+        // rather than checks. The one place the stored version *means*
+        // something is `load_from`, which tests it before calling this.
         self.schema_version = SCHEMA_VERSION;
         for catalog in self.engines.values_mut() {
             catalog.normalize();
@@ -192,12 +208,17 @@ pub fn install(mut catalog: TtsCatalog) {
 }
 
 pub fn load_from(path: &Path) -> TtsCatalog {
-    let mut catalog = match crate::json_store::load(path, "TTS catalog") {
+    let mut catalog: TtsCatalog = match crate::json_store::load(path, "TTS catalog") {
         crate::json_store::Load::Ok(catalog) => catalog,
         crate::json_store::Load::Absent | crate::json_store::Load::Unreadable => {
             TtsCatalog::default()
         }
     };
+    // Checked before `normalize`, which stamps the current version on — the
+    // version is only informative if it survives the read that inspects it.
+    if catalog.schema_version != SCHEMA_VERSION {
+        return TtsCatalog::default();
+    }
     catalog.normalize();
     catalog
 }
@@ -234,14 +255,53 @@ pub fn voices(engine: &str, model: &str) -> Option<Vec<Voice>> {
         entry
             .voices
             .iter()
-            .filter(|voice| {
-                model.is_empty()
-                    || voice.model_ids.is_empty()
-                    || voice.model_ids.iter().any(|candidate| candidate == model)
-            })
+            .filter(|voice| serves_model(voice, model))
             .cloned()
             .map(Into::into)
             .collect(),
+    )
+}
+
+/// Whether a cached voice belongs in the picker for `model`.
+///
+/// An empty `model` is a caller asking for all of them, and an empty
+/// `model_ids` is a voice with no restriction — the common case, since only
+/// engines whose API states a real per-voice constraint populate it (Polly's
+/// standard/neural/generative split). An engine that reports a *hint* about
+/// which models suit a voice best must leave `model_ids` empty; see
+/// `engines::elevenlabs::parse_voices` for what happens when it doesn't.
+fn serves_model(voice: &CatalogVoice, model: &str) -> bool {
+    model.is_empty()
+        || voice.model_ids.is_empty()
+        || voice.model_ids.iter().any(|candidate| candidate == model)
+}
+
+/// How many voices the picker will hold for `engine` under `model`; `None`
+/// means the engine has never refreshed, which is a different answer from
+/// `Some(0)`.
+///
+/// Filtered by model, and that is the point: the status line beside the picker
+/// once reported the engine-wide count, so for an engine whose API states a
+/// real per-voice model constraint it could claim hundreds of voices next to a
+/// dropdown holding three.
+///
+/// Deliberately not `voices(engine, model)` plus a `len`, for the same reason
+/// [`voice_label`] is not: that clones every voice, and an ElevenLabs account
+/// can hold thousands. This is called from the source dialog on every step
+/// through the engine picker, which is exactly what made that picker lag.
+pub fn voice_count_for_model(engine: &str, model: &str) -> Option<usize> {
+    let state = state().read().ok()?;
+    let id = super::engines::resolve_id(engine);
+    let model = model.trim();
+    Some(
+        state
+            .catalog
+            .engines
+            .get(id)?
+            .voices
+            .iter()
+            .filter(|voice| serves_model(voice, model))
+            .count(),
     )
 }
 
@@ -461,6 +521,90 @@ mod tests {
             voice_label_in(&catalog, engines::AZURE, "21m00Tcm4TlvDq8ikWAM"),
             None
         );
+    }
+
+    /// The regression guard for the bug that motivated [`SCHEMA_VERSION`] 2:
+    /// picking Eleven v3 left the picker holding only the user's own cloned
+    /// voices, because every premade voice carried `model_ids` naming the
+    /// older models it had high-quality renditions for. ElevenLabs voices carry
+    /// no `model_ids` at all now, so every model must see every voice.
+    ///
+    /// Filters the entry directly rather than through [`voices`], which reads
+    /// the process-global catalog — the same reason [`voice_label_in`] exists.
+    /// That the parser really does leave `model_ids` empty is
+    /// `engines::elevenlabs`'s own test to make.
+    #[test]
+    fn elevenlabs_voices_are_offered_for_every_model() {
+        let entry = EngineCatalog::from_voices(
+            vec![
+                CatalogModel::plain("eleven_multilingual_v2"),
+                CatalogModel::plain("eleven_v3"),
+            ],
+            vec![Voice::new("premade", "Rachel"), Voice::new("cloned", "Mine")],
+        );
+        for model in ["", "eleven_multilingual_v2", "eleven_v3"] {
+            let offered = entry
+                .voices
+                .iter()
+                .filter(|voice| serves_model(voice, model))
+                .count();
+            assert_eq!(offered, 2, "model {model:?} lost a voice");
+        }
+    }
+
+    /// The other half of the filter, which must keep working: Polly's
+    /// `SupportedEngines` is a real constraint, not a hint, so a voice that
+    /// names its engines is offered only for those. Whoever next simplifies
+    /// [`serves_model`] has to keep this true.
+    #[test]
+    fn a_voice_that_names_its_models_is_offered_only_for_those() {
+        let mut restricted = Voice::new("kajal", "Kajal");
+        restricted.supported_engines = vec!["neural".into()];
+        let entry = EngineCatalog::from_voices(
+            Vec::new(),
+            vec![restricted, Voice::new("joanna", "Joanna")],
+        );
+        let offered = |model: &str| {
+            entry
+                .voices
+                .iter()
+                .filter(|voice| serves_model(voice, model))
+                .map(|voice| voice.id.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(offered("neural"), vec!["joanna", "kajal"]);
+        assert_eq!(offered(""), vec!["joanna", "kajal"]);
+        assert_eq!(offered("standard"), vec!["joanna"]);
+    }
+
+    /// A cache written under an older schema is thrown away rather than
+    /// migrated — otherwise the stale ElevenLabs `model_ids` would have
+    /// outlived the code that stopped writing them.
+    #[test]
+    fn a_catalog_from_an_older_schema_is_discarded() {
+        let path = temp_path("tts-catalog-old-schema.json");
+        let mut catalog = TtsCatalog::default();
+        catalog.engines.insert(
+            super::super::engines::ELEVENLABS.into(),
+            EngineCatalog {
+                models: Vec::new(),
+                voices: vec![CatalogVoice {
+                    id: "premade".into(),
+                    label: "Rachel".into(),
+                    model_ids: vec!["eleven_multilingual_v2".into()],
+                    ..Default::default()
+                }],
+            },
+        );
+        // A current-version file survives the round trip intact.
+        save_to(&catalog, &path);
+        assert_eq!(load_from(&path), catalog);
+        // The same file claiming version 1 does not.
+        let mut stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        stored["schema_version"] = serde_json::json!(1);
+        std::fs::write(&path, serde_json::to_string(&stored).unwrap()).unwrap();
+        assert_eq!(load_from(&path), TtsCatalog::default());
     }
 
     #[test]

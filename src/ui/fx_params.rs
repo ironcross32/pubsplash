@@ -314,13 +314,12 @@ pub fn edit_parameters(
         "Show unnamed parameters checkbox",
     );
 
-    // `ID_CANCEL` is what wx maps Escape to. The per-control handlers below also
+    // Dismiss-only: `dismiss_button` gives it the `ID_CANCEL` wx maps Escape to and
+    // makes it the default item Enter fires. The per-control handlers below also
     // close on Escape, but only on the controls they are attached to; this covers
-    // the rest of the dialog.
-    let close = Button::builder(&panel)
-        .with_id(ID_CANCEL)
-        .with_label("&Close")
-        .build();
+    // the rest of the dialog. Enter in `value_text` is unaffected — that control
+    // has `ProcessEnter` and keeps the key to commit the typed value.
+    let close = super::dismiss_button(&panel, "&Close");
 
     sizer.add(&filter_label, 0, SizerFlag::All, 4);
     sizer.add(&filter_box, 0, SizerFlag::Expand | SizerFlag::All, 4);

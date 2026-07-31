@@ -3,6 +3,7 @@
 use super::{App, show_error};
 use crate::config::{MAIN_SITE_URL, SiteConfig, StreamingServiceType};
 use crate::net::NetCommand;
+use crate::secret::Secret;
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
@@ -151,11 +152,13 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         "Connect or disconnect button",
     );
     // `ID_CANCEL` is what wx maps Escape to, and it emulates a click, so
-    // Escape saves the fields just like pressing Close does.
-    let close_button = Button::builder(&panel)
-        .with_id(ID_CANCEL)
-        .with_label("C&lose")
-        .build();
+    // Escape saves the fields just like pressing Close does. `dismiss_button`
+    // makes it the default item too, so Enter closes and saves as well.
+    //
+    // Connect deliberately stays off the default item: it starts or stops a live
+    // connection, which is not something a stray Enter in the service list or a
+    // password field should ever do.
+    let close_button = super::dismiss_button(&panel, "C&lose");
 
     sizer.add(&services_label, 0, SizerFlag::All, 4);
     sizer.add(&services_list, 1, SizerFlag::Expand | SizerFlag::All, 4);
@@ -340,12 +343,12 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
                 service_type.enable(!service.is_main());
                 url_input.set_value(&service.url);
                 email_input.set_value(&service.email);
-                password_input.set_value(&service.password);
+                password_input.set_value(service.password.as_str());
                 server_input.set_value(&service.icecast_server);
                 port_input.set_value(&service.icecast_port.to_string());
                 mount_input.set_value(&service.icecast_mount);
                 username_input.set_value(&service.icecast_username);
-                icecast_password_input.set_value(&service.icecast_password);
+                icecast_password_input.set_value(service.icecast_password.as_str());
             }
             drop(config);
             update_field_visibility();
@@ -428,12 +431,12 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
                 service.url = MAIN_SITE_URL.to_string();
             }
             service.email = email_input.get_value().trim().to_string();
-            service.password = password_input.get_value();
+            service.password = Secret::new(password_input.get_value());
             service.icecast_server = server_input.get_value().trim().to_string();
             service.icecast_port = port_input.get_value().trim().parse().unwrap_or(0);
             service.icecast_mount = mount_input.get_value().trim().to_string();
             service.icecast_username = username_input.get_value().trim().to_string();
-            service.icecast_password = icecast_password_input.get_value();
+            service.icecast_password = Secret::new(icecast_password_input.get_value());
             let id = service.id.clone();
             drop(config);
             app.save_config();
@@ -631,10 +634,7 @@ fn prompt_new_service(parent: &Dialog) -> Option<(String, StreamingServiceType)>
         "New service type selector",
     );
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let ok = Button::builder(&panel)
-        .with_id(ID_OK)
-        .with_label("OK")
-        .build();
+    let ok = super::ok_button(&panel, "OK");
     let cancel = Button::builder(&panel)
         .with_id(ID_CANCEL)
         .with_label("Cancel")

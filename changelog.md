@@ -4,6 +4,8 @@
 
 ### Additions
 
+- `ENTER` now presses the OK button of every dialog in Pubsplash, the counterpart to `ESCAPE` closing them. Stream info, the Text-to-Speech and Sound Events source dialogs, a source's sends, the application picker, Load chain, the missing-plugin notice, Add streaming service, and Add/Edit binding all confirm on `ENTER`; the dialogs that only close — Preferences, the chat message viewer, and an effect's parameters — close on it. Where a dialog checks what you entered, `ENTER` goes through the same check a click does and leaves the dialog open if something is wrong. `ENTER` keeps its existing meaning where a control has one: it inserts a line break in the stream description and in a viewed chat message, sends a chat message, commits a typed effect parameter, and is recorded as a shortcut in the binding capture box. In the streaming services dialog `ENTER` closes and saves rather than connecting, so it can never start or stop a connection by accident.
+
 - Added an **API** tab, last on the tab bar, showing what each speech engine has been asked to do since Pubsplash started. Only engines that have actually spoken appear, most recently used first, and each is followed by its requests sent, characters sent, credits spent, remaining balance, models used, voices used, and failures. **Refresh balances** (`ALT+F`) asks each provider that publishes one how much credit is left; only ElevenLabs reports a balance, and anything a provider does not report reads as "unavailable" rather than as a zero. Nothing is fetched unless you press the button, and none of it is kept between sessions.
 
 - Added validation for OpenAI, ElevenLabs, Azure, AWS Polly, and Google Cloud credentials before they are saved.
@@ -19,6 +21,9 @@
 
 ### Fixes
 
+- Fixed the ElevenLabs voice list emptying out when the model is set to Eleven v3. ElevenLabs publishes, per voice, the models it holds a high-quality rendition for, and Pubsplash was reading that as the set of models the voice could be used with — no premade voice names Eleven v3 in it, so choosing v3 left the picker holding little but your own cloned voices. Every voice on your account is offered for every model now, which is how ElevenLabs actually works.
+- Fixed the ElevenLabs voice list stopping short on large accounts. Only the first page was ever read, because the voice list was requested from an older endpoint that returns no page markers.
+- The voice count beside the voice picker now counts the voices actually in the picker, and is brought up to date when you change the model. On AWS Polly, where voices really are limited to particular engines, it could report every voice on the account next to a list holding a handful.
 - Pressing ENTER to send a chat message no longer plays the Windows error sound alongside sending it. The same silence now applies to the value box in an effect's parameters dialog.
 - Chat is now read aloud to you on every speech engine. Only SAPI 5 spoke to the broadcaster; the other eight engines were mixed into the stream and nowhere else, so unless you had thought to monitor the text-to-speech source's mixer strip, chat appeared never to be read at all. A text-to-speech source is now always played to you, whatever engine it uses and whether or not it is being sent to the stream.
 - Speech kept off the stream no longer reaches it through a bus. "Send speech to the stream" dropped the source from the master mix but left its sends alone, and every bus mixes into master, so a text-to-speech source with a send was heard by listeners with the box unchecked.
@@ -38,6 +43,7 @@
 
 ### Changes
 
+- Your Audio Pub password and your Icecast source password are now encrypted in the settings file, like the speech-engine API keys already were. Both were being stored as plain readable text, so anyone who could open `config.json` — or who was sent a copy of it — could read them. They are now tied to your Windows account, which means a copy of the settings file is of no use on another machine or under another account. Nothing is required of you: passwords already saved still work and are re-encrypted the next time your settings are saved.
 - "Send speech to the stream" now decides only whether your listeners hear the speech. Whether you hear it is no longer tied to it, and with it unchecked the speech reaches neither the stream nor any bus the source sends to.
 - SAPI 5 speech now goes through its mixer strip like every other engine's rather than being spoken separately, so the source's volume and mute apply to what you hear as well as to what your listeners hear. If SAPI fails, the reason now appears in the chat list alongside the other engines' rather than only in the log.
 - Added crash reporting: if Pubsplash is brought down by a hosted plugin, the log now names the plugin file responsible and a crash dump is written to `%LOCALAPPDATA%\pubsplash\crashes\`.

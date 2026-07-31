@@ -6,6 +6,7 @@ pub mod audiopub;
 pub mod icecast;
 pub mod sse;
 
+use crate::secret::Secret;
 use audiopub::{AudioPubClient, StreamIdentity};
 use icecast::{IcecastConnection, IcecastTarget};
 use sse::{LiveEvent, SseParser};
@@ -20,7 +21,7 @@ pub enum ServiceProfile {
         nickname: String,
         site_url: String,
         email: String,
-        password: String,
+        password: Secret,
     },
     Icecast {
         id: String,
@@ -29,7 +30,7 @@ pub enum ServiceProfile {
         port: u16,
         mount: String,
         username: String,
-        password: String,
+        password: Secret,
     },
 }
 
@@ -154,7 +155,7 @@ enum Connection {
         port: u16,
         mount: String,
         username: String,
-        password: String,
+        password: Secret,
     },
 }
 
@@ -285,7 +286,7 @@ async fn net_loop(mut commands: tokio_mpsc::UnboundedReceiver<NetCommand>, event
                             continue;
                         }
                     };
-                    match client.login(&email, &password).await {
+                    match client.login(&email, password.as_str()).await {
                         Ok(()) => match client.stream_identity().await {
                             Ok(identity) => {
                                 let display_name = nickname;
@@ -550,13 +551,13 @@ mod host_tests {
     fn audiopub_target_uses_site_identity() {
         let identity = StreamIdentity {
             user_id: "user-123".to_string(),
-            stream_key: "stream-key".to_string(),
+            stream_key: Secret::new("stream-key"),
         };
         let target = audiopub_target_for("https://example.org/", &identity, "audio/mpeg");
         assert_eq!(target.host, "live.example.org:8000");
         assert_eq!(target.mount, "user-123");
         assert_eq!(target.username, "source");
-        assert_eq!(target.password, "stream-key");
+        assert_eq!(target.password.as_str(), "stream-key");
         assert_eq!(target.content_type, "audio/mpeg");
     }
 
@@ -567,13 +568,13 @@ mod host_tests {
             port: 9000,
             mount: "/live".to_string(),
             username: "dj".to_string(),
-            password: "secret".to_string(),
+            password: Secret::new("secret"),
         };
         let target = direct_icecast_target(&conn, "audio/aac").unwrap();
         assert_eq!(target.host, "ice.example.org:9000");
         assert_eq!(target.mount, "live");
         assert_eq!(target.username, "dj");
-        assert_eq!(target.password, "secret");
+        assert_eq!(target.password.as_str(), "secret");
         assert_eq!(target.content_type, "audio/aac");
     }
 
@@ -584,7 +585,7 @@ mod host_tests {
             port: 8000,
             mount: "live".to_string(),
             username: String::new(),
-            password: "secret".to_string(),
+            password: Secret::new("secret"),
         };
         let target = direct_icecast_target(&conn, "audio/mpeg").unwrap();
         assert_eq!(target.username, "source");

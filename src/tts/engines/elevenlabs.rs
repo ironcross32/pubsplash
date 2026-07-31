@@ -17,6 +17,17 @@ use crate::tts::net::{block_on, body_bytes, body_json, check_status, client, req
 use futures_util::StreamExt;
 
 const API_BASE: &str = "https://api.elevenlabs.io/v1";
+
+/// The voice list is the one endpoint taken from v2 rather than [`API_BASE`].
+///
+/// v1 returns the whole list in a single response with no `has_more` or
+/// `next_page_token`, so the paging loop in [`discover`] read a missing field
+/// as "no more pages" and always stopped after one — silently truncating an
+/// account larger than whatever v1 hands back. v2 is the version that actually
+/// implements the `page_size`/`next_page_token` contract that loop is written
+/// against. The entries still carry `voice_id` and `name`, so [`parse_voices`]
+/// is shared between both.
+const VOICES_URL: &str = "https://api.elevenlabs.io/v2/voices";
 const SERVICE: &str = "ElevenLabs";
 const DEFAULT_VOICE: &str = "21m00Tcm4TlvDq8ikWAM"; // Rachel
 const SOURCE_RATE: u32 = 24_000;
@@ -155,15 +166,7 @@ impl SpeechEngine for ElevenLabs {
 
     fn voices(&self) -> Result<Vec<Voice>, TtsError> {
         let key = require(&self.api_key, "The ElevenLabs API key")?;
-        let body: serde_json::Value = block_on(async {
-            let response = client()
-                .get(format!("{API_BASE}/voices"))
-                .header("xi-api-key", key)
-                .send()
-                .await?;
-            body_json(SERVICE, response).await
-        })?;
-        Ok(parse_voices(&body))
+        block_on(fetch_voices(key))
     }
 
     fn usage_model(&self, request: &SynthRequest) -> Option<String> {
@@ -272,6 +275,23 @@ fn request_body(legacy_model: &str, request: &SynthRequest) -> serde_json::Value
     serde_json::Value::Object(body)
 }
 
+/// Parses a `/voices` payload.
+///
+/// `Voice::supported_engines` is deliberately left empty, which
+/// [`crate::tts::catalog::voices`] reads as "this voice is not restricted to
+/// any model" — and on ElevenLabs that is the truth. The model is only a
+/// `model_id` field in the synthesis body (see [`request_body`]); every voice
+/// in the account works with every TTS model.
+///
+/// The payload does carry two model lists, and **neither is a compatibility
+/// allowlist**: `high_quality_base_model_ids` names the models ElevenLabs holds
+/// a high-quality rendition of the voice for, and `fine_tuning.models` names
+/// the models a *cloned* voice was fine-tuned against. Both were once read as
+/// the set of usable models, which broke the moment a model newer than the
+/// fields shipped: `eleven_v3` appears in `high_quality_base_model_ids` for
+/// essentially no premade voice, so selecting v3 emptied the picker of
+/// everything except the user's own clones — whose `fine_tuning.models` does
+/// name it. Don't reintroduce them as a filter.
 fn parse_voices(body: &serde_json::Value) -> Vec<Voice> {
     let mut voices: Vec<Voice> = body
         .get("voices")
@@ -281,29 +301,7 @@ fn parse_voices(body: &serde_json::Value) -> Vec<Voice> {
                 .filter_map(|entry| {
                     let id = entry.get("voice_id")?.as_str()?;
                     let name = entry.get("name").and_then(|n| n.as_str()).unwrap_or(id);
-                    let mut voice = Voice::new(id, name);
-                    for compatibility in [
-                        entry.get("high_quality_base_model_ids"),
-                        entry.pointer("/fine_tuning/models"),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    {
-                        match compatibility {
-                            serde_json::Value::Array(models) => voice.supported_engines.extend(
-                                models
-                                    .iter()
-                                    .filter_map(|model| model.as_str().map(str::to_string)),
-                            ),
-                            serde_json::Value::Object(models) => {
-                                voice.supported_engines.extend(models.keys().cloned())
-                            }
-                            _ => {}
-                        }
-                    }
-                    voice.supported_engines.sort();
-                    voice.supported_engines.dedup();
-                    Some(voice)
+                    Some(Voice::new(id, name))
                 })
                 .collect()
         })
@@ -375,8 +373,39 @@ mod tests {
         assert_eq!(voices.len(), 3, "the entry without an id must be skipped");
         assert_eq!(voices[0].id, "a");
         assert_eq!(voices[1].label, "c", "a missing name falls back to the id");
-        assert_eq!(voices[1].supported_engines, vec!["eleven_v3"]);
         assert_eq!(voices[2].label, "Zoe");
+    }
+
+    /// The payload's model lists are hints about rendition quality and cloning,
+    /// not the set of models a voice may be used with — so no voice may come
+    /// back carrying a model restriction. Reading them as an allowlist is what
+    /// emptied the picker under `eleven_v3`; see [`parse_voices`].
+    #[test]
+    fn a_compatibility_hint_never_becomes_a_model_restriction() {
+        let body = serde_json::json!({
+            "voices": [
+                // A premade voice: the hint predates v3 and never names it.
+                {
+                    "voice_id": "premade",
+                    "name": "Rachel",
+                    "high_quality_base_model_ids": ["eleven_multilingual_v2", "eleven_turbo_v2"],
+                },
+                // A cloned voice, fine-tuned against v3 in both shapes the
+                // field has been seen in.
+                {
+                    "voice_id": "cloned",
+                    "name": "Mine",
+                    "fine_tuning": { "models": { "eleven_v3": true } },
+                },
+            ]
+        });
+        for voice in parse_voices(&body) {
+            assert!(
+                voice.supported_engines.is_empty(),
+                "{} carries a model restriction",
+                voice.id
+            );
+        }
     }
 
     #[test]
@@ -505,6 +534,40 @@ mod tests {
     }
 }
 
+/// Every voice on the account, following [`VOICES_URL`]'s paging to the end.
+///
+/// Shared by [`ElevenLabs::voices`] and [`discover`] so the two cannot disagree
+/// about how many voices the account has — they did, when only one of them
+/// paged.
+async fn fetch_voices(key: &str) -> Result<Vec<Voice>, TtsError> {
+    let mut voices = Vec::new();
+    let mut page_token = String::new();
+    loop {
+        let mut request = client()
+            .get(VOICES_URL)
+            .header("xi-api-key", key)
+            .query(&[("page_size", "100")]);
+        if !page_token.is_empty() {
+            request = request.query(&[("next_page_token", page_token.as_str())]);
+        }
+        let body = body_json(SERVICE, request.send().await?).await?;
+        voices.extend(parse_voices(&body));
+        let has_more = body
+            .get("has_more")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        page_token = body
+            .get("next_page_token")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !has_more || page_token.is_empty() {
+            break;
+        }
+    }
+    Ok(voices)
+}
+
 /// Authenticates the key and discovers TTS-capable models and all voices.
 pub fn discover(config: &SpeechConfig) -> Result<crate::tts::catalog::EngineCatalog, TtsError> {
     use crate::tts::catalog::{CatalogModel, EngineCatalog};
@@ -539,34 +602,7 @@ pub fn discover(config: &SpeechConfig) -> Result<crate::tts::catalog::EngineCata
         .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
     models.dedup_by(|a, b| a.id == b.id);
-    let voices = block_on(async {
-        let mut voices = Vec::new();
-        let mut page_token = String::new();
-        loop {
-            let mut request = client()
-                .get(format!("{API_BASE}/voices"))
-                .header("xi-api-key", key)
-                .query(&[("page_size", "100")]);
-            if !page_token.is_empty() {
-                request = request.query(&[("next_page_token", page_token.as_str())]);
-            }
-            let body = body_json(SERVICE, request.send().await?).await?;
-            voices.extend(parse_voices(&body));
-            let has_more = body
-                .get("has_more")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false);
-            page_token = body
-                .get("next_page_token")
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .to_string();
-            if !has_more || page_token.is_empty() {
-                break;
-            }
-        }
-        Ok::<_, TtsError>(voices)
-    })?;
+    let voices = block_on(fetch_voices(key))?;
     Ok(EngineCatalog::from_voices(models, voices))
 }
 
