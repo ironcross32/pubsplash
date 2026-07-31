@@ -4,6 +4,14 @@
 
 ### Additions
 
+### Fixes
+
+### Changes
+
+## 0.1.3
+
+### Additions
+
 - `ENTER` now presses the OK button of every dialog in Pubsplash, the counterpart to `ESCAPE` closing them. Stream info, the Text-to-Speech and Sound Events source dialogs, a source's sends, the application picker, Load chain, the missing-plugin notice, Add streaming service, and Add/Edit binding all confirm on `ENTER`; the dialogs that only close — Preferences, the chat message viewer, and an effect's parameters — close on it. Where a dialog checks what you entered, `ENTER` goes through the same check a click does and leaves the dialog open if something is wrong. `ENTER` keeps its existing meaning where a control has one: it inserts a line break in the stream description and in a viewed chat message, sends a chat message, commits a typed effect parameter, and is recorded as a shortcut in the binding capture box. In the streaming services dialog `ENTER` closes and saves rather than connecting, so it can never start or stop a connection by accident.
 
 - Added an **API** tab, last on the tab bar, showing what each speech engine has been asked to do since Pubsplash started. Only engines that have actually spoken appear, most recently used first, and each is followed by its requests sent, characters sent, credits spent, remaining balance, models used, voices used, and failures. **Refresh balances** (`ALT+F`) asks each provider that publishes one how much credit is left; only ElevenLabs reports a balance, and anything a provider does not report reads as "unavailable" rather than as a zero. Nothing is fetched unless you press the button, and none of it is kept between sessions.
@@ -50,7 +58,6 @@
 - Added a persistent TTS catalog with automatic startup refresh and stale-result retention.
 - Replaced OpenAI and ElevenLabs model fields and Polly engine selection with catalog-backed dropdowns.
 - Removed manual voice fetching in favor of automatically refreshed voice dropdowns.
-
 
 ## 0.1.2
 
