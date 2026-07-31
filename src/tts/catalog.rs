@@ -245,6 +245,29 @@ pub fn voices(engine: &str, model: &str) -> Option<Vec<Voice>> {
     )
 }
 
+/// The display label for one voice id, if the catalog knows it.
+///
+/// Deliberately not `voices(engine, "")` plus a `find`: that clones the whole
+/// list, and an ElevenLabs account can hold thousands of voices. This is called
+/// from [`crate::source_name::NameContext::build`], which runs on every arrow
+/// key in the Scenes list and on the two-second application poll.
+pub fn voice_label(engine: &str, voice_id: &str) -> Option<String> {
+    let state = state().read().ok()?;
+    voice_label_in(&state.catalog, engine, voice_id)
+}
+
+/// The catalog-independent half of [`voice_label`], so it can be tested without
+/// writing the process-global catalog out from under another test.
+fn voice_label_in(catalog: &TtsCatalog, engine: &str, voice_id: &str) -> Option<String> {
+    catalog
+        .engines
+        .get(super::engines::resolve_id(engine))?
+        .voices
+        .iter()
+        .find(|voice| voice.id == voice_id)
+        .map(|voice| voice.label.clone())
+}
+
 pub fn commit_engine(engine: &str, mut entry: EngineCatalog) -> bool {
     entry.normalize();
     let id = super::engines::resolve_id(engine).to_string();
@@ -405,6 +428,39 @@ mod tests {
         save_to(&catalog, &path);
         std::fs::write(path.with_extension("tmp"), "{ half-written").unwrap();
         assert_eq!(load_from(&path), catalog);
+    }
+
+    /// The lookup behind the ElevenLabs source labels: a voice id the catalog
+    /// has resolves to its name, and anything it does not know stays `None` so
+    /// the label can leave the detail out rather than print an opaque key.
+    #[test]
+    fn voice_label_resolves_only_ids_the_catalog_holds() {
+        use super::super::engines;
+        let mut catalog = TtsCatalog::default();
+        catalog.engines.insert(
+            engines::ELEVENLABS.into(),
+            EngineCatalog {
+                models: Vec::new(),
+                voices: vec![CatalogVoice {
+                    id: "21m00Tcm4TlvDq8ikWAM".into(),
+                    label: "Rachel".into(),
+                    ..Default::default()
+                }],
+            },
+        );
+        assert_eq!(
+            voice_label_in(&catalog, engines::ELEVENLABS, "21m00Tcm4TlvDq8ikWAM").as_deref(),
+            Some("Rachel")
+        );
+        assert_eq!(
+            voice_label_in(&catalog, engines::ELEVENLABS, "no-such-voice"),
+            None
+        );
+        // An engine with no catalog entry at all, not just no matching voice.
+        assert_eq!(
+            voice_label_in(&catalog, engines::AZURE, "21m00Tcm4TlvDq8ikWAM"),
+            None
+        );
     }
 
     #[test]

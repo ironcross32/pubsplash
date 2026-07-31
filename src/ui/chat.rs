@@ -49,6 +49,30 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl) {
     sizer.add(&send_button, 0, SizerFlag::All, 4);
     panel.set_sizer(sizer, true);
 
+    // The message rows are never rewritten while selected (see
+    // `refresh_times`), so they are brought up to date at the two moments the
+    // user is about to hear one instead.
+    //
+    // Arrowing within the list: the row just vacated is no longer selected, so
+    // it updates at once and stepping off a message and back reads its age as
+    // it is now. The row being moved *onto* is still skipped, so this cannot
+    // talk over it.
+    {
+        let app = app.clone();
+        chat_list
+            .clone()
+            .on_selection_changed(move |_| refresh_chat_times(&app));
+    }
+    // Focus arriving on the list: whatever row it lands on is about to be read
+    // out, so this is the one refresh allowed to write the selected row.
+    {
+        let app = app.clone();
+        chat_list.clone().on_set_focus(move |event| {
+            refresh_times(&app, Selected::Write);
+            event.skip(true);
+        });
+    }
+
     // View popup (button or double-click).
     {
         let app = app.clone();
@@ -67,9 +91,17 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl) {
     {
         let app = app.clone();
         let input = chat_input.clone();
-        chat_input
-            .clone()
-            .on_text_enter(move |_| send_message(&app, &input));
+        chat_input.clone().on_text_enter(move |event| {
+            send_message(&app, &input);
+            // A single-line EDIT beeps when a `\r` WM_CHAR reaches its window
+            // proc, and `wxTextCtrl::OnChar` only withholds that char when the
+            // wxEVT_TEXT_ENTER handler reports the event as processed. wxdragon
+            // pre-sets Skip(true) before every closure, so an ignored event
+            // counts as unhandled — not skipping here is what keeps the send
+            // silent. (Unrelated to the `slider_uia` DLGC_WANTCHARS beep: the
+            // ProcessEnter style already keeps `IsDialogMessage` out of this.)
+            event.skip(false);
+        });
     }
     {
         let app = app.clone();
@@ -218,6 +250,15 @@ pub fn append_new_messages(app: &App, count: usize) {
     });
 }
 
+/// Whether a row the user has selected may be rewritten.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Selected {
+    /// Leave it alone: this refresh was not prompted by the user.
+    Skip,
+    /// Write it: the row is about to be read out anyway.
+    Write,
+}
+
 /// Updates only labels whose relative time has changed (runs every second).
 ///
 /// `relative_time` moves in buckets — seconds, then minutes, then hours — so
@@ -226,7 +267,29 @@ pub fn append_new_messages(app: &App, count: usize) {
 /// `get_string` FFI round-trip for all of them, which matters because this runs
 /// over the entire history once a second for as long as the app is open.
 pub fn refresh_chat_times(app: &App) {
-    app.widgets(|w| {
+    refresh_times(app, Selected::Skip);
+}
+
+/// The body of [`refresh_chat_times`], with the rule that keeps it silent.
+///
+/// `set_string` on the *selected* row is announced whether or not the list has
+/// focus; on any other row it is silent. `home::refresh` documents that finding
+/// at length — the consequence here is that a message's age changes every
+/// second for its first minute, so a user parked on a recent message heard it
+/// read out once a second. The tick therefore never writes the selected row,
+/// whichever row it is, and nothing in this list can speak on its own.
+///
+/// The skipped row's `shown_age` is deliberately left stale as well, so the row
+/// is retried the moment it stops being the selected one.
+fn refresh_times(app: &App, selected_rows: Selected) {
+    // Widget writes happen with nothing borrowed: `on_selection_changed` and
+    // `on_set_focus` both land here, so a `run` borrow held across a
+    // `set_string` would be a panic waiting on whichever wx build decides to
+    // raise an event from one.
+    let mut pending: Vec<(u32, String)> = Vec::new();
+    let selected = app.widgets(|w| w.chat_list.get_selection()).flatten();
+
+    {
         let mut run = app.run.borrow_mut();
         // Indexing rows by position is safe here: the placeholder row exists
         // only while `run.chat` is empty, and then this loop does not run.
@@ -235,9 +298,20 @@ pub fn refresh_chat_times(app: &App) {
             if age == entry.shown_age {
                 continue;
             }
-            w.chat_list
-                .set_string(index as u32, &label_for(entry, &age));
+            if selected_rows == Selected::Skip && selected == Some(index as u32) {
+                continue;
+            }
+            pending.push((index as u32, label_for(entry, &age)));
             entry.shown_age = age;
+        }
+    }
+
+    if pending.is_empty() {
+        return;
+    }
+    app.widgets(|w| {
+        for (index, label) in &pending {
+            w.chat_list.set_string(*index, label);
         }
     });
 }

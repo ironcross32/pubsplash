@@ -123,6 +123,13 @@ impl SpeechEngine for Star {
             })
             .unwrap_or_default())
     }
+
+    // No `usage_model`: Star is self-hosted and has neither models nor billing.
+
+    fn usage_voice(&self, request: &SynthRequest) -> Option<String> {
+        // Empty means the server's own default, which it never names back.
+        (!request.voice.is_empty()).then(|| request.voice.clone())
+    }
 }
 
 /// Splits a reply frame into its declared file extension and the audio bytes.

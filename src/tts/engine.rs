@@ -156,6 +156,27 @@ pub trait SpeechEngine: Send {
     /// [`crate::audio::mixer::SAMPLE_RATE`].
     fn synth(&self, request: &SynthRequest) -> Result<Vec<f32>, TtsError>;
 
+    /// Renders `request`, handing samples to `sink` as they become available.
+    ///
+    /// The default buffers the whole utterance, which is all an engine with no
+    /// streaming API can do. Overriding this is how an engine gets its audio to
+    /// the mixer before synthesis has finished — the callers that want a
+    /// complete buffer (the dialog's voice preview) keep using [`Self::synth`].
+    ///
+    /// `sink` may block for as long as the samples take to play: it is the
+    /// mixer's ring buffer on the other end, and back-pressure is the point.
+    fn synth_to(
+        &self,
+        request: &SynthRequest,
+        sink: &mut dyn FnMut(&[f32]),
+    ) -> Result<(), TtsError> {
+        let samples = self.synth(request)?;
+        if !samples.is_empty() {
+            sink(&samples);
+        }
+        Ok(())
+    }
+
     /// Voices for the picker.
     ///
     /// Engines with a fixed list answer immediately; the rest go to the
@@ -163,6 +184,28 @@ pub trait SpeechEngine: Send {
     /// thread rather than calling it while building the dialog.
     fn voices(&self) -> Result<Vec<Voice>, TtsError> {
         Ok(Vec::new())
+    }
+
+    /// The model this request will be billed against, for the API tab.
+    ///
+    /// `None` where the format has no model to name — Azure and Google encode
+    /// it in the voice, and the free engines have none at all. Implementors
+    /// answer with the *resolved* value, defaults and fallbacks applied, since
+    /// that is what the provider will actually see; the resolution lives in the
+    /// engine and this is how [`crate::tts::usage`] gets at it without
+    /// duplicating it.
+    fn usage_model(&self, request: &SynthRequest) -> Option<String> {
+        let _ = request;
+        None
+    }
+
+    /// The voice this request will actually use, defaults resolved.
+    ///
+    /// The raw provider id, not a display label: `crate::tts::cached_voice_label`
+    /// turns it into a name at the point it is shown.
+    fn usage_voice(&self, request: &SynthRequest) -> Option<String> {
+        let _ = request;
+        None
     }
 }
 

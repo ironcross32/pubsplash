@@ -27,12 +27,18 @@ pub struct NameContext {
     pub apps: HashMap<String, AppProcess>,
     /// Identity names of sources whose capture thread is failing and retrying.
     pub failing: HashSet<String>,
+    /// Display names for TTS voices whose configured id is an opaque key,
+    /// keyed by engine id and then voice id. Only engines that need it are
+    /// looked up, and an id the catalog has never seen is simply absent.
+    pub voice_labels: HashMap<String, HashMap<String, String>>,
 }
 
 impl NameContext {
     /// Gathers what the given sources need. Capture devices are enumerated
     /// only when some source actually names one, since that costs a WASAPI
-    /// round trip and most scenes are on the default device.
+    /// round trip and most scenes are on the default device. Voice names are
+    /// looked up here, and not in the label functions, so those stay pure — the
+    /// point of this type.
     pub fn build(
         sources: &[SourceConfig],
         apps: HashMap<String, AppProcess>,
@@ -49,6 +55,7 @@ impl NameContext {
             },
             apps,
             failing,
+            voice_labels: voice_labels_for(sources),
         }
     }
 
@@ -61,6 +68,67 @@ impl NameContext {
 
     fn app(&self, process_name: &str) -> Option<&AppProcess> {
         self.apps.get(&process_name.trim().to_ascii_lowercase())
+    }
+
+    /// The voice's display name, for the engines that need resolving. `None`
+    /// covers both "this engine's ids read fine already" and "the catalog has
+    /// not got this voice", which the callers distinguish.
+    fn voice_label(&self, engine: &str, voice: &str) -> Option<&str> {
+        self.voice_labels
+            .get(engine)?
+            .get(voice)
+            .map(String::as_str)
+    }
+}
+
+/// Resolves the voice names the given sources need from the TTS catalog.
+///
+/// Only sources on an engine with opaque voice ids are looked up, so the common
+/// configuration touches the catalog not at all. Names the catalog does not hold
+/// are left out rather than defaulted: the caller must be able to tell an
+/// unresolved voice from a resolved one, since it prints neither the same way.
+fn voice_labels_for(sources: &[SourceConfig]) -> HashMap<String, HashMap<String, String>> {
+    let mut labels: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for source in sources {
+        let SourceKindConfig::Tts(tts) = &source.kind else {
+            continue;
+        };
+        if tts.voice.is_empty() || !crate::tts::engines::voice_ids_are_opaque(&tts.engine) {
+            continue;
+        }
+        let engine = labels.entry(tts.engine.clone()).or_default();
+        if engine.contains_key(&tts.voice) {
+            continue;
+        }
+        if let Some(label) = crate::tts::cached_voice_label(&tts.engine, &tts.voice) {
+            engine.insert(tts.voice.clone(), label);
+        }
+    }
+    labels
+}
+
+/// How a TTS source's voice should be named, if at all.
+enum VoiceDisplay<'a> {
+    /// No voice is configured: the engine's default.
+    Default,
+    /// A name to say — either the catalog's, or an id that reads as one.
+    Named(&'a str),
+    /// A voice is configured but its name is not known yet, and its id is an
+    /// opaque key. Saying the key would be worse than saying nothing.
+    Unnamed,
+}
+
+fn voice_display<'a>(
+    tts: &'a crate::config::TtsSourceConfig,
+    ctx: &'a NameContext,
+) -> VoiceDisplay<'a> {
+    if tts.voice.is_empty() {
+        return VoiceDisplay::Default;
+    }
+    match ctx.voice_label(&tts.engine, &tts.voice) {
+        Some(label) => VoiceDisplay::Named(label),
+        None if crate::tts::engines::voice_ids_are_opaque(&tts.engine) => VoiceDisplay::Unnamed,
+        None => VoiceDisplay::Named(&tts.voice),
     }
 }
 
@@ -114,13 +182,13 @@ fn base_strip_label(source: &SourceConfig, ctx: &NameContext) -> String {
                 }
             }
         }
-        SourceKindConfig::Tts(tts) => {
-            if tts.voice.is_empty() {
-                "Text-to-Speech".to_string()
-            } else {
-                format!("Text-to-Speech ({})", tts.voice)
-            }
-        }
+        SourceKindConfig::Tts(tts) => match voice_display(tts, ctx) {
+            VoiceDisplay::Named(voice) => format!("Text-to-Speech ({voice})"),
+            // An unresolved opaque id reads exactly like an unset voice here.
+            // The strip form is the short one and has no room to explain the
+            // difference; the list form below does.
+            VoiceDisplay::Default | VoiceDisplay::Unnamed => "Text-to-Speech".to_string(),
+        },
         SourceKindConfig::SoundEvents(_) => "Sound Events".to_string(),
     }
 }
@@ -148,10 +216,12 @@ fn base_list_label(source: &SourceConfig, ctx: &NameContext) -> String {
         }
         SourceKindConfig::Tts(tts) => {
             let engine = crate::tts::engines::display_name(&tts.engine);
-            if tts.voice.is_empty() {
-                format!("Text-to-Speech: {engine}, default voice")
-            } else {
-                format!("Text-to-Speech: {engine}, {}", tts.voice)
+            match voice_display(tts, ctx) {
+                VoiceDisplay::Default => format!("Text-to-Speech: {engine}, default voice"),
+                VoiceDisplay::Named(voice) => format!("Text-to-Speech: {engine}, {voice}"),
+                // A voice *is* configured, so this must not say "default
+                // voice" — the engine name alone, until the catalog resolves it.
+                VoiceDisplay::Unnamed => format!("Text-to-Speech: {engine}"),
             }
         }
         SourceKindConfig::SoundEvents(_) => "Sound Events".to_string(),
@@ -240,7 +310,19 @@ mod tests {
                 },
             )]),
             failing: HashSet::new(),
+            voice_labels: HashMap::from([(
+                crate::tts::engines::ELEVENLABS.to_string(),
+                HashMap::from([("21m00Tcm4TlvDq8ikWAM".to_string(), "Rachel".to_string())]),
+            )]),
         }
+    }
+
+    fn elevenlabs(voice: &str) -> SourceConfig {
+        source(SourceKindConfig::Tts(TtsSourceConfig {
+            engine: crate::tts::engines::ELEVENLABS.into(),
+            voice: voice.into(),
+            ..Default::default()
+        }))
     }
 
     fn source(kind: SourceKindConfig) -> SourceConfig {
@@ -414,6 +496,48 @@ mod tests {
         assert_eq!(
             list_label(&unknown, &ctx()),
             "Text-to-Speech: SAPI 5, default voice"
+        );
+    }
+
+    /// An ElevenLabs voice id is a 20-character key. Both forms say the voice's
+    /// name instead, which is the only part a listener can act on.
+    #[test]
+    fn an_elevenlabs_voice_is_named_not_keyed() {
+        let src = elevenlabs("21m00Tcm4TlvDq8ikWAM");
+        assert_eq!(strip_label(&src, &ctx()), "Text-to-Speech (Rachel)");
+        assert_eq!(
+            list_label(&src, &ctx()),
+            "Text-to-Speech: ElevenLabs, Rachel"
+        );
+    }
+
+    /// Before the catalog has been fetched — no API key, a first run, a voice
+    /// since deleted from the account — the id must not be read out. The list
+    /// form still has to distinguish this from a source with no voice set,
+    /// since here one *is* set and the label simply cannot name it yet.
+    #[test]
+    fn an_unresolved_elevenlabs_voice_says_nothing_rather_than_its_id() {
+        let src = elevenlabs("XrExE9yKIg1WjnnlVkGX");
+        let mut ctx = ctx();
+        ctx.voice_labels.clear();
+        assert_eq!(strip_label(&src, &ctx), "Text-to-Speech");
+        assert_eq!(list_label(&src, &ctx), "Text-to-Speech: ElevenLabs");
+        for label in [strip_label(&src, &ctx), list_label(&src, &ctx)] {
+            assert!(
+                !label.contains("XrExE9yKIg1WjnnlVkGX"),
+                "the raw voice id leaked into {label:?}"
+            );
+        }
+    }
+
+    /// And an ElevenLabs source with no voice chosen is still the default one.
+    #[test]
+    fn an_elevenlabs_source_with_no_voice_is_still_the_default() {
+        let src = elevenlabs("");
+        assert_eq!(strip_label(&src, &ctx()), "Text-to-Speech");
+        assert_eq!(
+            list_label(&src, &ctx()),
+            "Text-to-Speech: ElevenLabs, default voice"
         );
     }
 

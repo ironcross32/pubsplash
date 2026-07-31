@@ -115,11 +115,7 @@ impl SpeechEngine for Polly {
 
     fn synth(&self, request: &SynthRequest) -> Result<Vec<f32>, TtsError> {
         self.credentials()?;
-        let voice = if request.voice.is_empty() {
-            DEFAULT_VOICE
-        } else {
-            &request.voice
-        };
+        let voice = voice_of(request);
         let body = request_body(request, voice, &self.engine).to_string();
 
         let pcm = block_on(self.call("POST", "/v1/speech", &body))?;
@@ -155,6 +151,36 @@ impl SpeechEngine for Polly {
             body_json(SERVICE, response).await
         })?;
         Ok(parse_voices(&body))
+    }
+
+    fn usage_model(&self, request: &SynthRequest) -> Option<String> {
+        // Polly's "model" is its `Engine` — standard, neural, long-form or
+        // generative — and they are billed at very different rates, so this is
+        // the field a user checking their spend most needs to see. Empty means
+        // the account default, which has no name to record.
+        let engine = engine_for(&self.engine, request);
+        (!engine.is_empty()).then(|| engine.to_string())
+    }
+
+    fn usage_voice(&self, request: &SynthRequest) -> Option<String> {
+        Some(voice_of(request).to_string())
+    }
+}
+
+fn voice_of(request: &SynthRequest) -> &str {
+    if request.voice.is_empty() {
+        DEFAULT_VOICE
+    } else {
+        &request.voice
+    }
+}
+
+/// The `Engine` this request will carry, or empty to take the account default.
+fn engine_for<'a>(legacy_engine: &'a str, request: &'a SynthRequest) -> &'a str {
+    match &request.provider_settings {
+        None => legacy_engine.trim(),
+        Some(TtsEngineSettings::Polly(settings)) => settings.engine.trim(),
+        Some(_) => "",
     }
 }
 
@@ -201,11 +227,7 @@ fn request_body(request: &SynthRequest, voice: &str, legacy_engine: &str) -> ser
         Some(TtsEngineSettings::Polly(settings)) => Some(settings),
         _ => None,
     };
-    let engine = match (&request.provider_settings, selected) {
-        (None, _) => legacy_engine.trim(),
-        (_, Some(settings)) => settings.engine.trim(),
-        _ => "",
-    };
+    let engine = engine_for(legacy_engine, request);
     let rate = (100 + request.rate_percent()).clamp(20, 200);
     let volume = if request.volume_percent() == 0 {
         -96.0

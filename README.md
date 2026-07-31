@@ -22,6 +22,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - Mixing buses with per-source sends, so sources can be routed through shared processing (see below)
 - Load VST2 or VST3 plugins onto a bus, save your setup as an FX chain; export a chain to move it to another machine or give it to a friend
 - The Home tab's stream overview list reports your stream status, quality, listener count and peak, and duration
+- The API tab breaks down what each speech engine has cost you this session — requests, characters, models and voices used — and reads your remaining ElevenLabs credit on request
 
 ## Requirements
 
@@ -53,10 +54,11 @@ The **Stream overview** at the top of the Home tab is a list you can arrow throu
 | `ALT+R` / `ALT+C` | Start / stop recording without streaming (Home tab) |
 | `ALT+W` | Switch to the selected scene (Home tab) |
 | `ALT+V` | View the focused chat message in a window (Chat tab) |
+| `ALT+F` | Refresh account balances (API tab) |
 | `Escape` | Close the current dialog; in the chat input box, clear the box |
 | `CTRL+,` | Open Preferences |
 | `CTRL+M` | Toggle monitoring for the focused mixer strip |
-| `ALT+G` / `ALT+P` | Get available voices / preview the voice (Text-to-Speech source dialog) |
+| `ALT+P` / `ALT+R` | Preview the voice / reset the selected engine to defaults (Text-to-Speech source dialog) |
 | `ALT+I` / `ALT+K` | Import / remove a sound pack (Preferences, Sound packs tab) |
 | `CTRL+Up` / `CTRL+Down` | Move the focused scene, source, bus, or plugin |
 | `Delete` | Remove the focused scene, source, bus, send, or plugin |
@@ -174,21 +176,41 @@ Credentials go on the **Speech** tab of **File → Preferences** (`CTRL+,`), onc
 
 That tab starts with a **Speech engine** picker, and everything after it belongs to whichever engine the picker names so tabbing to the ElevenLabs key does not take you past OpenAI, Azure, AWS and Google first. The three engines that need no setup say so. The tab reopens on the engine you were last looking at.
 
-Engines other than SAPI 5 and Google Translate publish their voice lists over the network, so their voice pickers start out holding only **Default voice**. The line under the picker says how many voices the selected engine has, or that they have not been fetched yet. Press **Get available voices** (`ALT+G`) to fill the list; it is remembered until you change the credentials or restart. Press **Preview voice** (`ALT+P`) to hear the current settings; this is the quickest way to find out whether a key is wrong, because it reports the reason rather than just going quiet.
+Engines other than SAPI 5 and Google Translate publish their voice lists over the network, so their voice pickers start out holding only **Default voice**. The lists refresh by themselves at startup and after credentials are validated, and the last successful list is kept until then. The line under the picker says how many voices the selected engine has, or that they are still being fetched. Press **Preview voice** (`ALT+P`) to hear the current settings; this is the quickest way to find out whether a key is wrong, because it reports the reason rather than just going quiet.
 
-Changing the engine reloads the voice list.
+Under the voice picker is a group of settings belonging to the selected engine, empty for the engines that have none. ElevenLabs' group ends with **Stream audio as it is generated**, on by default: speech starts playing as ElevenLabs produces it rather than after the whole message has been generated, which is most of the delay before a chat message is read. Uncheck it to wait for the complete clip. Eleven v3 has no streaming endpoint, so the box is unavailable there, as similarity boost and speaker boost already are.
+
+Changing the engine reloads the voice list and everything else the source keeps per engine. Each engine remembers its own voice, volume, rate, pitch and settings, so moving a source to another engine and back finds the first one exactly as you left it — even across restarts, since every engine you have configured is saved in its own section of the config file. **Reset this engine to defaults** (`ALT+R`) puts the engine the picker is showing back to its factory settings and leaves every other engine alone; like everything else in the dialog it takes effect when you press OK, so Cancel undoes it.
 
 ### Hearing it, and sending it
 
-SAPI 5 speaks to you directly, whatever else is going on. The other engines produce audio that goes through the mixer like any other source, so to hear those yourself, turn on monitoring for the TTS source's mixer strip with `CTRL+M`.
+You always hear the speech, on every engine, without having to set anything up: a Text-to-Speech source is played to you as well as mixed, so chat is read aloud from the moment you add one. Its mixer strip governs what you hear, so the source's volume and mute apply to you and to your listeners alike, and you do not need to monitor the strip (`CTRL+M` on it changes nothing, and does not double the speech).
 
-**Send speech to the stream** controls whether your listeners hear it. With it unchecked, the speech stays off the stream but still reaches your monitor and any buses the source sends to.
+**Send speech to the stream** controls whether your listeners hear it, and nothing else. With it unchecked, the speech reaches neither the stream nor any bus the source sends to — it is yours alone.
 
 ### Cost and flood control
 
 The Speech tab has two limits that apply to every network engine. **Longest message to speak** cuts over-long chat messages short rather than skipping them, so one wall of text cannot tie up the engine. **Shortest gap between requests** spreads out a burst of chat so a busy stream does not run up a bill or trip a rate limit. When messages still arrive faster than they can be spoken, the oldest queued ones are dropped, so what you hear stays current.
 
 If an engine fails (a wrong key, no network, a service outage) the reason appears in the chat list rather than in a dialog box, and repeats of the same failure are held down to one a minute.
+
+### Checking what you have spent
+
+The **API** tab, last on the tab bar, keeps a running tally of what each speech engine has been asked to do since Pubsplash started. Only engines that have actually spoken appear, and the most recently used one is at the top. Each engine's name is followed by its indented figures:
+
+| Row | What it means |
+| --- | --- |
+| Requests sent | Utterances handed to the engine, successful or not |
+| Characters sent | Characters submitted, counted after **Longest message to speak** has trimmed them — the figure a per-character biller charges for |
+| Credits spent | What this session cost in the provider's own unit |
+| Remaining balance | What is left on your account, once fetched |
+| Models used | Every model this engine has been asked for |
+| Voices used | Every voice this engine has spoken in |
+| Failures | How many of those requests failed |
+
+**Refresh balances** (`ALT+F`) asks each provider for your remaining credit. Only ElevenLabs publishes one that Pubsplash can read with the key you have already given it — Azure, Google Cloud and AWS keep theirs behind separate cloud-billing APIs, and Microsoft Edge, Google Translate, Star and SAPI 5 have no account at all. Anything a provider does not report reads as "unavailable" rather than as a zero, so an empty balance is never mistaken for an exhausted one.
+
+Nothing here is fetched unless you press the button, and none of it is kept between sessions: the tab starts empty on every launch.
 
 ## Configuration
 

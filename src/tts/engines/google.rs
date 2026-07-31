@@ -68,11 +68,7 @@ impl SpeechEngine for GoogleCloud {
 
     fn synth(&self, request: &SynthRequest) -> Result<Vec<f32>, TtsError> {
         let key = require(&self.api_key, "The Google Cloud API key")?;
-        let voice = if request.voice.is_empty() {
-            DEFAULT_VOICE
-        } else {
-            &request.voice
-        };
+        let voice = voice_of(request);
 
         let body = request_body(request, voice, &self.language_code);
 
@@ -109,6 +105,21 @@ impl SpeechEngine for GoogleCloud {
             body_json(SERVICE, response).await
         })?;
         Ok(parse_voices(&body))
+    }
+
+    // No `usage_model`: the request has no model field. Google prices by voice
+    // family — Standard, WaveNet, Neural2 — which the voice name encodes.
+
+    fn usage_voice(&self, request: &SynthRequest) -> Option<String> {
+        Some(voice_of(request).to_string())
+    }
+}
+
+fn voice_of(request: &SynthRequest) -> &str {
+    if request.voice.is_empty() {
+        DEFAULT_VOICE
+    } else {
+        &request.voice
     }
 }
 

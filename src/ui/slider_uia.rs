@@ -249,6 +249,15 @@ impl SliderAnnouncer {
         guard.0 = name.to_string();
     }
 
+    /// Replaces the announced value, keeping the current name and raising no
+    /// event. For a value the user did not just set — a slider reloaded or reset
+    /// under them — which should read correctly the next time they reach it
+    /// without being spoken over whatever they are doing now.
+    pub fn set_value_text(&self, value: &str) {
+        let mut guard = lock(&self.inner.text);
+        guard.1 = value.to_string();
+    }
+
     /// Announces a new value under whatever name is already set, so callers that
     /// set the name once don't have to carry it into every keystroke.
     pub fn update_value(&self, value: &str) {

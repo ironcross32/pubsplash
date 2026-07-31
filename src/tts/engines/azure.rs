@@ -53,11 +53,7 @@ impl SpeechEngine for Azure {
 
     fn synth(&self, request: &SynthRequest) -> Result<Vec<f32>, TtsError> {
         let (key, _) = self.credentials()?;
-        let voice = if request.voice.is_empty() {
-            DEFAULT_VOICE
-        } else {
-            &request.voice
-        };
+        let voice = voice_of(request);
         let body = request_ssml(request, voice);
 
         let bytes = block_on(async {
@@ -88,6 +84,21 @@ impl SpeechEngine for Azure {
             body_json(SERVICE, response).await
         })?;
         Ok(parse_voices(&body))
+    }
+
+    // No `usage_model`: the request is SSML and carries no model field. Azure
+    // prices by voice tier, which the voice name already encodes.
+
+    fn usage_voice(&self, request: &SynthRequest) -> Option<String> {
+        Some(voice_of(request).to_string())
+    }
+}
+
+fn voice_of(request: &SynthRequest) -> &str {
+    if request.voice.is_empty() {
+        DEFAULT_VOICE
+    } else {
+        &request.voice
     }
 }
 

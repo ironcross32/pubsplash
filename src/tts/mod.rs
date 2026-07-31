@@ -14,6 +14,7 @@ pub mod queue;
 pub mod sapi;
 pub mod speaker;
 pub mod ssml;
+pub mod usage;
 
 use engine::Voice;
 
@@ -30,6 +31,12 @@ pub fn cached_voices(engine: &str) -> Option<Vec<Voice>> {
 /// Cached voices filtered for a provider model. Engine-wide voices remain.
 pub fn cached_voices_for_model(engine: &str, model: &str) -> Option<Vec<Voice>> {
     catalog::voices(engine, model)
+}
+
+/// The cached display name for one voice id, for engines whose ids are opaque
+/// keys — see [`engines::voice_ids_are_opaque`].
+pub fn cached_voice_label(engine: &str, voice_id: &str) -> Option<String> {
+    catalog::voice_label(engine, voice_id)
 }
 
 /// How many engine-wide voices are cached; `None` means never refreshed.

@@ -6,11 +6,12 @@ use super::slider_uia::SliderAnnouncer;
 use super::{App, WXK_DELETE, WXK_DOWN, WXK_UP, show_error};
 use crate::config::{
     AzureTtsSettings, ElevenLabsTtsSettings, GoogleTtsSettings, GttsTtsSettings, OpenAiTtsSettings,
-    PollyTtsSettings, SoundEventsSourceConfig, SourceConfig, SourceKindConfig, TtsEngineSettings,
-    TtsSourceConfig,
+    PollyTtsSettings, SoundEventsSourceConfig, SourceConfig, SourceKindConfig, TtsEngineProfile,
+    TtsEngineSettings, TtsSourceConfig,
 };
 use crate::soundpack::StreamEvent;
 use crate::state::{ListEdit, move_down, move_up};
+use std::collections::HashMap;
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
@@ -775,6 +776,16 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     super::set_accessible_name(&preview, "Preview voice");
     super::help::tag(&preview, "dialog.ttsSource.preview", "Preview voice button");
 
+    let reset = Button::builder(&panel)
+        .with_label("&Reset this engine to defaults")
+        .build();
+    super::set_accessible_name(&reset, "Reset this engine to defaults");
+    super::help::tag(
+        &reset,
+        "dialog.ttsSource.reset",
+        "Reset this engine to defaults button",
+    );
+
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let ok = Button::builder(&panel).with_label("OK").build();
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
@@ -801,6 +812,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     }
     sizer.add(&output_check, 0, SizerFlag::All, 8);
     sizer.add(&preview, 0, SizerFlag::All, 4);
+    sizer.add(&reset, 0, SizerFlag::All, 4);
     sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight, 0);
     panel.set_sizer(sizer, true);
     let scrolled_sizer = BoxSizer::builder(Orientation::Vertical).build();
@@ -855,14 +867,53 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     // and no idle follows the user's last arrow key, so a polled deadline would
     // never come due.
     let applied = Rc::new(std::cell::Cell::new(selected_id));
-    // The voice picked per engine, for this dialog only. Without it, arrowing
-    // *through* an engine on the way to another one threw away the voice you
-    // had already chosen there.
-    let voice_memory: Rc<std::cell::RefCell<std::collections::HashMap<&'static str, String>>> =
-        Rc::new(std::cell::RefCell::new(
-            [(selected_id, current.voice.clone())].into_iter().collect(),
-        ));
+    // What each engine is set to. Seeded from the source's saved sections, so
+    // an engine configured in an earlier sitting comes back as it was left, and
+    // written back for every engine on OK — arrowing *through* an engine on the
+    // way to another one must not throw away what is stored there either.
+    let profiles: Rc<std::cell::RefCell<HashMap<&'static str, TtsEngineProfile>>> = {
+        let speech = &app.config.borrow().speech;
+        let mut seeded: HashMap<&'static str, TtsEngineProfile> = crate::tts::engine_names()
+            .iter()
+            .map(|(id, _)| {
+                let saved = current.engines.get(*id).cloned();
+                (
+                    *id,
+                    saved.unwrap_or_else(|| default_profile(id, Some(speech))),
+                )
+            })
+            .collect();
+        // The flat fields win for the selected engine: they are what the app is
+        // actually speaking with, whatever the section says.
+        seeded.insert(selected_id, current.active_profile());
+        Rc::new(std::cell::RefCell::new(seeded))
+    };
     let pitch_supported = Rc::new(std::cell::Cell::new(pitch_is_supported(selected_id)));
+
+    // Copies the widgets into the profile of whichever engine they are showing.
+    let stash: Rc<dyn Fn()> = {
+        let voice_choice = voice_choice.clone();
+        let voices = voices.clone();
+        let volume_slider = volume_slider.clone();
+        let rate_slider = rate_slider.clone();
+        let pitch_slider = pitch_slider.clone();
+        let provider_controls = provider_controls.clone();
+        let applied = applied.clone();
+        let profiles = profiles.clone();
+        Rc::new(move || {
+            let engine = applied.get();
+            profiles.borrow_mut().insert(
+                engine,
+                TtsEngineProfile {
+                    voice: selected_voice(&voice_choice, &voices),
+                    volume: volume_slider.value().clamp(0, 100) as u32,
+                    rate: rate_slider.value().clamp(-10, 10),
+                    pitch: pitch_slider.value().clamp(-50, 50),
+                    settings: provider_controls.settings(engine),
+                },
+            );
+        })
+    };
 
     let apply_engine: Rc<dyn Fn()> = {
         let voice_choice = voice_choice.clone();
@@ -875,20 +926,31 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         let voices = voices.clone();
         let selected_engine = selected_engine.clone();
         let applied = applied.clone();
-        let voice_memory = voice_memory.clone();
+        let profiles = profiles.clone();
         let pitch_supported = pitch_supported.clone();
         let provider_controls = provider_controls.clone();
+        let volume_slider = volume_slider.clone();
+        let volume_announcer = volume_announcer.clone();
+        let rate_announcer = rate_announcer.clone();
         let panel = panel.clone();
         Rc::new(move || {
             let engine = selected_engine();
             if engine == applied.get() {
                 return;
             }
-            let wanted = voice_memory
-                .borrow()
-                .get(engine)
-                .cloned()
-                .unwrap_or_default();
+            let profile = profiles.borrow().get(engine).cloned().unwrap_or_default();
+            // The provider panel first: its model is what the voice list below
+            // is filtered by, so a stale one would list the wrong voices.
+            provider_controls.load(engine, profile.settings.as_ref());
+            set_slider(
+                &volume_slider,
+                &volume_announcer,
+                profile.volume as i32,
+                "%",
+            );
+            set_slider(&rate_slider, &rate_announcer, profile.rate, "");
+            set_slider(&pitch_slider, &pitch_announcer, profile.pitch, "");
+            let wanted = profile.voice;
             voice_choice.freeze();
             fill_voice_choice(
                 &voice_choice,
@@ -1024,17 +1086,12 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     }
 
     {
-        let voice_choice = voice_choice.clone();
-        let voices = voices.clone();
-        let applied = applied.clone();
-        let voice_memory = voice_memory.clone();
+        let stash = stash.clone();
         let settle = settle.clone();
         engine_choice.clone().on_selection_changed(move |_| {
-            // Remember what was picked for the engine we are leaving, then do
+            // Remember what the engine we are leaving was set to, then do
             // nothing else until the user settles.
-            voice_memory
-                .borrow_mut()
-                .insert(applied.get(), selected_voice(&voice_choice, &voices));
+            stash();
             settle.start(SETTLE_MS, true);
         });
     }
@@ -1109,6 +1166,74 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     }
 
     {
+        // Resets the engine on show, and only that one: the other engines' saved
+        // sections are what makes switching lossless, and a reset button that
+        // quietly cleared them all would undo exactly that. Nothing is written
+        // until OK, so Cancel takes it back.
+        let panel = panel.clone();
+        let voice_choice = voice_choice.clone();
+        let voice_count_label = voice_count_label.clone();
+        let voices = voices.clone();
+        let volume_slider = volume_slider.clone();
+        let rate_slider = rate_slider.clone();
+        let pitch_slider = pitch_slider.clone();
+        let rate_label = rate_label.clone();
+        let pitch_label = pitch_label.clone();
+        let volume_announcer = volume_announcer.clone();
+        let rate_announcer = rate_announcer.clone();
+        let pitch_announcer = pitch_announcer.clone();
+        let selected_engine = selected_engine.clone();
+        let apply_engine = apply_engine.clone();
+        let provider_controls = provider_controls.clone();
+        let pitch_supported = pitch_supported.clone();
+        let stash = stash.clone();
+        reset.on_click(move |_| {
+            // The picker may still be mid-settle, in which case the widgets are
+            // showing the engine we are *leaving*.
+            apply_engine();
+            let engine = selected_engine();
+            let profile = default_profile(engine, None);
+            provider_controls.load(engine, profile.settings.as_ref());
+            set_slider(
+                &volume_slider,
+                &volume_announcer,
+                profile.volume as i32,
+                "%",
+            );
+            set_slider(&rate_slider, &rate_announcer, profile.rate, "");
+            set_slider(&pitch_slider, &pitch_announcer, profile.pitch, "");
+            fill_voice_choice(
+                &voice_choice,
+                &voices,
+                engine,
+                &provider_controls.model_value(engine),
+                &profile.voice,
+            );
+            update_voice_status(&voice_count_label, &voice_choice, engine);
+            // Polly's engine mode decides whether pitch applies, and the reset
+            // has just put it back to the provider default.
+            let supported = pitch_is_supported(engine);
+            if supported != pitch_supported.replace(supported) {
+                set_pitch_name(&pitch_slider, &pitch_announcer, engine);
+            }
+            pitch_label.show(supported);
+            pitch_slider.show(supported);
+            let rate_supported = rate_is_supported(engine);
+            rate_label.show(rate_supported);
+            rate_slider.show(rate_supported);
+            if engine == crate::tts::engines::AZURE {
+                provider_controls.refresh_azure_voice(None);
+            }
+            panel.layout();
+            stash();
+            super::help::announce(&format!(
+                "{} settings reset to defaults.",
+                crate::tts::engines::display_name(engine)
+            ));
+        });
+    }
+
+    {
         let dialog = dialog.clone();
         ok.on_click(move |_| dialog.end_modal(ID_OK));
     }
@@ -1122,17 +1247,29 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     // key; `selected_voice` below would then read the old engine's list.
     apply_engine();
     if outcome == ID_OK {
+        // Every engine is saved, not only the selected one, so coming back to
+        // one configured earlier finds it as it was left. The selected engine's
+        // section is also mirrored into the flat fields, which are what the
+        // running app speaks with.
+        stash();
+        let engine = selected_engine();
+        let profiles = profiles.borrow();
+        let active = profiles.get(engine).cloned().unwrap_or_default();
         set_source_kind(
             app,
             scene_index,
             source_index,
             SourceKindConfig::Tts(TtsSourceConfig {
-                engine: selected_engine().to_string(),
-                voice: selected_voice(&voice_choice, &voices),
-                volume: volume_slider.value().clamp(0, 100) as u32,
-                rate: rate_slider.value().clamp(-10, 10),
-                pitch: pitch_slider.value().clamp(-50, 50),
-                provider_settings: provider_controls.settings(selected_engine()),
+                engine: engine.to_string(),
+                voice: active.voice,
+                volume: active.volume,
+                rate: active.rate,
+                pitch: active.pitch,
+                provider_settings: active.settings,
+                engines: profiles
+                    .iter()
+                    .map(|(id, profile)| ((*id).to_string(), profile.clone()))
+                    .collect(),
                 output_to_stream: output_check.get_value(),
             }),
         );
@@ -1159,6 +1296,53 @@ fn rate_is_supported(engine: &str) -> bool {
     )
 }
 
+/// What an engine is set to before the user has configured it.
+///
+/// `speech` carries the three global fallbacks a source used before per-source
+/// provider settings existed, so an engine seen for the first time starts from
+/// what the user already told the app globally. Pass `None` — the reset button
+/// does — for the factory values with no such carry-over.
+fn default_profile(engine: &str, speech: Option<&crate::config::SpeechConfig>) -> TtsEngineProfile {
+    use crate::tts::engines;
+    let settings = match engine {
+        engines::ELEVENLABS => Some(TtsEngineSettings::ElevenLabs(ElevenLabsTtsSettings {
+            model: speech
+                .map(|speech| speech.elevenlabs_model.clone())
+                .unwrap_or_default(),
+            ..Default::default()
+        })),
+        engines::OPENAI => Some(TtsEngineSettings::OpenAi(OpenAiTtsSettings::default())),
+        engines::AZURE => Some(TtsEngineSettings::Azure(AzureTtsSettings::default())),
+        engines::GOOGLE => Some(TtsEngineSettings::Google(GoogleTtsSettings {
+            language_code: speech
+                .map(|speech| speech.google_language_code.clone())
+                .unwrap_or_default(),
+            ..Default::default()
+        })),
+        engines::AWS => Some(TtsEngineSettings::Polly(PollyTtsSettings {
+            engine: speech
+                .map(|speech| speech.aws_engine.clone())
+                .unwrap_or_default(),
+            ..Default::default()
+        })),
+        engines::GTTS => Some(TtsEngineSettings::Gtts(GttsTtsSettings::default())),
+        _ => None,
+    };
+    TtsEngineProfile {
+        settings,
+        ..Default::default()
+    }
+}
+
+/// Sets a slider's value without speaking it, keeping the announced value in
+/// step. The user did not press a key — the engine changed under them, or they
+/// pressed Reset, which announces itself — so a value event here would talk
+/// over what they are actually doing.
+fn set_slider(slider: &Slider, announcer: &SliderAnnouncer, value: i32, suffix: &str) {
+    slider.set_value(value);
+    announcer.set_value_text(&format!("{value}{suffix}"));
+}
+
 /// Whether an engine honours the pitch slider at all.
 fn pitch_is_supported(engine: &str) -> bool {
     use crate::tts::engines;
@@ -1181,6 +1365,7 @@ struct TtsProviderControls {
     eleven_style_override: CheckBox,
     eleven_style: SpinCtrlDouble,
     eleven_boost: Choice,
+    eleven_stream: CheckBox,
     openai_panel: Panel,
     openai_model: Choice,
     openai_instructions: TextCtrl,
@@ -1394,6 +1579,20 @@ impl TtsProviderControls {
             "ElevenLabs speaker boost",
         );
         eleven_sizer.add(&eleven_boost, 0, SizerFlag::Expand | SizerFlag::All, 3);
+
+        // Last in the panel, so turning it on or off never shifts the controls
+        // above it in Tab order.
+        let eleven_stream = CheckBox::builder(&eleven_panel)
+            .with_label("Stream audio as it is generated")
+            .build();
+        super::set_accessible_name(&eleven_stream, "Stream audio as it is generated");
+        eleven_stream.set_value(eleven.stream);
+        super::help::tag(
+            &eleven_stream,
+            "dialog.ttsSource.elevenStream",
+            "Stream ElevenLabs audio",
+        );
+        eleven_sizer.add(&eleven_stream, 0, SizerFlag::All, 3);
         eleven_panel.set_sizer(eleven_sizer, true);
 
         bind_optional_double(&eleven_stability_override, &eleven_stability);
@@ -1676,6 +1875,7 @@ impl TtsProviderControls {
             eleven_style_override,
             eleven_style,
             eleven_boost,
+            eleven_stream,
             openai_panel,
             openai_model,
             openai_instructions,
@@ -1739,6 +1939,7 @@ impl TtsProviderControls {
         self.eleven_similarity
             .enable(!eleven_v3 && self.eleven_similarity_override.get_value());
         self.eleven_boost.enable(!eleven_v3);
+        self.eleven_stream.enable(!eleven_v3);
         self.openai_instructions
             .enable(model_choice_value(&self.openai_model).starts_with("gpt-4o-mini-tts"));
         self.azure_degree
@@ -1762,6 +1963,90 @@ impl TtsProviderControls {
             &wanted_role,
             "Default speaking role",
         );
+        self.refresh_compatibility();
+    }
+
+    /// Writes a saved section back into the widgets — the mirror of
+    /// [`Self::settings`], and what makes an engine come back as it was left.
+    /// Settings of the wrong provider (or `None`, for an engine with no panel)
+    /// leave the widgets alone.
+    fn load(&self, engine: &str, settings: Option<&TtsEngineSettings>) {
+        use crate::tts::engines;
+        match (engine, settings) {
+            (engines::ELEVENLABS, Some(TtsEngineSettings::ElevenLabs(eleven))) => {
+                fill_model_choice(&self.eleven_model, engines::ELEVENLABS, &eleven.model);
+                self.eleven_language.set_value(&eleven.language_code);
+                set_optional_double(
+                    &self.eleven_stability_override,
+                    &self.eleven_stability,
+                    eleven.stability,
+                    0.5,
+                );
+                set_optional_double(
+                    &self.eleven_similarity_override,
+                    &self.eleven_similarity,
+                    eleven.similarity_boost,
+                    0.75,
+                );
+                set_optional_double(
+                    &self.eleven_style_override,
+                    &self.eleven_style,
+                    eleven.style,
+                    0.0,
+                );
+                self.eleven_boost.set_selection(match eleven.speaker_boost {
+                    None => 0,
+                    Some(true) => 1,
+                    Some(false) => 2,
+                });
+                self.eleven_stream.set_value(eleven.stream);
+            }
+            (engines::OPENAI, Some(TtsEngineSettings::OpenAi(openai))) => {
+                fill_model_choice(&self.openai_model, engines::OPENAI, &openai.model);
+                self.openai_instructions.set_value(&openai.instructions);
+            }
+            (engines::AZURE, Some(TtsEngineSettings::Azure(azure))) => {
+                // The style and role lists belong to the selected voice, so keep
+                // them and only move the selection; `refresh_azure_voice` rebuilds
+                // them once the voice is known.
+                fill_default_choice(
+                    &self.azure_style,
+                    &choice_values(&self.azure_style),
+                    &azure.style,
+                    "Default speaking style",
+                );
+                self.azure_degree
+                    .set_value(azure.style_degree.clamp(0.01, 2.0));
+                fill_default_choice(
+                    &self.azure_role,
+                    &choice_values(&self.azure_role),
+                    &azure.role,
+                    "Default speaking role",
+                );
+            }
+            (engines::GOOGLE, Some(TtsEngineSettings::Google(google))) => {
+                self.google_language.set_value(&google.language_code);
+                let selection = crate::tts::engines::google::EFFECTS_PROFILES
+                    .iter()
+                    .position(|(id, _)| *id == google.effects_profile)
+                    .map(|index| index + 1)
+                    .unwrap_or(0);
+                self.google_effect.set_selection(selection as u32);
+            }
+            (engines::AWS, Some(TtsEngineSettings::Polly(polly))) => {
+                fill_model_choice(&self.polly_engine, engines::AWS, &polly.engine);
+                self.polly_language.set_value(&polly.language_code);
+            }
+            (engines::GTTS, Some(TtsEngineSettings::Gtts(gtts))) => {
+                self.gtts_tld.set_value(&gtts.tld);
+                self.gtts_speed.set_selection(match gtts.slow {
+                    None => 0,
+                    Some(false) => 1,
+                    Some(true) => 2,
+                });
+            }
+            _ => {}
+        }
         self.refresh_compatibility();
     }
 
@@ -1800,6 +2085,7 @@ impl TtsProviderControls {
                     2 => Some(false),
                     _ => None,
                 },
+                stream: self.eleven_stream.get_value(),
             })),
             engines::OPENAI => Some(TtsEngineSettings::OpenAi(OpenAiTtsSettings {
                 model: model_choice_value(&self.openai_model),
@@ -1845,6 +2131,27 @@ fn bind_optional_double(check: &CheckBox, input: &SpinCtrlDouble) {
     check
         .clone()
         .on_toggled(move |_| input.enable(check.get_value()));
+}
+
+/// Sets an override checkbox and its input together, the way
+/// [`bind_optional_double`] keeps them while the user works.
+fn set_optional_double(
+    check: &CheckBox,
+    input: &SpinCtrlDouble,
+    value: Option<f64>,
+    fallback: f64,
+) {
+    check.set_value(value.is_some());
+    input.set_value(value.unwrap_or(fallback));
+    input.enable(value.is_some());
+}
+
+/// The choice's real values — everything but the index-0 "default" row that
+/// [`fill_default_choice`] puts there.
+fn choice_values(choice: &Choice) -> Vec<String> {
+    (1..choice.get_count())
+        .filter_map(|index| choice.get_string(index))
+        .collect()
 }
 
 fn fill_default_choice(choice: &Choice, values: &[String], wanted: &str, default_label: &str) {
@@ -2041,26 +2348,21 @@ fn preview_voice(
     synth: crate::tts::engine::SynthRequest,
     alive: &Rc<std::cell::Cell<bool>>,
 ) {
-    if !crate::tts::engines::is_network(engine) {
-        // SAPI speaks locally on its own thread; there is nothing to report.
-        app.speaker.speak(crate::tts::speaker::SpeakRequest {
-            engine: engine.to_string(),
-            synth,
-            source_name: String::new(),
-            to_stream: false,
-            speech: app.config.borrow().speech.clone(),
-        });
-        return;
-    }
-
     let speech = app.config.borrow().speech.clone();
     let (sender, receiver) = crossbeam_channel::bounded(1);
     std::thread::Builder::new()
         .name("tts-preview".into())
         .spawn(move || {
-            let result = match crate::tts::engines::build(engine, &speech) {
-                Some(built) => built.synth(&synth.truncated(speech.max_chars())),
-                None => Ok(Vec::new()),
+            // SAPI is not in `engines::build` — it is not a network engine and
+            // lives on its own apartment thread — but it renders to the same
+            // samples, so from here on the two are one path.
+            let result = if crate::tts::engines::is_network(engine) {
+                match crate::tts::engines::build(engine, &speech) {
+                    Some(built) => built.synth(&synth.truncated(speech.max_chars())),
+                    None => Ok(Vec::new()),
+                }
+            } else {
+                crate::tts::sapi::synth_preview(&synth.truncated(speech.max_chars()))
             };
             let _ = sender.send(result);
         })

@@ -116,6 +116,132 @@ pub fn convert_to_stereo(samples: &[f32], source_channels: usize) -> Result<Vec<
     Ok(stereo)
 }
 
+/// Converts a *stream* of little-endian 16-bit PCM into interleaved stereo f32
+/// at [`ENGINE_SAMPLE_RATE`], a chunk at a time.
+///
+/// [`pcm16_to_engine`] cannot just be called per chunk. A frame can straddle a
+/// chunk boundary, and linear interpolation needs the frame *after* the one it
+/// reads from, which may not have arrived yet — converting each chunk on its
+/// own would drop the straddling bytes and clamp the last output frame of every
+/// chunk against a neighbour it cannot see, which is a click per chunk. So this
+/// holds back both the odd trailing bytes and the last complete source frame,
+/// and carries the output position across calls. Feeding a buffer through in
+/// any number of pieces gives the same samples as converting it in one go.
+pub struct Pcm16Stream {
+    source_rate: u32,
+    source_channels: usize,
+    /// Bytes from the last chunk that fell short of a whole frame.
+    carry: Vec<u8>,
+    /// Source frames from `base` onward, already widened to stereo.
+    pending: Vec<f32>,
+    /// Index of the source frame sitting in `pending[0]`.
+    base: u64,
+    /// Index of the next output frame to emit.
+    next_target: u64,
+}
+
+impl Pcm16Stream {
+    pub fn new(source_rate: u32, source_channels: usize) -> Self {
+        Self {
+            source_rate,
+            source_channels,
+            carry: Vec::new(),
+            pending: Vec::new(),
+            base: 0,
+            next_target: 0,
+        }
+    }
+
+    /// Whether this converter can do anything at all. Nonsense parameters
+    /// yield no samples rather than an error, matching [`pcm16_to_engine`].
+    fn usable(&self) -> bool {
+        self.source_rate != 0 && self.source_channels != 0
+    }
+
+    /// Samples ready from `bytes` plus whatever was carried over.
+    pub fn push(&mut self, bytes: &[u8]) -> Vec<f32> {
+        if !self.usable() {
+            return Vec::new();
+        }
+        let frame_bytes = self.source_channels * 2;
+        let mut source = std::mem::take(&mut self.carry);
+        source.extend_from_slice(bytes);
+        let whole = source.len() - source.len() % frame_bytes;
+        for frame in source[..whole].chunks_exact(frame_bytes) {
+            let sample = |index: usize| {
+                i16::from_le_bytes([frame[index * 2], frame[index * 2 + 1]]) as f32 / 32768.0
+            };
+            let left = sample(0);
+            self.pending.push(left);
+            self.pending.push(if self.source_channels == 1 {
+                left
+            } else {
+                sample(1)
+            });
+        }
+        self.carry = source[whole..].to_vec();
+        self.emit(false)
+    }
+
+    /// The tail, once the body has ended. A trailing partial frame is dropped,
+    /// as it is in [`pcm16_to_engine`].
+    pub fn finish(&mut self) -> Vec<f32> {
+        self.carry.clear();
+        if !self.usable() {
+            return Vec::new();
+        }
+        let tail = self.emit(true);
+        self.pending.clear();
+        tail
+    }
+
+    /// Emits every output frame whose source neighbours have arrived. With
+    /// `flush`, the right-hand neighbour is clamped to the last frame instead
+    /// of waiting for one that is never coming.
+    fn emit(&mut self, flush: bool) -> Vec<f32> {
+        let total = self.base + (self.pending.len() / ENGINE_CHANNELS) as u64;
+        let mut out = Vec::new();
+        if total == 0 {
+            return out;
+        }
+        let ratio = self.source_rate as f64 / ENGINE_SAMPLE_RATE as f64;
+        loop {
+            let position = self.next_target as f64 * ratio;
+            let left = position.floor() as u64;
+            if left >= total {
+                break;
+            }
+            let (left, right) = if flush {
+                (left.min(total - 1), (left + 1).min(total - 1))
+            } else {
+                if left + 1 >= total {
+                    // The interpolation partner is in the next chunk.
+                    break;
+                }
+                (left, left + 1)
+            };
+            let fraction = (position - left as f64) as f32;
+            let left = ((left - self.base) as usize) * ENGINE_CHANNELS;
+            let right = ((right - self.base) as usize) * ENGINE_CHANNELS;
+            for channel in 0..ENGINE_CHANNELS {
+                let a = self.pending[left + channel];
+                let b = self.pending[right + channel];
+                out.push(a + (b - a) * fraction);
+            }
+            self.next_target += 1;
+        }
+        // Everything below the next output frame's left-hand neighbour is done
+        // with; without this the buffer would grow for the whole utterance.
+        let keep_from = ((self.next_target as f64 * ratio).floor() as u64).min(total);
+        if keep_from > self.base {
+            let drop = ((keep_from - self.base) as usize) * ENGINE_CHANNELS;
+            self.pending.drain(..drop);
+            self.base = keep_from;
+        }
+        out
+    }
+}
+
 pub fn resample_stereo(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
     if source_rate == target_rate || samples.is_empty() {
         return samples.to_vec();
@@ -194,5 +320,83 @@ mod tests {
     fn pcm16_rejects_nonsense_parameters() {
         assert!(pcm16_to_engine(&[0, 1, 0, 1], 0, 1).is_empty());
         assert!(pcm16_to_engine(&[0, 1, 0, 1], 24_000, 0).is_empty());
+    }
+
+    fn tone_bytes(frames: usize, channels: usize) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(frames * channels * 2);
+        for frame in 0..frames {
+            for channel in 0..channels {
+                let phase = (frame * channels + channel) as f32 * 0.07;
+                bytes.extend_from_slice(&((phase.sin() * 16384.0) as i16).to_le_bytes());
+            }
+        }
+        bytes
+    }
+
+    fn streamed(bytes: &[u8], rate: u32, channels: usize, chunk: usize) -> Vec<f32> {
+        let mut stream = Pcm16Stream::new(rate, channels);
+        let mut out = Vec::new();
+        for piece in bytes.chunks(chunk) {
+            out.extend(stream.push(piece));
+        }
+        out.extend(stream.finish());
+        out
+    }
+
+    /// The whole point: a chunked conversion must be indistinguishable from
+    /// converting the same bytes in one go, whatever the chunk sizes are.
+    #[test]
+    fn streaming_matches_a_single_conversion() {
+        for (rate, channels) in [(24_000, 1), (24_000, 2), (48_000, 1), (16_000, 2)] {
+            let bytes = tone_bytes(500, channels);
+            let whole = pcm16_to_engine(&bytes, rate, channels);
+            // Chunk sizes that split frames, samples, and nothing at all.
+            for chunk in [1, 3, 7, 64, 333, bytes.len()] {
+                let streamed = streamed(&bytes, rate, channels, chunk);
+                assert_eq!(
+                    streamed.len(),
+                    whole.len(),
+                    "{rate} Hz, {channels}ch, {chunk}-byte chunks"
+                );
+                for (index, (a, b)) in streamed.iter().zip(&whole).enumerate() {
+                    assert!(
+                        (a - b).abs() < 1e-6,
+                        "sample {index} differs at {rate} Hz, {channels}ch, {chunk}-byte chunks: {a} vs {b}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A frame split across two chunks must be reassembled, not dropped — the
+    /// failure this class of bug produces is a slow drift, not a crash.
+    #[test]
+    fn a_frame_straddling_a_chunk_boundary_survives() {
+        let bytes = tone_bytes(8, 2);
+        let mut stream = Pcm16Stream::new(48_000, 2);
+        let mut out = stream.push(&bytes[..7]);
+        out.extend(stream.push(&bytes[7..]));
+        out.extend(stream.finish());
+        assert_eq!(out, pcm16_to_engine(&bytes, 48_000, 2));
+    }
+
+    #[test]
+    fn a_trailing_partial_frame_is_dropped_rather_than_kept() {
+        let mut bytes = tone_bytes(4, 1);
+        bytes.push(0);
+        let mut stream = Pcm16Stream::new(48_000, 1);
+        let mut out = stream.push(&bytes);
+        out.extend(stream.finish());
+        assert_eq!(out.len() / ENGINE_CHANNELS, 4);
+    }
+
+    #[test]
+    fn a_stream_with_nonsense_parameters_yields_nothing() {
+        let mut stream = Pcm16Stream::new(0, 1);
+        assert!(stream.push(&[0, 1, 0, 1]).is_empty());
+        assert!(stream.finish().is_empty());
+        let mut stream = Pcm16Stream::new(24_000, 0);
+        assert!(stream.push(&[0, 1, 0, 1]).is_empty());
+        assert!(stream.finish().is_empty());
     }
 }

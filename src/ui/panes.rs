@@ -111,7 +111,7 @@ fn page_order(page: HWND) -> Vec<HWND> {
 /// Every list in the main window. Only the ones on the current page survive the
 /// filter in [`pump`], so this needs no per-tab table: a new list on a tab needs
 /// only a `Widgets` field and a line here.
-fn all_lists(w: &Widgets) -> [&ListBox; 7] {
+fn all_lists(w: &Widgets) -> [&ListBox; 8] {
     [
         &w.overview,
         &w.home_scene_list,
@@ -120,6 +120,7 @@ fn all_lists(w: &Widgets) -> [&ListBox; 7] {
         &w.sources_list,
         &w.bus_list,
         &w.fx_list,
+        &w.usage_list,
     ]
 }
 

@@ -65,6 +65,19 @@ impl Config {
         }
         self.audio.master_volume = clamp_volume(self.audio.master_volume, self.audio.master_boost);
     }
+
+    /// Gives every text-to-speech source a saved section for the engine it is
+    /// currently using. A source written before per-engine sections existed has
+    /// only the flat fields, and this is what carries them across.
+    pub fn fix_up_tts_profiles(&mut self) {
+        for scene in &mut self.scenes.scenes {
+            for source in &mut scene.sources {
+                if let SourceKindConfig::Tts(tts) = &mut source.kind {
+                    tts.fix_up();
+                }
+            }
+        }
+    }
 }
 
 /// The ceiling for a strip's volume: 100 (unity) normally, or
@@ -641,7 +654,7 @@ pub enum TtsEngineSettings {
     Gtts(GttsTtsSettings),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ElevenLabsTtsSettings {
     /// Empty means let ElevenLabs choose its default model.
@@ -652,6 +665,24 @@ pub struct ElevenLabsTtsSettings {
     pub similarity_boost: Option<f64>,
     pub style: Option<f64>,
     pub speaker_boost: Option<bool>,
+    /// Play each chunk as it arrives rather than waiting for the whole
+    /// utterance. On by default, and for a source saved before this existed:
+    /// `#[serde(default)]` fills the missing field from `Default`, below.
+    pub stream: bool,
+}
+
+impl Default for ElevenLabsTtsSettings {
+    fn default() -> Self {
+        Self {
+            model: String::new(),
+            language_code: String::new(),
+            stability: None,
+            similarity_boost: None,
+            style: None,
+            speaker_boost: None,
+            stream: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -714,6 +745,38 @@ pub struct GttsTtsSettings {
     pub slow: Option<bool>,
 }
 
+/// One engine's saved state within a text-to-speech source.
+///
+/// Every engine the user has configured keeps a section of its own, so moving a
+/// source to another engine and back is lossless — a voice id, a model, a rate
+/// mean nothing to the next engine, and before this they were simply discarded
+/// when the source was saved.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TtsEngineProfile {
+    pub voice: String,
+    /// 0-100.
+    pub volume: u32,
+    /// SAPI-style rate, -10..=10.
+    pub rate: i32,
+    /// -50..=50.
+    pub pitch: i32,
+    /// The provider-specific settings, or `None` for an engine that has none.
+    pub settings: Option<TtsEngineSettings>,
+}
+
+impl Default for TtsEngineProfile {
+    fn default() -> Self {
+        Self {
+            voice: String::new(),
+            volume: 100,
+            rate: 0,
+            pitch: 0,
+            settings: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct TtsSourceConfig {
@@ -731,6 +794,11 @@ pub struct TtsSourceConfig {
     pub pitch: i32,
     /// Provider-specific voice behavior. `None` denotes a legacy source.
     pub provider_settings: Option<TtsEngineSettings>,
+    /// Saved state per engine id, so an engine configured earlier comes back as
+    /// it was left. The entry for `engine` mirrors the fields above, which stay
+    /// the ones the running app reads — nothing outside the editing dialog
+    /// needs to know about the other sections.
+    pub engines: std::collections::BTreeMap<String, TtsEngineProfile>,
     /// Whether synthesized speech is mixed into the outgoing stream.
     pub output_to_stream: bool,
 }
@@ -744,7 +812,32 @@ impl Default for TtsSourceConfig {
             rate: 0,
             pitch: 0,
             provider_settings: None,
+            engines: std::collections::BTreeMap::new(),
             output_to_stream: true,
+        }
+    }
+}
+
+impl TtsSourceConfig {
+    /// The flat fields as a profile: what the selected engine is set to.
+    pub fn active_profile(&self) -> TtsEngineProfile {
+        TtsEngineProfile {
+            voice: self.voice.clone(),
+            volume: self.volume,
+            rate: self.rate,
+            pitch: self.pitch,
+            settings: self.provider_settings.clone(),
+        }
+    }
+
+    /// Ensures the selected engine has a saved section, seeding it from the
+    /// flat fields. A source saved before per-engine sections existed has none,
+    /// and without this its settings would look like an engine never touched.
+    pub fn fix_up(&mut self) {
+        let engine = crate::tts::engines::resolve_id(&self.engine).to_string();
+        if !self.engines.contains_key(&engine) {
+            let profile = self.active_profile();
+            self.engines.insert(engine, profile);
         }
     }
 }
@@ -863,6 +956,7 @@ pub fn load_from(path: &PathBuf) -> Config {
             config.connection.ensure_main_site();
             config.scenes.ensure_default_scene();
             config.fix_up_routing();
+            config.fix_up_tts_profiles();
             config.keybinds.fix_up();
             config
         }
@@ -961,6 +1055,9 @@ mod tests {
             }],
         });
         save_to(&config, &path);
+        // Loading gives the default text-to-speech source a section for the
+        // engine it uses, so the expected value has to be repaired the same way.
+        config.fix_up_tts_profiles();
         assert_eq!(load_from(&path), config);
     }
 
@@ -1122,6 +1219,9 @@ mod tests {
             level: 65,
         });
         save_to(&config, &path);
+        // Loading gives the default text-to-speech source a section for the
+        // engine it uses, so the expected value has to be repaired the same way.
+        config.fix_up_tts_profiles();
         assert_eq!(load_from(&path), config);
     }
 
@@ -1216,6 +1316,24 @@ mod tests {
         assert_eq!(source.provider_settings, None);
     }
 
+    /// An ElevenLabs source saved before streaming existed must come back with
+    /// it on, not off — a missing `bool` would otherwise default to `false`.
+    #[test]
+    fn elevenlabs_settings_without_a_stream_field_default_to_streaming() {
+        let source: TtsSourceConfig = serde_json::from_str(
+            r#"{"engine":"elevenlabs","provider_settings":{"provider":"eleven_labs","settings":{"model":"eleven_flash_v2_5"}}}"#,
+        )
+        .unwrap();
+        let Some(TtsEngineSettings::ElevenLabs(settings)) = source.provider_settings else {
+            panic!(
+                "expected ElevenLabs settings, got {:?}",
+                source.provider_settings
+            );
+        };
+        assert_eq!(settings.model, "eleven_flash_v2_5");
+        assert!(settings.stream);
+    }
+
     #[test]
     fn every_tts_provider_settings_variant_roundtrips() {
         let settings = vec![
@@ -1226,6 +1344,7 @@ mod tests {
                 similarity_boost: Some(0.8),
                 style: Some(0.2),
                 speaker_boost: Some(true),
+                stream: false,
             }),
             TtsEngineSettings::OpenAi(OpenAiTtsSettings {
                 model: "gpt-4o-mini-tts".into(),
@@ -1258,6 +1377,102 @@ mod tests {
             let loaded: TtsSourceConfig = serde_json::from_str(&json).unwrap();
             assert_eq!(loaded, source);
         }
+    }
+
+    /// A source saved before per-engine sections existed keeps its settings:
+    /// they become the section for the engine it is using, so switching away and
+    /// back finds them again.
+    #[test]
+    fn a_source_without_engine_sections_gains_one_for_its_own_engine() {
+        let mut source: TtsSourceConfig = serde_json::from_str(
+            r#"{"engine":"elevenlabs","voice":"voice-id","volume":75,"rate":2,"pitch":-3,
+                "provider_settings":{"provider":"eleven_labs","settings":{"model":"eleven_v3"}}}"#,
+        )
+        .unwrap();
+        assert!(source.engines.is_empty());
+        source.fix_up();
+        let profile = source
+            .engines
+            .get("elevenlabs")
+            .expect("elevenlabs section");
+        assert_eq!(profile.voice, "voice-id");
+        assert_eq!(profile.volume, 75);
+        assert_eq!(profile.rate, 2);
+        assert_eq!(profile.pitch, -3);
+        assert_eq!(profile.settings, source.provider_settings);
+    }
+
+    /// An unknown engine id resolves to SAPI at runtime, so that is the section
+    /// its settings belong in — not one named after an engine nothing can build.
+    #[test]
+    fn an_unknown_engine_is_filed_under_the_engine_it_resolves_to() {
+        let mut source = TtsSourceConfig {
+            engine: "no-such-engine".into(),
+            voice: "Zira".into(),
+            ..Default::default()
+        };
+        source.fix_up();
+        assert_eq!(source.engines.len(), 1);
+        assert_eq!(source.engines["sapi"].voice, "Zira");
+    }
+
+    #[test]
+    fn fix_up_leaves_an_existing_section_alone() {
+        let mut source = TtsSourceConfig {
+            engine: "sapi".into(),
+            voice: "David".into(),
+            engines: [(
+                "sapi".to_string(),
+                TtsEngineProfile {
+                    voice: "Zira".into(),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        source.fix_up();
+        assert_eq!(source.engines["sapi"].voice, "Zira");
+    }
+
+    #[test]
+    fn engine_sections_roundtrip() {
+        let source = TtsSourceConfig {
+            engine: "azure".into(),
+            engines: [
+                (
+                    "azure".to_string(),
+                    TtsEngineProfile {
+                        voice: "en-US-JennyNeural".into(),
+                        volume: 80,
+                        rate: 1,
+                        pitch: 5,
+                        settings: Some(TtsEngineSettings::Azure(AzureTtsSettings {
+                            style: "cheerful".into(),
+                            style_degree: 1.5,
+                            role: String::new(),
+                        })),
+                    },
+                ),
+                (
+                    "gtts".to_string(),
+                    TtsEngineProfile {
+                        settings: Some(TtsEngineSettings::Gtts(GttsTtsSettings {
+                            tld: "co.uk".into(),
+                            slow: Some(true),
+                        })),
+                        ..Default::default()
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        let loaded: TtsSourceConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded, source);
     }
 }
 

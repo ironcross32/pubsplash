@@ -1,13 +1,18 @@
-//! SAPI 5 engine: voice enumeration, asynchronous local speech, and
-//! synthesis into the outgoing stream.
+//! SAPI 5 engine: voice enumeration and synthesis into the mixer.
 //!
 //! Speech runs on a dedicated COM (STA) thread owning the SAPI voices;
-//! requests arrive over a channel so callers never block. When a request
-//! has `to_stream` set, the text is synthesized to memory at the mixer
-//! format (48 kHz stereo 16-bit) and trickle-fed into the named source's
-//! ring in the audio engine, in addition to local playback. Desktop Audio
-//! capture excludes Pubsplash's own process, so local playback can never
-//! loop back into the stream.
+//! requests arrive over a channel so callers never block. Every request is
+//! synthesized to memory at the mixer format (48 kHz stereo 16-bit) and
+//! trickle-fed into the named source's ring in the audio engine.
+//!
+//! SAPI used to also speak each message through an `ISpVoice` of its own, out
+//! of the default playback device and around the mixer entirely, because it was
+//! the only engine that *could*. That made it the only engine the broadcaster
+//! could hear without monitoring its strip, and it meant the source's fader and
+//! mute governed what listeners heard but not what the broadcaster did. All nine
+//! engines now take the same route: the strip is heard locally on its own (see
+//! `SourceSpec::local` in [`crate::audio`]), so a second voice here would simply
+//! be the same words twice.
 
 use super::engine::SynthRequest;
 use super::queue::Queue;
@@ -16,8 +21,8 @@ use crate::audio::mixer::{CHANNELS, SAMPLE_RATE};
 use windows::Win32::Foundation::HGLOBAL;
 use windows::Win32::Media::Audio::WAVEFORMATEX;
 use windows::Win32::Media::Speech::{
-    ISpObjectToken, ISpObjectTokenCategory, ISpStream, ISpVoice, SPF_ASYNC, SpObjectTokenCategory,
-    SpStream, SpVoice,
+    ISpObjectToken, ISpObjectTokenCategory, ISpStream, ISpVoice, SpObjectTokenCategory, SpStream,
+    SpVoice,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, IStream,
@@ -57,26 +62,23 @@ pub fn voice_names() -> Vec<String> {
 }
 
 /// One utterance for the apartment thread.
-///
-/// SAPI is the only engine that both speaks locally and renders to the mix, so
-/// unlike the network engines it needs `to_stream` as a separate flag: local
-/// playback happens either way.
 #[derive(Debug, Clone)]
 pub struct SapiRequest {
     pub synth: SynthRequest,
-    /// Name of the TTS source in the audio engine to feed, when streaming.
+    /// Name of the TTS source in the audio engine to feed.
     pub source_name: String,
-    /// Also synthesize into the outgoing stream mix.
-    pub to_stream: bool,
 }
 
 /// Starts the apartment thread and returns the queue that feeds it.
-pub fn start(feeds: ExternalFeeds) -> Queue<SapiRequest> {
+pub(super) fn start(
+    feeds: ExternalFeeds,
+    problems: super::speaker::Problems,
+) -> Queue<SapiRequest> {
     let queue = Queue::new(super::speaker::QUEUE_DEPTH);
     let worker = queue.clone();
     let spawned = std::thread::Builder::new()
         .name("sapi-speech".into())
-        .spawn(move || speech_thread(worker, feeds));
+        .spawn(move || speech_thread(worker, feeds, problems));
     if let Err(error) = spawned {
         log::error!("Could not start the SAPI speech thread: {error}");
     }
@@ -87,17 +89,14 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn speech_thread(queue: Queue<SapiRequest>, feeds: ExternalFeeds) {
+fn speech_thread(
+    queue: Queue<SapiRequest>,
+    feeds: ExternalFeeds,
+    problems: super::speaker::Problems,
+) {
     unsafe {
         // SAPI wants an apartment; errors here leave TTS silently disabled.
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        let voice: ISpVoice = match CoCreateInstance(&SpVoice, None, CLSCTX_ALL) {
-            Ok(v) => v,
-            Err(e) => {
-                log::error!("SAPI unavailable: {e}");
-                return;
-            }
-        };
 
         let mut current_voice = String::new();
         // The resolved token is kept, not just the name it was resolved from.
@@ -108,42 +107,77 @@ fn speech_thread(queue: Queue<SapiRequest>, feeds: ExternalFeeds) {
         // enumeration per chat message, which is exactly what this was written
         // to avoid.
         let mut current_token: Option<ISpObjectToken> = None;
+        // Whether the *name* we were asked for came back with nothing, as
+        // opposed to no name having been asked for. The miss is remembered for
+        // the same reason the hit is — see below.
+        let mut voice_missing = false;
         while let Some(request) = queue.pop() {
             let synth = &request.synth;
             if synth.voice != current_voice {
                 current_token = find_voice_token(&synth.voice);
-                match &current_token {
-                    Some(t) => {
-                        if let Err(e) = voice.SetVoice(t) {
-                            log::warn!("Could not select voice {:?}: {e}", synth.voice);
-                        }
-                    }
-                    None if !synth.voice.is_empty() => {
-                        log::warn!("Voice {:?} not found; keeping current voice", synth.voice);
-                    }
-                    None => {}
+                voice_missing = current_token.is_none() && !synth.voice.is_empty();
+                if voice_missing {
+                    log::warn!("Voice {:?} not found; using the default", synth.voice);
                 }
                 current_voice = synth.voice.clone();
             }
-            let token = current_token.clone();
-            let _ = voice.SetRate(synth.rate.clamp(-10, 10));
-            let _ = voice.SetVolume(synth.volume.clamp(0, 100) as u16);
 
-            // Local playback (async so queued messages stay responsive).
-            let text = wide(&synth.text);
-            if let Err(e) = voice.Speak(PCWSTR(text.as_ptr()), SPF_ASYNC.0 as u32, None) {
-                log::error!("SAPI speak failed: {e}");
-            }
-
-            // Stream synthesis: render the same text to PCM and feed the
-            // engine while the local speech plays.
-            if request.to_stream {
-                match synth_to_pcm(synth, token.as_ref()) {
-                    Ok(samples) => feeds.feed_all(&request.source_name, &samples, "TTS"),
-                    Err(e) => log::error!("TTS stream synthesis failed: {e}"),
+            // `synth_to_pcm` applies the token, rate and volume to the voice it
+            // renders with, so there is nothing to set up out here. It falls
+            // back to resolving the name itself when handed no token, which is
+            // what the preview wants and what a chat flood must not have: the
+            // name is blanked on a miss so the enumeration above is not repeated
+            // once a message for a voice already known not to be installed.
+            let rendered = if voice_missing {
+                let mut default_voice = synth.clone();
+                default_voice.voice.clear();
+                synth_to_pcm(&default_voice, None)
+            } else {
+                synth_to_pcm(synth, current_token.as_ref())
+            };
+            // The API tab's tally. SAPI is local and free, so there is nothing
+            // to bill and no model to name — but the request and character
+            // counts are still what tell a user which source is doing the
+            // talking. A voice that was asked for and missing is recorded as
+            // none, because the default is what actually spoke.
+            super::usage::record(
+                super::engines::SAPI,
+                synth.text.chars().count(),
+                None,
+                (!voice_missing && !synth.voice.is_empty()).then(|| synth.voice.clone()),
+                rendered.is_err(),
+            );
+            match rendered {
+                // `feed_all` sleeps while the ring drains, which is exactly why
+                // this is its own thread.
+                Ok(samples) => feeds.feed_all(&request.source_name, &samples, "TTS"),
+                Err(e) => {
+                    // SAPI has no other way out now, so a failure here is
+                    // silence rather than a degraded stream — worth telling the
+                    // user about, at the same one-a-minute rate as the network
+                    // engines.
+                    log::error!("SAPI synthesis failed: {e}");
+                    problems.report(
+                        super::engines::SAPI,
+                        &super::engine::TtsError::Other(e.message()),
+                    );
                 }
             }
         }
+    }
+}
+
+/// Synthesizes one phrase on the calling thread, for the voice preview.
+///
+/// The apartment thread's queue feeds a mixer source, which a preview has no
+/// business touching — the source may not exist yet, and previewing must never
+/// reach the stream. So this initializes an apartment of its own and hands the
+/// samples back for [`crate::audio::cue`] to play, exactly as the network
+/// engines' preview does.
+pub fn synth_preview(request: &SynthRequest) -> Result<Vec<f32>, super::engine::TtsError> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        synth_to_pcm(request, None).map_err(|e| super::engine::TtsError::Other(e.message()))
     }
 }
 
@@ -221,23 +255,10 @@ unsafe fn synth_to_pcm(
 mod tests {
     use super::*;
 
-    /// Audible smoke test; run with `cargo test sapi_speaks -- --ignored`.
-    #[test]
-    #[ignore]
-    fn sapi_speaks() {
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-            let voice: ISpVoice =
-                CoCreateInstance(&SpVoice, None, CLSCTX_ALL).expect("SpVoice creation");
-            voice.SetRate(0).expect("set rate");
-            voice.SetVolume(100).expect("set volume");
-            let text = wide("Pubsplash text to speech is working.");
-            // Synchronous so the test waits for playback to finish.
-            voice.Speak(PCWSTR(text.as_ptr()), 0, None).expect("speak");
-        }
-    }
-
     /// Verifies memory synthesis yields plausible 48 kHz audio.
+    ///
+    /// This is now the whole of SAPI's output path — there is no local voice
+    /// left to smoke-test separately.
     #[test]
     #[ignore]
     fn sapi_synthesizes_pcm() {

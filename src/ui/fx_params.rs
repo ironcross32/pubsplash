@@ -555,7 +555,12 @@ pub fn edit_parameters(
     }
     {
         let apply_typed = apply_typed.clone();
-        value_text.clone().on_text_enter(move |_| apply_typed());
+        value_text.clone().on_text_enter(move |event| {
+            apply_typed();
+            // Consumed, or the Return reaches the native EDIT and it beeps —
+            // see the same call in `super::chat::build` for why.
+            event.skip(false);
+        });
     }
 
     // Ctrl+Tab anywhere in the dialog cycles parameters; Escape closes it.

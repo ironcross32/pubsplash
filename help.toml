@@ -589,6 +589,12 @@ file = "src/ui/scenes.rs"
 message = "When Override stability is checked, set consistency from zero through one. Lower values are more expressive and variable; higher values are more consistent."
 
 [[control]]
+id = "dialog.ttsSource.elevenStream"
+label = "Stream ElevenLabs audio"
+file = "src/ui/scenes.rs"
+message = "When checked, speech begins playing as ElevenLabs generates it instead of waiting for the whole message, which noticeably shortens the delay before a chat message is read. Uncheck it to wait for the complete clip. It is unavailable for Eleven version 3, which has no streaming endpoint."
+
+[[control]]
 id = "dialog.ttsSource.elevenStyle"
 label = "ElevenLabs style exaggeration"
 file = "src/ui/scenes.rs"
@@ -667,10 +673,16 @@ file = "src/ui/scenes.rs"
 message = "Use arrows, page up, page down, home and end to set the rate of the speech."
 
 [[control]]
+id = "dialog.ttsSource.reset"
+label = "Reset this engine to defaults button"
+file = "src/ui/scenes.rs"
+message = "Puts the engine currently selected above back to its default voice, volume, rate, pitch and provider settings. Only that engine is reset; every other engine keeps what you have set for it. Nothing is saved until you press OK, so cancel undoes the reset."
+
+[[control]]
 id = "dialog.ttsSource.toStream"
 label = "Send speech to the stream checkbox"
 file = "src/ui/scenes.rs"
-message = "When this is checked, speech is mixed into the outgoing stream. When it is not, the speech stays off the stream; SAPI still speaks it locally, and for the other engines you hear it by turning on monitoring for this source in the mixer with control M."
+message = "When this is checked, speech is mixed into the outgoing stream so your listeners hear it. When it is not, the speech reaches neither the stream nor any bus this source sends to. Either way you hear it yourself: speech is always played to you, whichever engine it comes from, and you do not need to monitor this source to hear it."
 
 [[control]]
 id = "dialog.ttsSource.voice"
@@ -683,6 +695,18 @@ id = "dialog.ttsSource.volume"
 label = "TTS voice volume slider"
 file = "src/ui/scenes.rs"
 message = "Use arrows, page up, page down, home and end to set the volume of this voice."
+
+[[control]]
+id = "tab.api.refreshButton"
+label = "Refresh account balances button"
+file = "src/ui/api.rs"
+message = "Ask each provider that publishes one how much credit is left on your account. Only ElevenLabs reports a balance; the others are marked unavailable. This is never done automatically, so pressing it is the only thing that spends a request on your behalf."
+
+[[control]]
+id = "tab.api.usageList"
+label = "Per-engine API usage list"
+file = "src/ui/api.rs"
+message = "What each speech engine has been asked to do since Pubsplash started, most recently used engine first. Only engines that have actually spoken appear. Each engine's name is followed by its indented figures: requests sent, characters sent, credits spent, remaining balance, models used, voices used, and failures. Anything the provider does not report reads as unavailable. Use arrows, page up, page down, home, and end to navigate this list."
 
 [[control]]
 id = "tab.buses.busAdd"

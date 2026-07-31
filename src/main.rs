@@ -76,6 +76,7 @@ fn main() {
     }
     let _ = wxdragon::main(move |_| {
         let (apps_tx, apps_rx) = crossbeam_channel::unbounded();
+        let (usage_tx, usage_rx) = crossbeam_channel::unbounded();
         let (tts_catalog_tx, tts_catalog_rx) = crossbeam_channel::unbounded();
         tts::catalog::start_refresh(config.speech.clone(), tts_catalog_tx);
         ui::run_when_ready(move || {
@@ -112,6 +113,8 @@ fn main() {
             apps_tx,
             apps_rx,
             apps_pending: std::cell::Cell::new(false),
+            usage_tx,
+            usage_rx,
             pump_timer: RefCell::new(None),
             fast_timer: RefCell::new(None),
             shutdown_cue: RefCell::new(None),

@@ -4,13 +4,27 @@
 
 ### Additions
 
+- Added an **API** tab, last on the tab bar, showing what each speech engine has been asked to do since Pubsplash started. Only engines that have actually spoken appear, most recently used first, and each is followed by its requests sent, characters sent, credits spent, remaining balance, models used, voices used, and failures. **Refresh balances** (`ALT+F`) asks each provider that publishes one how much credit is left; only ElevenLabs reports a balance, and anything a provider does not report reads as "unavailable" rather than as a zero. Nothing is fetched unless you press the button, and none of it is kept between sessions.
+
 - Added validation for OpenAI, ElevenLabs, Azure, AWS Polly, and Google Cloud credentials before they are saved.
 
 
 - Added per-source voice settings for ElevenLabs, OpenAI, Azure, Google Cloud, AWS Polly, and Google Translate.
 
+- A Text-to-Speech source now keeps its settings for every engine, not just the one it is using. Voice, volume, rate, pitch and the engine's own settings are saved in a section per engine, so switching a source to another engine and back finds the first engine as you left it instead of reset to defaults.
+
+- Added **Reset this engine to defaults** (`ALT+R`) to the Text-to-Speech source dialog. It resets the voice, volume, rate, pitch and settings of the engine currently selected, leaving every other engine's saved settings alone, and like the rest of the dialog it applies only when you press OK.
+
+- ElevenLabs speech now starts playing as it is generated instead of after the whole message has been synthesized, which removes most of the delay before a chat message is read. "Stream audio as it is generated" is in the ElevenLabs settings of the Text-to-Speech source dialog and is on by default; it is unavailable for Eleven v3, which has no streaming endpoint.
+
 ### Fixes
 
+- Pressing ENTER to send a chat message no longer plays the Windows error sound alongside sending it. The same silence now applies to the value box in an effect's parameters dialog.
+- Chat is now read aloud to you on every speech engine. Only SAPI 5 spoke to the broadcaster; the other eight engines were mixed into the stream and nowhere else, so unless you had thought to monitor the text-to-speech source's mixer strip, chat appeared never to be read at all. A text-to-speech source is now always played to you, whatever engine it uses and whether or not it is being sent to the stream.
+- Speech kept off the stream no longer reaches it through a bus. "Send speech to the stream" dropped the source from the master mix but left its sends alone, and every bus mixes into master, so a text-to-speech source with a send was heard by listeners with the box unchecked.
+
+- Stopped the chat message list from reading its selected message out once a second. A message's relative time changes every second for its first minute, and rewriting the row to show it was announced whether or not the list had focus; the selected row is now left alone and brought up to date when you move off it or when focus arrives on the list.
+- ElevenLabs sources are now named by their voice, not by its identifier: the Sources list and the mixer strip say "Rachel" where they used to read out a 20-character key. Until the voice list has been fetched the label leaves the voice out rather than naming the key.
 - Preserved source monitoring when sources are added, edited, reordered, or removed.
 - Fixed ElevenLabs speech-rate requests at the supported speed limits.
 - Applied rate, volume, and supported pitch settings to AWS Polly speech.
@@ -24,6 +38,8 @@
 
 ### Changes
 
+- "Send speech to the stream" now decides only whether your listeners hear the speech. Whether you hear it is no longer tied to it, and with it unchecked the speech reaches neither the stream nor any bus the source sends to.
+- SAPI 5 speech now goes through its mixer strip like every other engine's rather than being spoken separately, so the source's volume and mute apply to what you hear as well as to what your listeners hear. If SAPI fails, the reason now appears in the chat list alongside the other engines' rather than only in the log.
 - Added crash reporting: if Pubsplash is brought down by a hosted plugin, the log now names the plugin file responsible and a crash dump is written to `%LOCALAPPDATA%\pubsplash\crashes\`.
 - Added a persistent TTS catalog with automatic startup refresh and stale-result retention.
 - Replaced OpenAI and ElevenLabs model fields and Polly engine selection with catalog-backed dropdowns.

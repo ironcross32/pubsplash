@@ -50,6 +50,17 @@ pub struct SourceSpec {
     /// monitoring device. Session-only state, so it rides along in the spec
     /// and is re-sent with every `SetSources`.
     pub monitor: bool,
+    /// Whether this source is played out of the local monitoring device whether
+    /// or not the user asked for it — a source the broadcaster must always
+    /// hear, whatever it is doing on the stream. Text-to-speech sets it: chat
+    /// being read aloud is for the broadcaster first, and it used to be audible
+    /// only if they thought to press `CTRL+M`.
+    ///
+    /// Distinct from `monitor` rather than folded into it because `monitor` is
+    /// a control the user owns, and its state is shown to them; this one is a
+    /// property of the source. Both taps are taken as one, so a monitored TTS
+    /// strip is heard once, not twice.
+    pub local: bool,
 }
 
 /// A source's send into a bus, addressed by bus index (matching the order
@@ -266,6 +277,8 @@ struct ActiveSource {
     to_master: bool,
     sends: Vec<ActiveSend>,
     monitor: bool,
+    /// See [`SourceSpec::local`].
+    local: bool,
 }
 
 /// A live send: the level is a `ChannelStrip` so level changes ramp
@@ -522,6 +535,7 @@ fn engine_loop(
                                 to_master: spec.to_master,
                                 sends: active_sends(spec.sends),
                                 monitor: spec.monitor,
+                                local: spec.local,
                             });
                         }
                     }
@@ -684,8 +698,9 @@ fn engine_loop(
         // being monitored, so this is re-evaluated every block: a scene switch
         // or bus rebuild can retire the last monitored strip without any
         // command that mentions monitoring.
-        let wanted =
-            master_monitor || sources.iter().any(|s| s.monitor) || buses.iter().any(|b| b.monitor);
+        let wanted = master_monitor
+            || sources.iter().any(|s| s.monitor || s.local)
+            || buses.iter().any(|b| b.monitor);
         match (wanted, monitor_out.is_some()) {
             (true, false) => {
                 let (producer, consumer) = RingBuffer::new(RING_CAPACITY);
@@ -819,7 +834,12 @@ fn mix_one_block(
     for source in sources.iter_mut() {
         mixer::pull_block(&mut source.consumer, &mut source.scratch);
         source.strip.process(&mut source.scratch);
-        if source.monitor {
+        // One tap for both reasons a strip can be heard locally. The implicit
+        // one is dropped when the strip is already arriving through the master
+        // monitor below, so a broadcaster monitoring master does not hear their
+        // text-to-speech twice.
+        let implicit = source.local && !(master_monitor && source.to_master);
+        if source.monitor || implicit {
             mixer::mix_into(monitor_block, &source.scratch);
         }
         if source.to_master {
@@ -916,6 +936,7 @@ mod routing_tests {
             to_master,
             sends: active_sends(sends),
             monitor: false,
+            local: false,
         }
     }
 
@@ -1064,6 +1085,56 @@ mod routing_tests {
         let mut buses = Vec::new();
         let (_, monitor) = run_block_monitoring(&mut sources, &mut buses, false);
         assert!(monitor.iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn a_local_source_is_heard_without_being_monitored() {
+        // A TTS strip kept off the stream: the broadcaster still hears it, at
+        // its fader setting, and nothing reaches master.
+        let mut sources = vec![test_source(1.0, 50, false, false, vec![])];
+        sources[0].local = true;
+        let mut buses = Vec::new();
+        let (mix, monitor) = run_block_monitoring(&mut sources, &mut buses, false);
+        assert!(
+            (monitor[0] - 0.5).abs() < 1e-6,
+            "post-fader: {}",
+            monitor[0]
+        );
+        assert!(mix.iter().all(|&s| s == 0.0), "off the stream");
+    }
+
+    #[test]
+    fn a_monitored_local_source_is_heard_once() {
+        // `CTRL+M` on a strip that is already heard locally must not double it.
+        let mut sources = vec![test_source(1.0, 100, false, false, vec![])];
+        sources[0].local = true;
+        sources[0].monitor = true;
+        let mut buses = Vec::new();
+        let (_, monitor) = run_block_monitoring(&mut sources, &mut buses, false);
+        assert!((monitor[0] - 1.0).abs() < 1e-6, "one tap: {}", monitor[0]);
+    }
+
+    #[test]
+    fn the_master_monitor_does_not_double_a_local_source() {
+        // Monitoring master while a local source is also reaching master: the
+        // implicit tap stands down, so the speech is heard exactly once.
+        let mut sources = vec![test_source(1.0, 100, false, true, vec![])];
+        sources[0].local = true;
+        let mut buses = Vec::new();
+        let (mix, monitor) = run_block_monitoring(&mut sources, &mut buses, true);
+        assert_eq!(mix, monitor, "the master tap alone");
+        assert!((monitor[0] - 1.0).abs() < 1e-6, "one tap: {}", monitor[0]);
+    }
+
+    #[test]
+    fn a_local_source_off_master_survives_the_master_monitor() {
+        // The stand-down applies only to a strip master is actually carrying.
+        // Off master, the implicit tap is the only way it is heard at all.
+        let mut sources = vec![test_source(1.0, 100, false, false, vec![])];
+        sources[0].local = true;
+        let mut buses = Vec::new();
+        let (_, monitor) = run_block_monitoring(&mut sources, &mut buses, true);
+        assert!((monitor[0] - 1.0).abs() < 1e-6, "got {}", monitor[0]);
     }
 
     #[test]

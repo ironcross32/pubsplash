@@ -15,6 +15,10 @@ const SERVICE: &str = "OpenAI";
 const SOURCE_RATE: u32 = 24_000;
 const SOURCE_CHANNELS: usize = 1;
 
+/// What the API uses when a source names no model of its own.
+const DEFAULT_MODEL: &str = "tts-1";
+const DEFAULT_VOICE: &str = "alloy";
+
 const VOICES: &[&str] = &[
     "alloy", "ash", "ballad", "cedar", "coral", "echo", "fable", "marin", "nova", "onyx", "sage",
     "shimmer", "verse",
@@ -43,11 +47,7 @@ impl SpeechEngine for OpenAi {
 
     fn synth(&self, request: &SynthRequest) -> Result<Vec<f32>, TtsError> {
         let key = require(&self.api_key, "The OpenAI API key")?;
-        let voice = if request.voice.is_empty() {
-            "alloy"
-        } else {
-            &request.voice
-        };
+        let voice = voice_of(request);
         // The API rejects anything outside 0.25..=4.0 outright.
         let speed = request.rate_multiplier().clamp(0.25, 4.0);
         let body = request_body(request, voice, speed);
@@ -71,6 +71,35 @@ impl SpeechEngine for OpenAi {
     fn voices(&self) -> Result<Vec<Voice>, TtsError> {
         Ok(VOICES.iter().copied().map(Voice::plain).collect())
     }
+
+    fn usage_model(&self, request: &SynthRequest) -> Option<String> {
+        Some(model_for(request).to_string())
+    }
+
+    fn usage_voice(&self, request: &SynthRequest) -> Option<String> {
+        Some(voice_of(request).to_string())
+    }
+}
+
+fn voice_of(request: &SynthRequest) -> &str {
+    if request.voice.is_empty() {
+        DEFAULT_VOICE
+    } else {
+        &request.voice
+    }
+}
+
+/// The `model` this request will carry. Unlike ElevenLabs, OpenAI has no
+/// "let the provider choose" — a blank setting takes the documented default,
+/// so this always names something.
+fn model_for(request: &SynthRequest) -> &str {
+    match &request.provider_settings {
+        Some(TtsEngineSettings::OpenAi(settings)) => {
+            let model = settings.model.trim();
+            if model.is_empty() { DEFAULT_MODEL } else { model }
+        }
+        _ => DEFAULT_MODEL,
+    }
 }
 
 fn request_body(request: &SynthRequest, voice: &str, speed: f32) -> serde_json::Value {
@@ -78,10 +107,7 @@ fn request_body(request: &SynthRequest, voice: &str, speed: f32) -> serde_json::
         Some(TtsEngineSettings::OpenAi(settings)) => Some(settings),
         _ => None,
     };
-    let model = selected
-        .map(|settings| settings.model.trim())
-        .filter(|model| !model.is_empty())
-        .unwrap_or("tts-1");
+    let model = model_for(request);
     let mut body = serde_json::json!({
         "model": model,
         "voice": voice,

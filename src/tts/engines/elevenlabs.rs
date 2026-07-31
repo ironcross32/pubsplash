@@ -3,17 +3,44 @@
 //! Asked for `pcm_24000` rather than the default MP3: the reference Python
 //! client decodes MP3 here for no reason, and the raw form is both faster and
 //! lossless.
+//!
+//! The `/stream` endpoint returns those same bytes chunked as they are
+//! generated, and [`ElevenLabs::synth_to`] feeds them to the mixer as they
+//! arrive — which is the whole latency win, since a chat message otherwise
+//! stays silent until the last word has been synthesized. It is a per-source
+//! setting (`ElevenLabsTtsSettings::stream`), on by default.
 
-use crate::audio::convert::pcm16_to_engine;
+use crate::audio::convert::{ENGINE_SAMPLE_RATE, Pcm16Stream, pcm16_to_engine};
 use crate::config::{SpeechConfig, TtsEngineSettings};
 use crate::tts::engine::{SpeechEngine, SynthRequest, TtsError, Voice};
-use crate::tts::net::{block_on, body_bytes, body_json, client, require};
+use crate::tts::net::{block_on, body_bytes, body_json, check_status, client, require};
+use futures_util::StreamExt;
 
 const API_BASE: &str = "https://api.elevenlabs.io/v1";
 const SERVICE: &str = "ElevenLabs";
 const DEFAULT_VOICE: &str = "21m00Tcm4TlvDq8ikWAM"; // Rachel
 const SOURCE_RATE: u32 = 24_000;
 const SOURCE_CHANNELS: usize = 1;
+
+/// The model that has no streaming endpoint. Its request also drops similarity
+/// boost and speaker boost; the dialog greys all three out together.
+const NO_STREAMING_MODEL: &str = "eleven_v3";
+
+/// Whole-request timeout for a streamed synthesis, replacing the shared
+/// client's 30 seconds ([`crate::tts::net`]). That budget assumes a request
+/// ends when the download does; here it ends when the audio has finished
+/// *playing*, because the sink blocks while the mixer drains its ring. Still
+/// bounded, so one wedged request cannot hold the queue forever — and
+/// `SpeechConfig::max_chars` bounds the utterance well inside it.
+const STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// How much audio is held back before the first chunk is played, as a jitter
+/// cushion. Once playback has started this much stays queued ahead of it, so a
+/// chunk that arrives late is covered rather than heard as a gap — chopped
+/// speech is worse than speech that starts a fraction of a second later, and
+/// this is a small fraction of the delay streaming removes.
+const PREROLL_SAMPLES: usize =
+    (ENGINE_SAMPLE_RATE as usize * 300 / 1_000) * crate::audio::convert::ENGINE_CHANNELS;
 
 pub const MODELS: &[&str] = &[
     "eleven_multilingual_v2",
@@ -54,11 +81,7 @@ impl SpeechEngine for ElevenLabs {
 
     fn synth(&self, request: &SynthRequest) -> Result<Vec<f32>, TtsError> {
         let key = require(&self.api_key, "The ElevenLabs API key")?;
-        let voice = if request.voice.is_empty() {
-            DEFAULT_VOICE
-        } else {
-            &request.voice
-        };
+        let voice = voice_of(request);
         let body = request_body(&self.model, request);
 
         let bytes = block_on(async {
@@ -77,6 +100,59 @@ impl SpeechEngine for ElevenLabs {
         Ok(samples)
     }
 
+    fn synth_to(
+        &self,
+        request: &SynthRequest,
+        sink: &mut dyn FnMut(&[f32]),
+    ) -> Result<(), TtsError> {
+        if !self.streaming_enabled(request) {
+            let samples = self.synth(request)?;
+            if !samples.is_empty() {
+                sink(&samples);
+            }
+            return Ok(());
+        }
+
+        let key = require(&self.api_key, "The ElevenLabs API key")?;
+        let voice = voice_of(request);
+        let body = request_body(&self.model, request);
+
+        block_on(async {
+            let response = client()
+                .post(format!("{API_BASE}/text-to-speech/{voice}/stream"))
+                .timeout(STREAM_TIMEOUT)
+                .header("xi-api-key", key)
+                .query(&[("output_format", "pcm_24000")])
+                .json(&body)
+                .send()
+                .await?;
+            let mut chunks = check_status(SERVICE, response).await?.bytes_stream();
+            // Chunk boundaries fall wherever the network puts them, so the
+            // conversion has to carry state across them; see `Pcm16Stream`.
+            let mut pcm = Pcm16Stream::new(SOURCE_RATE, SOURCE_CHANNELS);
+            let feed = |samples: &mut Vec<f32>, sink: &mut dyn FnMut(&[f32])| {
+                if !samples.is_empty() {
+                    request.apply_volume(samples);
+                    sink(samples);
+                    samples.clear();
+                }
+            };
+            let mut buffered = Vec::new();
+            let mut started = false;
+            while let Some(chunk) = chunks.next().await {
+                buffered.extend_from_slice(&pcm.push(&chunk?));
+                if !started && buffered.len() < PREROLL_SAMPLES {
+                    continue;
+                }
+                started = true;
+                feed(&mut buffered, sink);
+            }
+            buffered.extend_from_slice(&pcm.finish());
+            feed(&mut buffered, sink);
+            Ok::<_, TtsError>(())
+        })
+    }
+
     fn voices(&self) -> Result<Vec<Voice>, TtsError> {
         let key = require(&self.api_key, "The ElevenLabs API key")?;
         let body: serde_json::Value = block_on(async {
@@ -89,12 +165,61 @@ impl SpeechEngine for ElevenLabs {
         })?;
         Ok(parse_voices(&body))
     }
+
+    fn usage_model(&self, request: &SynthRequest) -> Option<String> {
+        // Empty means ElevenLabs picks, and there is no honest name to record.
+        let model = model_for(&self.model, request);
+        (!model.is_empty()).then(|| model.to_string())
+    }
+
+    fn usage_voice(&self, request: &SynthRequest) -> Option<String> {
+        Some(voice_of(request).to_string())
+    }
+}
+
+impl ElevenLabs {
+    /// Whether this utterance should go to the streaming endpoint.
+    ///
+    /// A source saved before streaming existed deserializes with it on (see
+    /// `ElevenLabsTtsSettings::default`), and a *legacy* source — no
+    /// per-source settings at all, taking the global model — gets it too. The
+    /// one hard exclusion is [`NO_STREAMING_MODEL`], which has no `/stream`.
+    fn streaming_enabled(&self, request: &SynthRequest) -> bool {
+        match &request.provider_settings {
+            Some(TtsEngineSettings::ElevenLabs(settings)) => {
+                settings.stream && settings.model.trim() != NO_STREAMING_MODEL
+            }
+            _ => self.model.trim() != NO_STREAMING_MODEL,
+        }
+    }
+}
+
+fn voice_of(request: &SynthRequest) -> &str {
+    if request.voice.is_empty() {
+        DEFAULT_VOICE
+    } else {
+        &request.voice
+    }
 }
 
 /// Converts the integer UI rate directly to `f64` so JSON serialization does
 /// not expose an `f32` boundary as slightly outside ElevenLabs' accepted range.
 fn speed_for_request(request: &SynthRequest) -> f64 {
     (1.0 + request.rate_percent() as f64 / 100.0).clamp(0.7, 1.2)
+}
+
+/// The `model_id` this request will carry, or empty to let ElevenLabs choose.
+///
+/// A source saved before per-source settings existed (`provider_settings:
+/// None`) falls back to the global `SpeechConfig::elevenlabs_model`, which
+/// `ElevenLabs::new` has already defaulted; a source carrying some *other*
+/// engine's settings names no model at all.
+fn model_for<'a>(legacy_model: &'a str, request: &'a SynthRequest) -> &'a str {
+    match &request.provider_settings {
+        None => legacy_model.trim(),
+        Some(TtsEngineSettings::ElevenLabs(settings)) => settings.model.trim(),
+        Some(_) => "",
+    }
 }
 
 fn request_body(legacy_model: &str, request: &SynthRequest) -> serde_json::Value {
@@ -134,11 +259,7 @@ fn request_body(legacy_model: &str, request: &SynthRequest) -> serde_json::Value
         "voice_settings".into(),
         serde_json::Value::Object(voice_settings),
     );
-    let model = match (&request.provider_settings, selected) {
-        (None, _) => legacy_model.trim(),
-        (_, Some(settings)) => settings.model.trim(),
-        _ => "",
-    };
+    let model = model_for(legacy_model, request);
     if !model.is_empty() {
         body.insert("model_id".into(), serde_json::json!(model));
     }
@@ -264,6 +385,43 @@ mod tests {
         assert!(parse_voices(&serde_json::json!({"voices": "nope"})).is_empty());
     }
 
+    fn with_settings(settings: crate::config::ElevenLabsTtsSettings) -> SynthRequest {
+        let mut request = request_at_rate(0);
+        request.provider_settings = Some(TtsEngineSettings::ElevenLabs(settings));
+        request
+    }
+
+    #[test]
+    fn streaming_is_the_default_and_the_checkbox_turns_it_off() {
+        let engine = ElevenLabs::new(&SpeechConfig::default());
+        // A legacy source: no per-source settings at all.
+        assert!(engine.streaming_enabled(&request_at_rate(0)));
+        assert!(engine.streaming_enabled(&with_settings(Default::default())));
+        assert!(
+            !engine.streaming_enabled(&with_settings(crate::config::ElevenLabsTtsSettings {
+                stream: false,
+                ..Default::default()
+            }))
+        );
+    }
+
+    /// Eleven v3 has no streaming endpoint, so the flag cannot reach it —
+    /// through a per-source model or through the legacy global one.
+    #[test]
+    fn eleven_v3_never_streams() {
+        let engine = ElevenLabs::new(&SpeechConfig::default());
+        assert!(
+            !engine.streaming_enabled(&with_settings(crate::config::ElevenLabsTtsSettings {
+                model: "eleven_v3".into(),
+                stream: true,
+                ..Default::default()
+            }))
+        );
+        let mut config = SpeechConfig::default();
+        config.elevenlabs_model = "eleven_v3".into();
+        assert!(!ElevenLabs::new(&config).streaming_enabled(&request_at_rate(0)));
+    }
+
     #[test]
     fn a_blank_configured_model_falls_back_to_the_default() {
         let mut config = SpeechConfig::default();
@@ -289,6 +447,61 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(error, TtsError::NotConfigured(_)), "{error}");
+    }
+
+    #[test]
+    fn a_subscription_payload_becomes_a_balance() {
+        let balance = parse_subscription(&serde_json::json!({
+            "tier": "creator",
+            "character_count": 1_204,
+            "character_limit": 10_000,
+            "next_character_count_reset_unix": 1_770_000_000i64,
+        }));
+        assert_eq!(balance.used, 1_204);
+        assert_eq!(balance.limit, 10_000);
+        assert_eq!(balance.remaining(), 8_796);
+        assert_eq!(balance.tier, "creator");
+        assert_eq!(balance.resets_unix, Some(1_770_000_000));
+    }
+
+    #[test]
+    fn a_subscription_missing_fields_reads_as_zero_rather_than_failing() {
+        let balance = parse_subscription(&serde_json::json!({}));
+        assert_eq!(balance, crate::tts::usage::Balance::default());
+    }
+
+    #[test]
+    fn the_billed_model_is_the_one_the_source_selected() {
+        // Legacy source: the global model, which `new` has already defaulted.
+        let engine = ElevenLabs::new(&SpeechConfig::default());
+        assert_eq!(
+            engine.usage_model(&request_at_rate(0)).as_deref(),
+            Some(MODELS[0])
+        );
+        // Per-source settings win over the global.
+        let request = with_settings(crate::config::ElevenLabsTtsSettings {
+            model: "eleven_flash_v2_5".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            engine.usage_model(&request).as_deref(),
+            Some("eleven_flash_v2_5")
+        );
+        // Blank per-source model means ElevenLabs picks; nothing to record.
+        let request = with_settings(crate::config::ElevenLabsTtsSettings::default());
+        assert_eq!(engine.usage_model(&request), None);
+    }
+
+    #[test]
+    fn the_billed_voice_resolves_the_default() {
+        let engine = ElevenLabs::new(&SpeechConfig::default());
+        assert_eq!(
+            engine.usage_voice(&request_at_rate(0)).as_deref(),
+            Some(DEFAULT_VOICE)
+        );
+        let mut request = request_at_rate(0);
+        request.voice = "abc123".into();
+        assert_eq!(engine.usage_voice(&request).as_deref(), Some("abc123"));
     }
 }
 
@@ -355,4 +568,44 @@ pub fn discover(config: &SpeechConfig) -> Result<crate::tts::catalog::EngineCata
         Ok::<_, TtsError>(voices)
     })?;
     Ok(EngineCatalog::from_voices(models, voices))
+}
+
+/// Reads the account's character allowance.
+///
+/// ElevenLabs is the only engine Pubsplash talks to that publishes a balance
+/// against the credentials the app already holds — the rest keep theirs behind
+/// a cloud-billing API with its own scope. Bills one credit per character, so
+/// `character_count`/`character_limit` are directly comparable with the
+/// per-session character tally in [`crate::tts::usage`].
+pub fn subscription(config: &SpeechConfig) -> Result<crate::tts::usage::Balance, TtsError> {
+    let engine = ElevenLabs::new(config);
+    let key = require(&engine.api_key, "The ElevenLabs API key")?;
+    let body: serde_json::Value = block_on(async {
+        let response = client()
+            .get(format!("{API_BASE}/user/subscription"))
+            .header("xi-api-key", key)
+            .send()
+            .await?;
+        body_json(SERVICE, response).await
+    })?;
+    Ok(parse_subscription(&body))
+}
+
+/// A missing field is reported as zero rather than as an error: the response
+/// shape has grown fields over time, and a balance that reads "0 of 0" is
+/// obviously wrong to a user in a way a failed refresh is not.
+fn parse_subscription(body: &serde_json::Value) -> crate::tts::usage::Balance {
+    let number = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+    crate::tts::usage::Balance {
+        used: number("character_count"),
+        limit: number("character_limit"),
+        tier: body
+            .get("tier")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        resets_unix: body
+            .get("next_character_count_reset_unix")
+            .and_then(|v| v.as_i64()),
+    }
 }

@@ -30,13 +30,13 @@ pub struct SpeakRequest {
     pub engine: String,
     pub synth: SynthRequest,
     /// Name of the TTS source in the audio engine to feed.
-    pub source_name: String,
-    /// Whether the samples are pushed into the mixer at all.
     ///
-    /// Only SAPI honours `false` as "speak locally but stay off the mix" —
-    /// it has a separate local voice. For a network engine the mixer is the
-    /// only path there is, so the source's routing decides where it goes.
-    pub to_stream: bool,
+    /// Every engine's samples go here and nowhere else. There is no "speak
+    /// locally instead" flag: the mixer is the one path out, and the source's
+    /// own routing decides how far along it the speech gets — its strip is
+    /// always heard locally, and "Send speech to the stream" decides whether it
+    /// also reaches master and the buses. See `App::source_specs`.
+    pub source_name: String,
     /// Credentials and limits, snapshotted at enqueue time so the worker never
     /// touches the UI thread's `Config`.
     pub speech: SpeechConfig,
@@ -59,7 +59,7 @@ pub struct Speaker {
 impl Speaker {
     pub fn start(feeds: ExternalFeeds) -> Self {
         let problems = Problems::default();
-        let sapi = super::sapi::start(feeds.clone());
+        let sapi = super::sapi::start(feeds.clone(), problems.clone());
         let network = Queue::new(QUEUE_DEPTH);
         start_network_worker(network.clone(), feeds, problems.clone());
         Self {
@@ -78,7 +78,6 @@ impl Speaker {
             self.sapi.push(super::sapi::SapiRequest {
                 synth: request.synth,
                 source_name: request.source_name,
-                to_stream: request.to_stream,
             });
         }
     }
@@ -102,7 +101,7 @@ impl Drop for Speaker {
 /// otherwise queue one identical complaint per message, and a screen reader
 /// would read every one of them.
 #[derive(Clone, Default)]
-struct Problems(Arc<Mutex<ProblemState>>);
+pub(super) struct Problems(Arc<Mutex<ProblemState>>);
 
 #[derive(Default)]
 struct ProblemState {
@@ -114,7 +113,7 @@ struct ProblemState {
 const PROBLEM_INTERVAL: Duration = Duration::from_secs(60);
 
 impl Problems {
-    fn report(&self, engine: &str, error: &TtsError) {
+    pub(super) fn report(&self, engine: &str, error: &TtsError) {
         let message = error.to_string();
         let Ok(mut state) = self.0.lock() else {
             return;
@@ -174,15 +173,34 @@ fn start_network_worker(queue: Queue<SpeakRequest>, feeds: ExternalFeeds, proble
                     continue;
                 };
                 let synth = request.synth.truncated(request.speech.max_chars());
-                match engine.synth(&synth) {
-                    Ok(samples) if samples.is_empty() => {
+                // The model and voice as the engine will actually resolve them,
+                // and the character count *after* truncation — the figure a
+                // per-character biller charges for. Read before synthesis so a
+                // failed request still counts against the API tab's totals.
+                let model = engine.usage_model(&synth);
+                let voice = engine.usage_voice(&synth);
+                let characters = synth.text.chars().count();
+                // `feed_all` sleeps while the ring drains, which is exactly why
+                // this is not the audio thread. Engines that stream call the
+                // sink many times, so the first words reach the mixer while the
+                // rest is still being generated.
+                let mut fed = 0usize;
+                let result = engine.synth_to(&synth, &mut |samples| {
+                    fed += samples.len();
+                    feeds.feed_all(&request.source_name, samples, "TTS");
+                });
+                super::usage::record(
+                    engine.id(),
+                    characters,
+                    model,
+                    voice,
+                    result.is_err(),
+                );
+                match result {
+                    Ok(()) if fed == 0 => {
                         log::debug!("{} returned no audio", request.engine);
                     }
-                    Ok(samples) => {
-                        // `feed_all` sleeps while the ring drains, which is
-                        // exactly why this is not the audio thread.
-                        feeds.feed_all(&request.source_name, &samples, "TTS");
-                    }
+                    Ok(()) => {}
                     Err(error) => {
                         log::warn!("{} synthesis failed: {error}", engine.display_name());
                         problems.report(engine.id(), &error);

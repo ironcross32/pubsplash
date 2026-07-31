@@ -2,6 +2,7 @@
 //! timer that carries events from the audio/network threads onto the UI
 //! thread.
 
+mod api;
 mod app_picker;
 mod buses;
 mod chat;
@@ -161,6 +162,15 @@ pub struct Runtime {
     /// Identity names (`SourceConfig.name`) of sources whose capture thread is
     /// currently failing and retrying. Drives the "(reconnecting)" labels.
     pub failing: HashSet<String>,
+    /// The `tts::catalog::generation()` the source labels were last built from.
+    /// A background voice refresh landing is the one thing that can change a
+    /// label with no config edit and no process coming or going behind it, so
+    /// the pump watches this to know when to re-derive them.
+    pub tts_catalog_generation: u64,
+    /// The `tts::usage::generation()` the API tab was last built from. Speech
+    /// happens on worker threads, so the pump watches this rather than being
+    /// told, exactly as it does for the catalog above.
+    pub usage_generation: u64,
     /// Which mixer strips are being monitored through the local playback
     /// device. Deliberately not persisted — see [`Monitors`].
     pub monitors: Monitors,
@@ -191,6 +201,10 @@ pub struct ShownStreamUi {
     /// while it is selected, and the cache is what makes that row still count
     /// as out of date on the next tick.
     pub overview: Vec<(home::OverviewRow, String)>,
+    /// The rows currently in the API tab's usage list, for the same reason and
+    /// with the same deliberate staleness as `overview` above — see
+    /// `api::refresh`.
+    pub api: Vec<(api::ApiRow, String)>,
     /// The stream phase and standalone-recording state last *spoken*. Separate
     /// from the label caches above because those change for reasons that are not
     /// a transition (the button enable rules), and because `None` marks the very
@@ -420,6 +434,13 @@ impl Default for Runtime {
             recording_started: None,
             apps: HashMap::new(),
             failing: HashSet::new(),
+            // Seeded from the catalog prewarmed before the UI was built, so the
+            // labels start out agreeing with it and the first pump tick has no
+            // phantom refresh to do.
+            tts_catalog_generation: crate::tts::catalog::generation(),
+            // Nothing has spoken yet, so this is 0 and the first pump tick has
+            // nothing to redraw.
+            usage_generation: crate::tts::usage::generation(),
             monitors: Monitors::default(),
             shown: ShownStreamUi::default(),
         }
@@ -521,6 +542,10 @@ pub struct Widgets {
     pub fx_list: ListBox,
     /// Reflects (and toggles) the selected plugin's bypass state.
     pub fx_bypass: CheckBox,
+    /// Per-engine speech usage — see [`api`].
+    pub usage_list: ListBox,
+    #[allow(dead_code)]
+    pub usage_refresh: Button,
 }
 
 /// Live handles into the Setup streaming services dialog while it is open, so
@@ -583,6 +608,13 @@ pub struct App {
     pub apps_tx: crossbeam_channel::Sender<HashMap<String, crate::audio::device::AppProcess>>,
     pub apps_rx: crossbeam_channel::Receiver<HashMap<String, crate::audio::device::AppProcess>>,
     pub apps_pending: std::cell::Cell<bool>,
+    /// Balance lookups that *failed*, from the worker
+    /// `tts::usage::start_balance_refresh` spawns. Successes go straight into
+    /// the usage store and are noticed through its generation counter; only the
+    /// failures need carrying back, so the user who pressed the button learns
+    /// why nothing changed.
+    pub usage_tx: crossbeam_channel::Sender<crate::tts::usage::BalanceResult>,
+    pub usage_rx: crossbeam_channel::Receiver<crate::tts::usage::BalanceResult>,
     /// The 100 ms pump timer. Owned here (not leaked) so `on_close` can stop it
     /// before the frame is destroyed: a running timer whose owner frame has been
     /// torn down keeps firing `WM_TIMER` into the freed frame handler and
@@ -622,8 +654,14 @@ pub struct FxRuntime {
 /// per-source pack selection is not exposed. The broadcaster always hears the cue locally
 /// through `audio::cue`; `output_to_stream` only decides whether the same
 /// samples are *also* fed to the mixer through `ExternalFeeds` so listeners hear
-/// them. (TTS works the same way - see `tts::sapi`.) The local path bypasses the
-/// strip, so it honours the source's mute (filtered below) but not its volume.
+/// them. The local path bypasses the strip, so it honours the source's mute
+/// (filtered below) but not its volume.
+///
+/// TTS reaches the same end by the opposite means: its samples always go to the
+/// mixer, and the strip itself is played locally (`SourceSpec::local`), so the
+/// fader applies to what the broadcaster hears. Cues are one-shot and short
+/// enough that routing them through a strip to be heard would not be worth the
+/// latency; a spoken chat message is neither.
 fn play_sound_event(app: &Rc<App>, event: crate::soundpack::StreamEvent) {
     let targets: Vec<(String, bool)> = {
         let config = app.config.borrow();
@@ -681,13 +719,6 @@ fn sound_event_enabled(
         crate::soundpack::StreamEvent::OutgoingChat => settings.outgoing_chat,
     }
 }
-/// Whether a source's audio should reach the master mix.
-///
-/// Only TTS sources can answer no. A network engine has no local voice of its
-/// own — the mixer is the only way its speech is ever heard — so it always
-/// feeds the strip, and "Send speech to the stream" is honoured here instead,
-/// by keeping the strip off master. The user still hears it by monitoring the
-/// strip (CTRL+M), and it still reaches any buses the source sends to.
 /// Surfaces speech failures the workers reported, into the chat log.
 ///
 /// Not a dialog: these arrive while chat is flowing, and a modal per failed
@@ -716,6 +747,14 @@ fn report_speech_problems(app: &Rc<App>) -> usize {
     added
 }
 
+/// Whether a source's audio should reach the listeners.
+///
+/// Only TTS sources can answer no, and it is exactly what "Send speech to the
+/// stream" means: the strip is dropped from master *and* its sends are dropped,
+/// since a bus mixes into master whatever the source wanted. It has nothing to
+/// say about whether the broadcaster hears the speech — they always do, through
+/// `SourceSpec::local` — which is the whole difference from what this used to
+/// mean.
 fn tts_reaches_the_stream(source: &crate::config::SourceConfig) -> bool {
     match &source.kind {
         SourceKindConfig::Tts(tts) => tts.output_to_stream,
@@ -748,11 +787,6 @@ fn speak_chat(app: &Rc<App>, user: &str, content: &str) {
                 provider_settings: tts.provider_settings.clone(),
             },
             source_name: source.name.clone(),
-            // A network engine has no local voice, so the mixer is its only
-            // path out — it always feeds, and the source's own routing decides
-            // whether that reaches the stream. SAPI speaks locally regardless,
-            // so for it this really is "also send it to the stream".
-            to_stream: tts.output_to_stream || crate::tts::engines::is_network(&tts.engine),
             speech: config.speech.clone(),
         });
     }
@@ -996,17 +1030,26 @@ impl App {
                 volume: s.volume,
                 muted: s.muted,
                 monitor: monitors.source(index),
+                // Speech is for the broadcaster first, so a TTS strip is always
+                // played out of the local device — see `SourceSpec::local`.
+                local: matches!(&s.kind, SourceKindConfig::Tts(_)),
                 to_master: s.to_master && tts_reaches_the_stream(s),
-                sends: s
-                    .sends
-                    .iter()
-                    .filter_map(|send| {
-                        Some(crate::audio::SendSpec {
-                            bus_index: bus_index(&send.bus)?,
-                            level: send.level,
+                // Sends go too when speech is off the stream. A bus mixes into
+                // master unconditionally, so leaving them would have put the
+                // speech back on the stream by another route.
+                sends: if tts_reaches_the_stream(s) {
+                    s.sends
+                        .iter()
+                        .filter_map(|send| {
+                            Some(crate::audio::SendSpec {
+                                bus_index: bus_index(&send.bus)?,
+                                level: send.level,
+                            })
                         })
-                    })
-                    .collect(),
+                        .collect()
+                } else {
+                    Vec::new()
+                },
                 feed: match &s.kind {
                     SourceKindConfig::Microphone { device_id } => {
                         FeedKind::Capture(CaptureKind::Microphone {
@@ -1361,10 +1404,14 @@ pub fn build(app: Rc<App>) {
     let chat_panel = Panel::builder(&notebook).build();
     let scenes_panel = Panel::builder(&notebook).build();
     let buses_panel = Panel::builder(&notebook).build();
+    let api_panel = Panel::builder(&notebook).build();
     notebook.add_page(&home_panel, "Home", true, None);
     notebook.add_page(&chat_panel, "Chat", false, None);
     notebook.add_page(&scenes_panel, "Scenes and Sources", false, None);
     notebook.add_page(&buses_panel, "Buses", false, None);
+    // Last in the strip: read-only, and nothing here is needed to get a stream
+    // on the air.
+    notebook.add_page(&api_panel, "API", false, None);
     help::tag(&notebook, "window.tabBar", "Main tab bar");
 
     let frame_sizer = BoxSizer::builder(Orientation::Vertical).build();
@@ -1379,6 +1426,7 @@ pub fn build(app: Rc<App>) {
     let (chat_list, chat_input) = chat::build(&app, &chat_panel);
     let (scenes_list, sources_list) = scenes::build(&app, &scenes_panel);
     let (bus_list, fx_list, fx_bypass) = buses::build(&app, &buses_panel);
+    let (usage_list, usage_refresh) = api::build(&app, &api_panel);
 
     *app.widgets.borrow_mut() = Some(Widgets {
         frame: frame.clone(),
@@ -1398,6 +1446,8 @@ pub fn build(app: Rc<App>) {
         bus_list,
         fx_list,
         fx_bypass,
+        usage_list,
+        usage_refresh,
     });
 
     // Instantiate the configured FX chains before syncing the engine; collect
@@ -1413,6 +1463,7 @@ pub fn build(app: Rc<App>) {
     scenes::refresh_sources_list(&app);
     buses::refresh_bus_list(&app);
     buses::refresh_fx_list(&app);
+    api::refresh_usage(&app);
     app.refresh_stream_ui();
     // Buses before sources: sources reference buses by index.
     fx::sync_engine_buses(&app);
@@ -2133,12 +2184,44 @@ fn pump_events(app: &Rc<App>) {
     // the engine is retired without a `BusesApplied` to hang it on.
     fx::release_orphans(app);
 
+    // A TTS voice catalog refresh committed since the last tick. ElevenLabs
+    // source labels are built from it, so they are stale now. The refresh below
+    // is in place, so a generation that turns out not to have changed any label
+    // writes nothing and announces nothing.
+    {
+        let generation = crate::tts::catalog::generation();
+        let mut run = app.run.borrow_mut();
+        if run.tts_catalog_generation != generation {
+            run.tts_catalog_generation = generation;
+            labels_dirty = true;
+        }
+    }
+
     if labels_dirty {
         // In place, exactly as the application poll does it: rebuilding the
         // mixer would move focus out from under whoever is tabbing through it.
         home::relabel_source_strips(app);
         scenes::refresh_sources_list(app);
     }
+
+    // Speech usage, the same way: the workers bump a counter rather than
+    // sending an event, and this notices. `refresh_usage` never writes the
+    // selected row, so a chat flood cannot talk over a user reading the tab.
+    // A catalog refresh also improves these rows (it is what turns an opaque
+    // ElevenLabs voice id into a name), so redraw when either has moved.
+    {
+        let generation = crate::tts::usage::generation();
+        let moved = {
+            let mut run = app.run.borrow_mut();
+            let moved = run.usage_generation != generation;
+            run.usage_generation = generation;
+            moved
+        };
+        if moved || labels_dirty {
+            api::refresh_usage(app);
+        }
+    }
+    chat_arrived += api::report_balance_failures(app);
 
     // F1 help: one relaxed atomic unless F1 was actually pressed, and the hook
     // rings the idle doorbell when it was. F6 pane cycling arrives the same way.

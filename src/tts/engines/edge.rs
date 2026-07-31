@@ -91,11 +91,7 @@ impl SpeechEngine for Edge {
     }
 
     fn synth(&self, request: &SynthRequest) -> Result<Vec<f32>, TtsError> {
-        let voice = if request.voice.is_empty() {
-            DEFAULT_VOICE
-        } else {
-            &request.voice
-        };
+        let voice = voice_of(request);
         let document = ssml::document(
             language_of(voice),
             voice,
@@ -134,6 +130,21 @@ impl SpeechEngine for Edge {
             body_json(SERVICE, response).await
         })?;
         Ok(parse_voices(&body))
+    }
+
+    // No `usage_model`: the protocol is SSML over a WebSocket, and the service
+    // is free — there is no model and nothing to bill.
+
+    fn usage_voice(&self, request: &SynthRequest) -> Option<String> {
+        Some(voice_of(request).to_string())
+    }
+}
+
+fn voice_of(request: &SynthRequest) -> &str {
+    if request.voice.is_empty() {
+        DEFAULT_VOICE
+    } else {
+        &request.voice
     }
 }
 

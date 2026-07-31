@@ -14,6 +14,8 @@ use crate::tts::engine::{SpeechEngine, SynthRequest, TtsError, Voice};
 use crate::tts::net::{block_on, body_bytes, client};
 
 const SERVICE: &str = "Google Translate";
+/// Used when a source names no language of its own.
+const DEFAULT_LANGUAGE: &str = "en";
 /// The endpoint refuses anything longer in a single request.
 const MAX_CHUNK: usize = 200;
 
@@ -99,11 +101,7 @@ impl SpeechEngine for GoogleTranslate {
     }
 
     fn synth(&self, request: &SynthRequest) -> Result<Vec<f32>, TtsError> {
-        let language = if request.voice.is_empty() {
-            "en"
-        } else {
-            &request.voice
-        };
+        let language = language_of(request);
         let selected = match &request.provider_settings {
             Some(TtsEngineSettings::Gtts(settings)) => Some(settings),
             _ => None,
@@ -155,6 +153,24 @@ impl SpeechEngine for GoogleTranslate {
             .iter()
             .map(|(code, name)| Voice::new(*code, format!("{name} ({code})")))
             .collect())
+    }
+
+    // No `usage_model`: this is Google Translate's unofficial endpoint. It has
+    // no account, no model, and nothing to bill.
+
+    fn usage_voice(&self, request: &SynthRequest) -> Option<String> {
+        // A language code rather than a voice — the endpoint has one voice per
+        // language and no way to name it.
+        Some(language_of(request).to_string())
+    }
+}
+
+/// The `tl` query parameter: what this endpoint has instead of a voice.
+fn language_of(request: &SynthRequest) -> &str {
+    if request.voice.is_empty() {
+        DEFAULT_LANGUAGE
+    } else {
+        &request.voice
     }
 }
 

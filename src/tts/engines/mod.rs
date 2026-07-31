@@ -62,6 +62,23 @@ pub fn display_name(engine: &str) -> &'static str {
         .unwrap_or("SAPI 5")
 }
 
+/// Whether an engine's voice ids are opaque keys rather than the voice's own
+/// name.
+///
+/// Every other engine's id is readable on its own — `en-US-AriaNeural`,
+/// `Matthew`, a SAPI voice's full name — so a source label can print it as-is.
+/// ElevenLabs ids are 20-character keys, which tell a screen-reader user
+/// nothing: those need the catalog's label, and are better off saying nothing
+/// than saying the id. See [`crate::source_name`].
+///
+/// Compared exactly rather than through [`resolve_id`], which logs a warning
+/// for an unrecognised id — this runs on every source-label refresh, twice a
+/// second, and an unknown engine falls back to SAPI and so is not opaque
+/// either way.
+pub fn voice_ids_are_opaque(engine: &str) -> bool {
+    engine == ELEVENLABS
+}
+
 /// Whether an engine runs over the network, and so belongs on the `tts-net`
 /// worker rather than the COM apartment thread.
 pub fn is_network(engine: &str) -> bool {
