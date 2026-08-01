@@ -18,6 +18,7 @@ mod list;
 mod native_acc;
 mod panes;
 mod preferences;
+mod scan_dialog;
 mod scenes;
 mod sends;
 mod slider_uia;
@@ -562,16 +563,20 @@ pub struct ConnectUi {
 }
 
 /// A VST scan in flight: the worker handle plus the progress dialog the pump
-/// drives. The progress dialog is created lazily on the `Started` event
-/// (its maximum isn't known until enumeration finishes) and destroyed by
-/// dropping it when the scan ends.
+/// drives. One dialog serves the whole scan — it is created with the scan (in
+/// [`preferences::begin_scan`]) and destroyed by dropping it when the scan
+/// ends. See [`scan_dialog`] for why it is hand-built rather than a
+/// `wxProgressDialog`.
+///
+/// The `Rc` is what lets the pump lift a handle out from under the `app.scan`
+/// borrow before calling into wx: the `Finished` and `Cancelled` arms open a
+/// modal message box, and a modal runs a nested event loop.
+///
+/// `progress` is `None` only for the moment between the scan being recorded
+/// and its window existing — see the ordering note in `begin_scan`.
 pub struct ScanUi {
     pub handle: crate::vst::scan::ScanHandle,
-    pub progress: Option<ProgressDialog>,
-    /// False while the worker is still enumerating candidates: the dialog is
-    /// in indeterminate (pulse) mode until the `Started` event brings the
-    /// total and it is recreated with a real range.
-    pub determinate: bool,
+    pub progress: Option<Rc<scan_dialog::ScanDialog>>,
     /// The Preferences dialog, parent for the progress dialog and result box.
     pub parent: Dialog,
 }
@@ -607,6 +612,10 @@ pub struct App {
     /// Set while `pump_events` is running, so a modal dialog it opens cannot
     /// re-enter it from the nested event loop.
     pub pumping: std::cell::Cell<bool>,
+    /// The same guard for `pump_scan_events`, which has its own timer: it ends
+    /// a scan with a modal message box, and the fast timer keeps firing inside
+    /// that modal's event loop.
+    pub scan_pumping: std::cell::Cell<bool>,
     /// Process snapshots from the worker started by
     /// [`App::request_app_processes`], and whether one is outstanding.
     pub apps_tx: crossbeam_channel::Sender<HashMap<String, crate::audio::device::AppProcess>>,
@@ -2023,6 +2032,17 @@ impl Drop for PumpGuard {
     }
 }
 
+/// [`PumpGuard`] for [`App::scan_pumping`], and for the same reason: a panic
+/// inside a handler is caught and discarded by wxdragon, and a flag left set
+/// would wedge the scan pump for the rest of the session.
+struct ScanPumpGuard(Rc<App>);
+
+impl Drop for ScanPumpGuard {
+    fn drop(&mut self) {
+        self.0.scan_pumping.set(false);
+    }
+}
+
 /// Drains engine and network events into UI state.
 ///
 /// Not re-entrant. Several of the handlers below open modal dialogs, and a
@@ -2298,42 +2318,44 @@ fn pump_events(app: &Rc<App>) {
     }
 }
 
-/// Drives a running VST scan: relays progress into the progress dialog,
-/// forwards its Cancel button to the worker, and finishes or abandons the
-/// scan. Events are collected under a short borrow first — handlers below
-/// open modal dialogs, which must not happen while `app.scan` is borrowed.
+/// Drives a running VST scan: relays progress into the progress dialog and
+/// finishes or abandons the scan. Cancel and Skip do not come through here —
+/// [`scan_dialog`]'s buttons set the worker's flags themselves.
+///
+/// Not re-entrant, and it must never hold an `app.scan` borrow across a call
+/// into wx. The `Finished` and `Cancelled` arms open modal message boxes, and a
+/// modal runs a nested event loop which fires the fast timer again, straight
+/// back into here on top of a borrow. The guard makes that nested call a no-op;
+/// the events stay in the channel for the outer call or the next tick.
 fn pump_scan_events(app: &Rc<App>) {
     use crate::vst::scan::ScanEvent;
-    use std::sync::atomic::Ordering;
 
-    let events: Vec<ScanEvent> = match &*app.scan.borrow() {
-        Some(ui) => ui.handle.events.try_iter().collect(),
-        None => return,
+    if app.scan_pumping.replace(true) {
+        return;
+    }
+    let _guard = ScanPumpGuard(app.clone());
+
+    // The dialog and this tick's events, lifted out under one short borrow.
+    // `progress` is cleared when the scan ends, so nothing below can write to a
+    // dialog that is on its way out.
+    let Some((mut progress, events)) = ({
+        let scan = app.scan.borrow();
+        scan.as_ref().map(|ui| {
+            (
+                ui.progress.clone(),
+                ui.handle.events.try_iter().collect::<Vec<ScanEvent>>(),
+            )
+        })
+    }) else {
+        return;
     };
 
     for event in events {
         match event {
             ScanEvent::Started { total } => {
-                let mut scan = app.scan.borrow_mut();
-                if let Some(ui) = scan.as_mut() {
-                    // Replace the indeterminate "looking for plugins" dialog
-                    // with one whose range is the real total.
-                    ui.progress = None;
-                    ui.determinate = true;
-                    if total > 0 {
-                        ui.progress = Some(
-                            ProgressDialog::builder(
-                                &ui.parent,
-                                "Scanning VST plugins",
-                                &format!("Scanning {total} plugins..."),
-                                total as i32,
-                            )
-                            .can_abort()
-                            .can_skip()
-                            .smooth()
-                            .build(),
-                        );
-                    }
+                // Enumeration is over and there is a count to show.
+                if let Some(progress) = &progress {
+                    progress.counted(total);
                 }
             }
             ScanEvent::Progress {
@@ -2341,20 +2363,8 @@ fn pump_scan_events(app: &Rc<App>) {
                 total,
                 current,
             } => {
-                let scan = app.scan.borrow();
-                if let Some(ui) = scan.as_ref() {
-                    if let Some(progress) = &ui.progress {
-                        let (keep_going, skipped) = progress.update_with_skip(
-                            done as i32,
-                            Some(&format!("Scanned {done} of {total}: {current}")),
-                        );
-                        if !keep_going {
-                            ui.handle.cancel.store(true, Ordering::Relaxed);
-                        }
-                        if skipped {
-                            ui.handle.skip.store(true, Ordering::Relaxed);
-                        }
-                    }
+                if let Some(progress) = &progress {
+                    progress.scanned(done, total, &current);
                 }
             }
             ScanEvent::Finished {
@@ -2367,6 +2377,9 @@ fn pump_scan_events(app: &Rc<App>) {
                 let Some(ui) = app.scan.borrow_mut().take() else {
                     continue;
                 };
+                // Both references, so the dialog is really released before the
+                // message box goes up.
+                progress = None;
                 drop(ui.progress);
                 crate::vst::save_cache(&cache);
                 let total_known = cache.plugins.len();
@@ -2393,6 +2406,7 @@ fn pump_scan_events(app: &Rc<App>) {
                 let Some(ui) = app.scan.borrow_mut().take() else {
                     continue;
                 };
+                progress = None;
                 drop(ui.progress);
                 show_info(
                     &ui.parent,
@@ -2402,29 +2416,10 @@ fn pump_scan_events(app: &Rc<App>) {
             }
         }
     }
-
-    let scan = app.scan.borrow();
-    if let Some(ui) = scan.as_ref() {
-        if let Some(progress) = &ui.progress {
-            // While enumerating, animate the indeterminate bar.
-            if !ui.determinate && !progress.pulse(None) {
-                ui.handle.cancel.store(true, Ordering::Relaxed);
-            }
-            // The Cancel button doesn't always surface through update()'s
-            // return value between events; poll it so cancellation is prompt.
-            if progress.was_cancelled() {
-                ui.handle.cancel.store(true, Ordering::Relaxed);
-            }
-            // Skip must also work while the scanner is stuck inside one
-            // plugin and no Progress events are flowing. was_skipped() stays
-            // latched until an update consumes it; re-updating at the current
-            // value resets the flag and re-enables the Skip button.
-            if ui.determinate && progress.was_skipped() {
-                ui.handle.skip.store(true, Ordering::Relaxed);
-                let _ = progress.update_with_skip(progress.get_value(), None);
-            }
-        }
-    }
+    // Nothing to poll: the dialog's own buttons set the worker's flags, so
+    // Cancel and Skip work while the scanner is stuck inside one plugin and no
+    // events are flowing at all.
+    drop(progress);
 }
 
 #[cfg(test)]

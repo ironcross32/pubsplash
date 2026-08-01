@@ -55,11 +55,9 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     sounds.alive.set(false);
     speech_alive.set(false);
     sounds.settle.stop();
-    // A scan can still be running: `ScanEvent::Started` only builds a progress
-    // dialog when the folders actually held plugins, so scanning an empty
-    // folder leaves the scan alive with this dialog fully interactive. Its
-    // `ScanUi` holds this dialog as the parent for its progress and result
-    // message boxes, so it must not outlive the `destroy()` below.
+    // A scan can still be running — its `ScanUi` holds this dialog as the
+    // parent for its progress and result message boxes, so it must not outlive
+    // the `destroy()` below.
     // Dropping the handle cancels the worker and joins it, so take it out from
     // under the borrow first.
     let scan = app.scan.borrow_mut().take();
@@ -1246,24 +1244,26 @@ fn begin_scan(app: &Rc<App>, dialog: &Dialog, mode: ScanMode) {
     let existing = app.plugins.borrow().clone();
     match scan::start_scan(folders, mode, existing) {
         Ok(handle) => {
-            // Enumeration alone can take a while on big folders; show an
-            // indeterminate progress dialog right away. It is replaced with
-            // a real one once the worker reports how many plugins it found.
-            let progress = ProgressDialog::builder(
-                dialog,
-                "Scanning VST plugins",
-                "Looking for plugins in the configured folders...",
-                100,
-            )
-            .can_abort()
-            .build();
-            progress.pulse(None);
+            // The scan is recorded *before* the dialog exists, and the guard at
+            // the top of this function is why. Showing a window dispatches
+            // messages, so a second click on this button can land while we are
+            // still inside the first — and with the assignment last, `app.scan`
+            // was still `None` at that moment, the guard waved it through, and
+            // every press started another scan thread. Four of them raced over
+            // the same plugins, each spawning its own helper processes.
+            let cancel = handle.cancel.clone();
+            let skip = handle.skip.clone();
             *app.scan.borrow_mut() = Some(ScanUi {
                 handle,
-                progress: Some(progress),
-                determinate: false,
+                progress: None,
                 parent: dialog.clone(),
             });
+            // Enumeration alone can take a while on big folders, so the dialog
+            // goes up now and says so; the plugin count follows on `Started`.
+            let progress = super::scan_dialog::ScanDialog::show(dialog, cancel, skip);
+            if let Some(ui) = app.scan.borrow_mut().as_mut() {
+                ui.progress = Some(std::rc::Rc::new(progress));
+            }
             // Bring up the timer that drives the progress dialog now, rather
             // than waiting for the next idle to notice the scan exists.
             super::sync_fast_timer(app);

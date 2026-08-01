@@ -6,6 +6,10 @@
 
 ### Fixes
 
+- Scanning for plugins could hang at 0% and never finish, filling the log file with errors while the scan itself ran on invisibly in the background. The scan dialog has been rebuilt from scratch to fix it. It is now an ordinary Pubsplash dialog — a progress bar, a status line naming the plugin being loaded, and Skip and Cancel buttons — rather than the Windows progress dialog, which turned out not to be able to show a Skip button at all: asking for one stopped the dialog appearing. **Skip** (or ENTER) gives up on a plugin that is taking too long and moves to the next one; **Cancel** (or ESCAPE) stops the scan. Both now work even while the scan is stuck inside a plugin. The status line is read-only and does not read itself out as it changes, so you can tab to it whenever you want to know where the scan has got to without it interrupting you.
+
+- Pressing "Scan for new plugins" or "Rescan all plugins" more than once started that many scans at the same time, all racing over the same plugins and each running its own scanning processes — which made scanning far slower and could make plugins fail to scan that would otherwise have been fine. The second and later presses are now ignored while a scan is running, as they were always meant to be.
+
 ### Changes
 
 ## 0.1.3

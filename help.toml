@@ -445,6 +445,30 @@ file = "src/ui/preferences.rs"
 message = "Scans the list of folders for plugins, adding only those that Pubsplash didn't know about before. Useful if you've recently installed plugins."
 
 [[control]]
+id = "dialog.scan.cancel"
+label = "Cancel the scan button"
+file = "src/ui/scan_dialog.rs"
+message = "Stops the scan and throws away everything it found; the plugins you already had are left as they were. ESCAPE does the same. If a plugin is being loaded right now, the scan stops as soon as that one finishes or is skipped, so this can take a moment to take effect."
+
+[[control]]
+id = "dialog.scan.progress"
+label = "Scan progress bar"
+file = "src/ui/scan_dialog.rs"
+message = "How far through the scan Pubsplash is, as a percentage. It stays at zero until the folders have been searched and the number of plugins is known."
+
+[[control]]
+id = "dialog.scan.skip"
+label = "Skip the plugin being scanned button"
+file = "src/ui/scan_dialog.rs"
+message = "Gives up on the plugin named in the status text and moves on to the next one. ENTER does the same. Use this when a plugin is taking so long that you don't think it will finish. The skipped plugin is recorded as unusable and will not be tried again until you rescan all plugins."
+
+[[control]]
+id = "dialog.scan.status"
+label = "Scan status text"
+file = "src/ui/scan_dialog.rs"
+message = "What the scan is doing right now: how many plugins are done out of how many, and the name of the one being loaded. Read-only, and it does not read itself out as it changes, so tab here whenever you want to know where the scan has got to."
+
+[[control]]
 id = "dialog.sends.add"
 label = "Add a send to a bus button"
 file = "src/ui/sends.rs"

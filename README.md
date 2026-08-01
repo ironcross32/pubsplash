@@ -155,7 +155,7 @@ When a chain you load or import uses plugins that aren't installed on this machi
 
 Open **File > Preferences** (`CTRL+,`) and choose the **VST plugins** tab to tell Pubsplash where your plugins live. The folder list starts out with the standard Windows VST locations that exist on most machines ; add or remove folders as needed (`Delete` removes the focused folder).
 
-Press **Scan for new plugins** to scan only files that haven't been scanned before, or **Rescan all plugins** to start over. Scans are able to be canceled at any time. If a plugin is taking too long and you suspect it's not going to scan, you can skip it. If a scan runs to completion, a cache will be written alongside Pubsplash's configuration file and these plugins will become available to use immediately.
+Press **Scan for new plugins** to scan only files that haven't been scanned before, or **Rescan all plugins** to start over. A dialog reports how far the scan has got and names the plugin it is loading; its status line is read-only and stays quiet as it changes, so tab to it to check on the scan whenever you like. **Cancel scan** (or `ESCAPE`) stops at any time and keeps nothing. If a plugin is taking too long and you suspect it's not going to scan, **Skip this plugin** (or `ENTER`) abandons that one and moves on — it is recorded as unusable until the next **Rescan all plugins**. If a scan runs to completion, a cache will be written alongside Pubsplash's configuration file and these plugins will become available to use immediately.
 
 ## Text-to-speech
 

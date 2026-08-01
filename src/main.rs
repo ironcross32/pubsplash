@@ -110,6 +110,7 @@ fn main() {
             shutting_down: std::cell::Cell::new(false),
             config_dirty: std::cell::Cell::new(false),
             pumping: std::cell::Cell::new(false),
+            scan_pumping: std::cell::Cell::new(false),
             apps_tx,
             apps_rx,
             apps_pending: std::cell::Cell::new(false),
