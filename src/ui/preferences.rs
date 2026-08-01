@@ -69,10 +69,8 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     // Stream Archiving group.
-    let stream_group =
-        StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, panel, "Stream Archiving")
-            .build();
-    let archive_default = CheckBox::builder(panel)
+    let (stream_group, stream_box) = super::group_box(panel, "Stream Archiving");
+    let archive_default = CheckBox::builder(&stream_box)
         .with_label("Archive streams by default")
         .build();
     super::set_accessible_name(&archive_default, "Archive streams by default");
@@ -94,10 +92,9 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     }
 
     // Recording group.
-    let recording_group =
-        StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, panel, "Recording").build();
+    let (recording_group, recording_box) = super::group_box(panel, "Recording");
 
-    let record_default = CheckBox::builder(panel)
+    let record_default = CheckBox::builder(&recording_box)
         .with_label("Record streams by default")
         .build();
     super::set_accessible_name(&record_default, "Record streams by default");
@@ -118,10 +115,10 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         });
     }
 
-    let folder_label = StaticText::builder(panel)
+    let folder_label = StaticText::builder(&recording_box)
         .with_label("Recording folder")
         .build();
-    let folder_input = TextCtrl::builder(panel)
+    let folder_input = TextCtrl::builder(&recording_box)
         .with_value(&app.config.borrow().archiving.recording_folder)
         .build();
     super::set_accessible_name(&folder_input, "Recording folder");
@@ -142,7 +139,9 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         });
     }
 
-    let browse = Button::builder(panel).with_label("&Browse...").build();
+    let browse = Button::builder(&recording_box)
+        .with_label("&Browse...")
+        .build();
     super::help::tag(
         &browse,
         "dialog.preferences.archive.browse",
@@ -267,13 +266,12 @@ fn build_speech_tab(app: &Rc<App>, panel: &Panel, alive: &Rc<std::cell::Cell<boo
 
     // Global, not per-engine: these cap what any network engine will spend, so
     // they stay put no matter which engine the picker names.
-    let limits =
-        StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, panel, "Limits").build();
+    let (limits, limits_box) = super::group_box(panel, "Limits");
 
-    let chars_label = StaticText::builder(panel)
+    let chars_label = StaticText::builder(&limits_box)
         .with_label("Longest message to speak, in characters")
         .build();
-    let chars = SpinCtrl::builder(panel)
+    let chars = SpinCtrl::builder(&limits_box)
         .with_range(50, 5000)
         .with_initial_value(app.config.borrow().speech.max_chars() as i32)
         .build();
@@ -294,10 +292,10 @@ fn build_speech_tab(app: &Rc<App>, panel: &Panel, alive: &Rc<std::cell::Cell<boo
         });
     }
 
-    let interval_label = StaticText::builder(panel)
+    let interval_label = StaticText::builder(&limits_box)
         .with_label("Shortest gap between requests, in milliseconds")
         .build();
-    let interval = SpinCtrl::builder(panel)
+    let interval = SpinCtrl::builder(&limits_box)
         .with_range(0, 10_000)
         .with_initial_value(app.config.borrow().speech.min_request_interval_ms as i32)
         .build();
@@ -732,10 +730,9 @@ const SETTLE_MS: i32 = 300;
 fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
-    let pack_group =
-        StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, panel, "Sound pack").build();
+    let (pack_group, pack_box) = super::group_box(panel, "Sound pack");
 
-    let pack_choice = Choice::builder(panel).build();
+    let pack_choice = Choice::builder(&pack_box).build();
     super::set_accessible_name(&pack_choice, "Sound pack");
     super::help::tag(
         &pack_choice,
@@ -745,10 +742,14 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
     pack_group.add(&pack_choice, 0, SizerFlag::Expand | SizerFlag::All, 4);
 
     let pack_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let import_pack = Button::builder(panel).with_label("&Import pack...").build();
+    let import_pack = Button::builder(&pack_box)
+        .with_label("&Import pack...")
+        .build();
     // ALT+K, not ALT+M: the VST tab's "Re&move folder" already claims that
     // mnemonic in this dialog.
-    let remove_pack = Button::builder(panel).with_label("Remove pac&k").build();
+    let remove_pack = Button::builder(&pack_box)
+        .with_label("Remove pac&k")
+        .build();
     super::help::tag(
         &import_pack,
         "dialog.preferences.sounds.importPack",
@@ -1026,11 +1027,9 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
 
     sizer.add_sizer(&pack_group, 0, SizerFlag::Expand | SizerFlag::All, 4);
 
-    let interface_group =
-        StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, panel, "Interface sounds")
-            .build();
+    let (interface_group, interface_box) = super::group_box(panel, "Interface sounds");
 
-    let startup = CheckBox::builder(panel)
+    let startup = CheckBox::builder(&interface_box)
         .with_label("Play the startup sound")
         .build();
     super::set_accessible_name(&startup, "Play the startup sound");
@@ -1050,7 +1049,7 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
         });
     }
 
-    let shutdown = CheckBox::builder(panel)
+    let shutdown = CheckBox::builder(&interface_box)
         .with_label("Play the shut-down sound")
         .build();
     super::set_accessible_name(&shutdown, "Play the shut-down sound");

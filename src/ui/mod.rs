@@ -508,6 +508,26 @@ pub fn set_accessible_name(widget: &dyn WxWidget, name: &str) {
     ));
 }
 
+/// Builds a labelled group box, handing back the sizer together with the
+/// `StaticBox` that must parent every control the sizer lays out.
+///
+/// wx treats a `wxStaticBox` as a container: the controls its sizer arranges are
+/// expected to be its *children*, and a debug build asserts once per control
+/// when they are siblings under the surrounding panel instead. Getting the
+/// parent right also makes the caption a real MSAA/UIA group, so a screen reader
+/// announces the group name on entering it rather than the caption being purely
+/// visual.
+///
+/// A group's controls all move together: one left behind on the panel is both a
+/// fresh assertion and a control outside the announced group.
+pub fn group_box<W: WxWidget>(parent: &W, label: &str) -> (StaticBoxSizer, StaticBox) {
+    let sizer = StaticBoxSizerBuilder::new_with_label(Orientation::Vertical, parent, label).build();
+    let group = sizer
+        .get_static_box()
+        .expect("a StaticBoxSizer built from a label always owns a StaticBox");
+    (sizer, group)
+}
+
 /// Extracts (key code, ctrl held) from a window event, if it's a key event.
 pub fn key_of(event: &WindowEventData) -> Option<(i32, bool)> {
     if let WindowEventData::Keyboard(kb) = event {

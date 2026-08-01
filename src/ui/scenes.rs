@@ -1450,13 +1450,9 @@ impl TtsProviderControls {
         none_panel.set_sizer(none_sizer, true);
 
         let eleven_panel = Panel::builder(parent).build();
-        let eleven_sizer = StaticBoxSizerBuilder::new_with_label(
-            Orientation::Vertical,
-            &eleven_panel,
-            "ElevenLabs voice settings",
-        )
-        .build();
-        let eleven_model = Choice::builder(&eleven_panel).build();
+        let (eleven_sizer, eleven_box) =
+            super::group_box(&eleven_panel, "ElevenLabs voice settings");
+        let eleven_model = Choice::builder(&eleven_box).build();
         fill_model_choice(
             &eleven_model,
             crate::tts::engines::ELEVENLABS,
@@ -1472,7 +1468,7 @@ impl TtsProviderControls {
             "ElevenLabs model",
         );
         eleven_sizer.add(
-            &StaticText::builder(&eleven_panel)
+            &StaticText::builder(&eleven_box)
                 .with_label("Model (blank uses provider default)")
                 .build(),
             0,
@@ -1480,7 +1476,7 @@ impl TtsProviderControls {
             3,
         );
         eleven_sizer.add(&eleven_model, 0, SizerFlag::Expand | SizerFlag::All, 3);
-        let eleven_language = TextCtrl::builder(&eleven_panel)
+        let eleven_language = TextCtrl::builder(&eleven_box)
             .with_value(&eleven.language_code)
             .build();
         super::set_accessible_name(
@@ -1493,7 +1489,7 @@ impl TtsProviderControls {
             "ElevenLabs language code",
         );
         eleven_sizer.add(
-            &StaticText::builder(&eleven_panel)
+            &StaticText::builder(&eleven_box)
                 .with_label("Language code (optional)")
                 .build(),
             0,
@@ -1502,12 +1498,12 @@ impl TtsProviderControls {
         );
         eleven_sizer.add(&eleven_language, 0, SizerFlag::Expand | SizerFlag::All, 3);
 
-        let eleven_stability_override = CheckBox::builder(&eleven_panel)
+        let eleven_stability_override = CheckBox::builder(&eleven_box)
             .with_label("Override stability")
             .build();
         super::set_accessible_name(&eleven_stability_override, "Override stability");
         eleven_stability_override.set_value(eleven.stability.is_some());
-        let eleven_stability = SpinCtrlDouble::builder(&eleven_panel)
+        let eleven_stability = SpinCtrlDouble::builder(&eleven_box)
             .with_range(0.0, 1.0)
             .build();
         eleven_stability.set_value(eleven.stability.unwrap_or(0.5));
@@ -1523,12 +1519,12 @@ impl TtsProviderControls {
         eleven_sizer.add(&eleven_stability_override, 0, SizerFlag::All, 3);
         eleven_sizer.add(&eleven_stability, 0, SizerFlag::All, 3);
 
-        let eleven_similarity_override = CheckBox::builder(&eleven_panel)
+        let eleven_similarity_override = CheckBox::builder(&eleven_box)
             .with_label("Override similarity boost")
             .build();
         super::set_accessible_name(&eleven_similarity_override, "Override similarity boost");
         eleven_similarity_override.set_value(eleven.similarity_boost.is_some());
-        let eleven_similarity = SpinCtrlDouble::builder(&eleven_panel)
+        let eleven_similarity = SpinCtrlDouble::builder(&eleven_box)
             .with_range(0.0, 1.0)
             .build();
         eleven_similarity.set_value(eleven.similarity_boost.unwrap_or(0.75));
@@ -1547,12 +1543,12 @@ impl TtsProviderControls {
         eleven_sizer.add(&eleven_similarity_override, 0, SizerFlag::All, 3);
         eleven_sizer.add(&eleven_similarity, 0, SizerFlag::All, 3);
 
-        let eleven_style_override = CheckBox::builder(&eleven_panel)
+        let eleven_style_override = CheckBox::builder(&eleven_box)
             .with_label("Override style exaggeration")
             .build();
         super::set_accessible_name(&eleven_style_override, "Override style exaggeration");
         eleven_style_override.set_value(eleven.style.is_some());
-        let eleven_style = SpinCtrlDouble::builder(&eleven_panel)
+        let eleven_style = SpinCtrlDouble::builder(&eleven_box)
             .with_range(0.0, 1.0)
             .build();
         eleven_style.set_value(eleven.style.unwrap_or(0.0));
@@ -1568,7 +1564,7 @@ impl TtsProviderControls {
         eleven_sizer.add(&eleven_style_override, 0, SizerFlag::All, 3);
         eleven_sizer.add(&eleven_style, 0, SizerFlag::All, 3);
 
-        let eleven_boost = Choice::builder(&eleven_panel).build();
+        let eleven_boost = Choice::builder(&eleven_box).build();
         for label in [
             "Speaker boost: provider default",
             "Speaker boost: on",
@@ -1591,7 +1587,7 @@ impl TtsProviderControls {
 
         // Last in the panel, so turning it on or off never shifts the controls
         // above it in Tab order.
-        let eleven_stream = CheckBox::builder(&eleven_panel)
+        let eleven_stream = CheckBox::builder(&eleven_box)
             .with_label("Stream audio as it is generated")
             .build();
         super::set_accessible_name(&eleven_stream, "Stream audio as it is generated");
@@ -1609,13 +1605,8 @@ impl TtsProviderControls {
         bind_optional_double(&eleven_style_override, &eleven_style);
 
         let openai_panel = Panel::builder(parent).build();
-        let openai_sizer = StaticBoxSizerBuilder::new_with_label(
-            Orientation::Vertical,
-            &openai_panel,
-            "OpenAI voice settings",
-        )
-        .build();
-        let openai_model = Choice::builder(&openai_panel).build();
+        let (openai_sizer, openai_box) = super::group_box(&openai_panel, "OpenAI voice settings");
+        let openai_model = Choice::builder(&openai_box).build();
         fill_model_choice(&openai_model, crate::tts::engines::OPENAI, &openai.model);
         super::set_accessible_name(&openai_model, "OpenAI speech model");
         super::help::tag(
@@ -1624,15 +1615,13 @@ impl TtsProviderControls {
             "OpenAI speech model",
         );
         openai_sizer.add(
-            &StaticText::builder(&openai_panel)
-                .with_label("Model")
-                .build(),
+            &StaticText::builder(&openai_box).with_label("Model").build(),
             0,
             SizerFlag::All,
             3,
         );
         openai_sizer.add(&openai_model, 0, SizerFlag::Expand | SizerFlag::All, 3);
-        let openai_instructions = TextCtrl::builder(&openai_panel)
+        let openai_instructions = TextCtrl::builder(&openai_box)
             .with_value(&openai.instructions)
             .build();
         super::set_accessible_name(&openai_instructions, "OpenAI voice instructions");
@@ -1642,7 +1631,7 @@ impl TtsProviderControls {
             "OpenAI voice instructions",
         );
         openai_sizer.add(
-            &StaticText::builder(&openai_panel)
+            &StaticText::builder(&openai_box)
                 .with_label("Voice instructions (GPT-4o mini TTS)")
                 .build(),
             0,
@@ -1658,13 +1647,8 @@ impl TtsProviderControls {
         openai_panel.set_sizer(openai_sizer, true);
 
         let azure_panel = Panel::builder(parent).build();
-        let azure_sizer = StaticBoxSizerBuilder::new_with_label(
-            Orientation::Vertical,
-            &azure_panel,
-            "Azure voice settings",
-        )
-        .build();
-        let azure_style = Choice::builder(&azure_panel).build();
+        let (azure_sizer, azure_box) = super::group_box(&azure_panel, "Azure voice settings");
+        let azure_style = Choice::builder(&azure_box).build();
         super::set_accessible_name(&azure_style, "Azure speaking style");
         fill_default_choice(&azure_style, &[], &azure.style, "Default speaking style");
         super::help::tag(
@@ -1673,7 +1657,7 @@ impl TtsProviderControls {
             "Azure speaking style",
         );
         azure_sizer.add(&azure_style, 0, SizerFlag::Expand | SizerFlag::All, 3);
-        let azure_degree = SpinCtrlDouble::builder(&azure_panel)
+        let azure_degree = SpinCtrlDouble::builder(&azure_box)
             .with_range(0.01, 2.0)
             .build();
         azure_degree.set_value(azure.style_degree.clamp(0.01, 2.0));
@@ -1689,7 +1673,7 @@ impl TtsProviderControls {
             "Azure style intensity",
         );
         azure_sizer.add(
-            &StaticText::builder(&azure_panel)
+            &StaticText::builder(&azure_box)
                 .with_label("Style intensity")
                 .build(),
             0,
@@ -1697,7 +1681,7 @@ impl TtsProviderControls {
             3,
         );
         azure_sizer.add(&azure_degree, 0, SizerFlag::All, 3);
-        let azure_role = Choice::builder(&azure_panel).build();
+        let azure_role = Choice::builder(&azure_box).build();
         super::set_accessible_name(&azure_role, "Azure speaking role");
         fill_default_choice(&azure_role, &[], &azure.role, "Default speaking role");
         super::help::tag(
@@ -1709,13 +1693,9 @@ impl TtsProviderControls {
         azure_panel.set_sizer(azure_sizer, true);
 
         let google_panel = Panel::builder(parent).build();
-        let google_sizer = StaticBoxSizerBuilder::new_with_label(
-            Orientation::Vertical,
-            &google_panel,
-            "Google Cloud voice settings",
-        )
-        .build();
-        let google_language = TextCtrl::builder(&google_panel)
+        let (google_sizer, google_box) =
+            super::group_box(&google_panel, "Google Cloud voice settings");
+        let google_language = TextCtrl::builder(&google_box)
             .with_value(&google.language_code)
             .build();
         super::set_accessible_name(
@@ -1728,7 +1708,7 @@ impl TtsProviderControls {
             "Google Cloud language code",
         );
         google_sizer.add(
-            &StaticText::builder(&google_panel)
+            &StaticText::builder(&google_box)
                 .with_label("Language code (blank infers from voice)")
                 .build(),
             0,
@@ -1736,7 +1716,7 @@ impl TtsProviderControls {
             3,
         );
         google_sizer.add(&google_language, 0, SizerFlag::Expand | SizerFlag::All, 3);
-        let google_effect = Choice::builder(&google_panel).build();
+        let google_effect = Choice::builder(&google_box).build();
         super::set_accessible_name(&google_effect, "Google Cloud audio effects profile");
         google_effect.append("No effects profile");
         let mut effect_selection = 0;
@@ -1756,7 +1736,7 @@ impl TtsProviderControls {
             "Google Cloud audio effects profile",
         );
         google_sizer.add(
-            &StaticText::builder(&google_panel)
+            &StaticText::builder(&google_box)
                 .with_label("Audio effects profile")
                 .build(),
             0,
@@ -1767,13 +1747,8 @@ impl TtsProviderControls {
         google_panel.set_sizer(google_sizer, true);
 
         let polly_panel = Panel::builder(parent).build();
-        let polly_sizer = StaticBoxSizerBuilder::new_with_label(
-            Orientation::Vertical,
-            &polly_panel,
-            "AWS Polly voice settings",
-        )
-        .build();
-        let polly_engine = Choice::builder(&polly_panel).build();
+        let (polly_sizer, polly_box) = super::group_box(&polly_panel, "AWS Polly voice settings");
+        let polly_engine = Choice::builder(&polly_box).build();
         // Filled the same way as every other model picker — including its
         // accessible name, so nothing here may pre-populate it: `clear()` is the
         // first thing `fill_model_choice` does.
@@ -1784,7 +1759,7 @@ impl TtsProviderControls {
             "Polly engine",
         );
         polly_sizer.add(
-            &StaticText::builder(&polly_panel)
+            &StaticText::builder(&polly_box)
                 .with_label("Synthesis engine")
                 .build(),
             0,
@@ -1792,7 +1767,7 @@ impl TtsProviderControls {
             3,
         );
         polly_sizer.add(&polly_engine, 0, SizerFlag::Expand | SizerFlag::All, 3);
-        let polly_language = TextCtrl::builder(&polly_panel)
+        let polly_language = TextCtrl::builder(&polly_box)
             .with_value(&polly.language_code)
             .build();
         super::set_accessible_name(
@@ -1805,7 +1780,7 @@ impl TtsProviderControls {
             "Polly language code",
         );
         polly_sizer.add(
-            &StaticText::builder(&polly_panel)
+            &StaticText::builder(&polly_box)
                 .with_label("Language code (optional)")
                 .build(),
             0,
@@ -1816,13 +1791,9 @@ impl TtsProviderControls {
         polly_panel.set_sizer(polly_sizer, true);
 
         let gtts_panel = Panel::builder(parent).build();
-        let gtts_sizer = StaticBoxSizerBuilder::new_with_label(
-            Orientation::Vertical,
-            &gtts_panel,
-            "Google Translate voice settings",
-        )
-        .build();
-        let gtts_tld = TextCtrl::builder(&gtts_panel).with_value(&gtts.tld).build();
+        let (gtts_sizer, gtts_box) =
+            super::group_box(&gtts_panel, "Google Translate voice settings");
+        let gtts_tld = TextCtrl::builder(&gtts_box).with_value(&gtts.tld).build();
         super::set_accessible_name(
             &gtts_tld,
             "Google Translate accent domain suffix; blank uses com",
@@ -1833,7 +1804,7 @@ impl TtsProviderControls {
             "Google Translate accent domain",
         );
         gtts_sizer.add(
-            &StaticText::builder(&gtts_panel)
+            &StaticText::builder(&gtts_box)
                 .with_label("Accent domain suffix, for example co.uk")
                 .build(),
             0,
@@ -1841,7 +1812,7 @@ impl TtsProviderControls {
             3,
         );
         gtts_sizer.add(&gtts_tld, 0, SizerFlag::Expand | SizerFlag::All, 3);
-        let gtts_speed = Choice::builder(&gtts_panel).build();
+        let gtts_speed = Choice::builder(&gtts_box).build();
         super::set_accessible_name(&gtts_speed, "Google Translate speed mode");
         for label in ["Speed: provider default", "Speed: normal", "Speed: slow"] {
             gtts_speed.append(label);
