@@ -4,6 +4,14 @@
 
 ### Additions
 
+### Fixes
+
+### Changes
+
+## 0.1.4
+
+### Additions
+
 - Mastodon announcements. Preferences has a new **Mastodon** tab, in three groups. Under **Account**, type your server (just the host name, such as `mastodon.social`) and press **Authorize**: your browser opens at that server so you can sign in and approve Pubsplash, and the authorization comes straight back — there is nothing to copy or paste. **Unlink** removes it again, asks the server to cancel it, and can be used at any time.
 
 - Under **Announcements**, two checkboxes: "Post to Mastodon when I start a new stream" and "Make periodic still-streaming Mastodon posts". Checking the second one makes a dropdown next to it available — every hour, every one-and-a-half hours, every two, two-and-a-half, three, or five hours. These two boxes set how the matching boxes in the **Set stream info** dialog start out; that dialog now has a **Mastodon** group of its own with "Post to Mastodon when this stream starts" and "Post periodic still-streaming announcements", so you can turn either off for a single stream without changing your defaults. Both are unavailable until an account is linked.
@@ -81,7 +89,6 @@
 - Releases now carry a separate `pubsplash-<version>-debug-symbols.zip`. It is not needed to run Pubsplash and most people should ignore it; it is what turns a crash dump into a readable report, so it is worth mentioning if you are reporting a crash.
 
 - The source code now passes Clippy, Rust's linter, with no warnings left. Nothing Pubsplash does has changed; this is tidying, so that a real problem the linter finds in future is not lost among hundreds of harmless notes.
-
 
 ## 0.1.3
 
