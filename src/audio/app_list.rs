@@ -98,8 +98,9 @@ fn is_system_process(exe: &str) -> bool {
 /// from a child utility process rather than the window they belong to — and the
 /// config stores a name, not a pid. So rows are deduped by name and `has_audio`
 /// is OR-ed across the group: `chrome.exe` counts as sounding when any of its
-/// processes does. Capture then opens the resolved parent with `include_tree`,
-/// which picks the children back up (see `capture::run`).
+/// processes does. `device::choose_pid` then resolves that name back to the
+/// *root* of the process tree, and capture opens it with `include_tree`, which
+/// picks the children back up (see `capture::run`).
 fn candidates(
     procs: &[(u32, String, Option<PathBuf>)],
     audio: &HashSet<u32>,
@@ -156,7 +157,11 @@ fn candidates(
 /// Every output is enumerated, not just the default one: a user with headphones
 /// and speakers has apps on both, and an app missing from the picker because it
 /// happens to be playing to the other endpoint would look like a bug.
-fn session_pids() -> HashSet<u32> {
+///
+/// Also `device::resolve_apps`'s tiebreaker when one executable name has more
+/// than one process tree — two Brave windows launched separately are two roots,
+/// and the one that is making a sound is the one the user means.
+pub(crate) fn session_pids() -> HashSet<u32> {
     use windows::Win32::Foundation::S_OK;
     use windows::Win32::Media::Audio::{
         DEVICE_STATE_ACTIVE, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator,
@@ -226,7 +231,9 @@ fn session_pids() -> HashSet<u32> {
 /// Pids owning at least one visible, titled top-level window — the same signal
 /// Task Manager uses to tell "Apps" from "Background processes", and what makes
 /// the wider view short enough to arrow through.
-fn windowed_pids() -> HashSet<u32> {
+///
+/// Second tiebreaker for `device::resolve_apps`, after [`session_pids`].
+pub(crate) fn windowed_pids() -> HashSet<u32> {
     use windows::Win32::Foundation::{HWND, LPARAM, TRUE};
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowTextLengthW, GetWindowThreadProcessId, IsWindowVisible,

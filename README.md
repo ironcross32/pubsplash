@@ -14,6 +14,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - Sources name themself based on what they're capturing
 - Sources reconnect on their own if their device is unplugged, resets, or is not ready yet when Pubsplash starts. A source that is retrying reads "(reconnecting)" on its mixer strip
 - Audiopub chat: read incoming messages in an accessible list, send outbound messages, and have chat read aloud automatically with text-to-speech (optionally spoken into the stream as well)
+- The chat feed looks after itself: if the connection drops or goes quiet it reconnects on its own, and **Reconnect chat** (`ALT+O`) forces a fresh connection at any time. Neither interrupts your audio
 - Nine speech engines: SAPI 5 and Microsoft Edge need no setup, and Google Translate, OpenAI, ElevenLabs, Azure, AWS Polly, Google Cloud, and a self-hosted Star server are available once you enter their credentials on the Speech tab of Preferences. Keys are encrypted for your Windows account
 - Loop-safe by design: Desktop Audio capture excludes Pubsplash's own audio, so text-to-speech and sound cues can never echo into your stream
 - Built-in startup and shutdown sounds, each able to be switched off, plus audio cues for stream events (listener changes, incoming and outgoing messages) that you can send to your listeners or keep to yourself
@@ -22,6 +23,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - Mixing buses with per-source sends, so sources can be routed through shared processing (see below)
 - Load VST2 or VST3 plugins onto a bus, save your setup as an FX chain; export a chain to move it to another machine or give it to a friend
 - The Home tab's stream overview list reports your stream status, quality, listener count and peak, and duration
+- Mastodon announcements: link an account once in your browser, write your own templates with `{title}`, `{description}`, `{url}` and `{tod}` tokens, and have Pubsplash post when a stream starts and at an interval while it runs. Every post it makes carries `#PubsplashStreamInfo` so others can filter automated posts out
 - The API tab breaks down what each speech engine has cost you this session — requests, characters, models and voices used — and reads your remaining ElevenLabs credit on request
 
 ## Requirements
@@ -54,6 +56,7 @@ The **Stream overview** at the top of the Home tab is a list you can arrow throu
 | `ALT+R` / `ALT+C` | Start / stop recording without streaming (Home tab) |
 | `ALT+W` | Switch to the selected scene (Home tab) |
 | `ALT+V` | View the focused chat message in a window (Chat tab) |
+| `ALT+O` | Reconnect the chat feed without interrupting the stream (Chat tab) |
 | `ALT+F` | Refresh account balances (API tab) |
 | `Enter` | Press the current dialog's OK button (or its Close button, in a dialog that only closes) |
 | `Escape` | Close the current dialog; in the chat input box, clear the box |
@@ -67,6 +70,7 @@ The **Stream overview** at the top of the Home tab is a list you can arrow throu
 | `F6` | Inside a plugin's own interface only: move focus back out to the toolbar |
 | `Escape` | Close a plugin's interface window (from its toolbar; inside the plugin's own interface, `Escape` goes to the plugin) |
 | `SHIFT+F10` / `Applications` | Open the context menu for the focused control (mixer volume sliders) |
+| `ALT+G` | Open the Go to menu (stream page, data directory) |
 
 In the mixer, sliders respond to arrow keys for 1% steps, `Page Up` / `Page Down` for 10% steps, and `Home` / `End` for maximum / minimum volume. `Up`, `Right`, and `Page Up` always raise the volume; `Down`, `Left`, and `Page Down` always lower it.
 
@@ -113,6 +117,8 @@ The picker that opens lists the applications you can capture. Use the controls t
 
 **Type a name...** enters a program name by hand. This can be used to capture an application that's not running yet. When Pubsplash detects the app, it'll start capturing it automatically.
 
+Applications that run as several processes at once — web browsers, Discord, Spotify, and anything else built on Chromium or Electron — are captured whole; you do not need to know which of their processes makes the sound. If you have two separate copies of the same program open, Pubsplash captures the one that is playing sound, and stays with that copy until you close it.
+
 ## Buses and sends
 
 A **bus** is a shared mixing point that sources can feed and that hosts a chain of VST effects. Every bus outputs to the master mix.
@@ -157,6 +163,16 @@ Open **File > Preferences** (`CTRL+,`) and choose the **VST plugins** tab to tel
 
 Press **Scan for new plugins** to scan only files that haven't been scanned before, or **Rescan all plugins** to start over. A dialog reports how far the scan has got and names the plugin it is loading; its status line is read-only and stays quiet as it changes, so tab to it to check on the scan whenever you like. **Cancel scan** (or `ESCAPE`) stops at any time and keeps nothing. If a plugin is taking too long and you suspect it's not going to scan, **Skip this plugin** (or `ENTER`) abandons that one and moves on — it is recorded as unusable until the next **Rescan all plugins**. If a scan runs to completion, a cache will be written alongside Pubsplash's configuration file and these plugins will become available to use immediately.
 
+## Chat
+
+The **Chat** tab shows the messages from your Audiopub stream, newest last, each with how long ago it arrived. **View message** (`ALT+V`, or double-click) opens the selected message in a window you can navigate, select, and copy from. Type in the box at the bottom and press `ENTER` or **Send** to chat back; `ESCAPE` clears the box. Direct Icecast streams have no chat.
+
+Pubsplash keeps the chat connection alive by itself. If it drops, or goes silent for longer than the server's keepalive allows, Pubsplash reconnects — your audio is never affected, because chat and audio are separate connections. The message list holds what your viewers said and nothing else: Pubsplash never puts its own status in it. Connection notices go to the [log](#logging) instead, and while the outgoing audio connection is being restored the Home tab reads "Streaming (reconnecting)".
+
+**Reconnect chat** (`ALT+O`) forces a fresh connection immediately rather than waiting. You should rarely need it.
+
+If chat still doesn't arrive after a successful reconnect, stopping and restarting the stream is the only fix. That is a fault on the server's side, not something Pubsplash can work around: the server can get stuck in a state where it won't deliver messages to a reconnected listener, and only a new stream clears it. Pubsplash says as much when it reconnects so you aren't left guessing.
+
 ## Text-to-speech
 
 A **Text-to-Speech** source reads incoming chat aloud. Add one from the Sources list on the **Scenes** tab, and its dialog lets you choose the engine, the voice, and the rate, volume, and pitch.
@@ -195,7 +211,7 @@ You always hear the speech, on every engine, without having to set anything up: 
 
 The Speech tab has two limits that apply to every network engine. **Longest message to speak** cuts over-long chat messages short rather than skipping them, so one wall of text cannot tie up the engine. **Shortest gap between requests** spreads out a burst of chat so a busy stream does not run up a bill or trip a rate limit. When messages still arrive faster than they can be spoken, the oldest queued ones are dropped, so what you hear stays current.
 
-If an engine fails (a wrong key, no network, a service outage) the reason appears in the chat list rather than in a dialog box, and repeats of the same failure are held down to one a minute.
+If an engine fails (a wrong key, no network, a service outage) the reason is written to the [log](#logging) rather than shown in a dialog box, and repeats of the same failure are held down to one a minute. The symptom you notice is that the message is not spoken; the log says why. **Go to > Go to Pubsplash data directory** takes you to it.
 
 ### Checking what you have spent
 
@@ -215,9 +231,49 @@ The **API** tab, last on the tab bar, keeps a running tally of what each speech 
 
 Nothing here is fetched unless you press the button, and none of it is kept between sessions: the tab starts empty on every launch.
 
+## Mastodon
+
+Pubsplash can announce your stream on Mastodon. Open **File → Preferences** (`CTRL+,`) and choose the **Mastodon** tab.
+
+Under **Account**, type your server — just the host name, such as `mastodon.social` — and press **Authorize**. Your browser opens at that server so you can sign in and approve Pubsplash, and the authorization comes straight back to the app; there is nothing to copy or paste. **Unlink** removes it and asks the server to cancel it, and can be used at any time. Both the authorization and the app's own secret are encrypted for your Windows account, exactly as your speech credentials are, and neither ever appears in the log file.
+
+Under **Announcements**, "Post to Mastodon when I start a new stream" and "Make periodic still-streaming Mastodon posts" set how the matching boxes in the **Set stream info** dialog start out. Checking the second one makes the interval dropdown next to it available: every hour, every one-and-a-half hours, every two, two-and-a-half, three, or five hours, counted from the moment the stream goes live. The **Set stream info** dialog now has a **Mastodon** group of its own with the same two boxes, so you can turn either off for one stream without changing your defaults. They are unavailable until an account is linked.
+
+### Templates
+
+Under **Templates** you write the announcements themselves. **Add** and **Edit** open a dialog with the announcement type — start of stream, or stream continuation — and the text. Put a token in curly braces wherever you want a real value:
+
+| Token | Becomes |
+| --- | --- |
+| `{title}` | The title of the stream |
+| `{description}` | The description of the stream |
+| `{url}` | The web address listeners use to tune in |
+| `{tod}` | The time of day where you are: morning, afternoon, evening, or night |
+
+The **Help** button in that dialog lists them all in a box you can select and copy from. Braces have no other meaning, so a stray one is an error. If you misspell a token or leave a brace unclosed, choosing **OK** tells you which one is wrong and puts you back in the dialog with your text still there.
+
+The list shows the type, a colon, and the text, with all the start-of-stream templates first. Keep as many of each type as you like — when Pubsplash needs one it picks at random from that type, so repeat announcements do not all read the same. **Remove** (or `Delete` in the list) deletes the highlighted one; deleting all of them is safe, because Pubsplash falls back on wording of its own.
+
+### What Pubsplash will and will not post
+
+- **Every post ends with `#PubsplashStreamInfo`**, whether or not you type it, and this cannot be turned off. It is there so anyone who would rather not see automated posts can filter them out of their timeline.
+- Nothing is posted unless you are actually streaming. A start-of-stream post waits until the stream is fully up, so the link in it always works.
+- Stopping and restarting with the same title within a minute posts nothing — that is a reconnect, not a new broadcast. After longer than a minute, Pubsplash asks whether you would like to post about resuming and offers a one-off message, pre-filled and selected so you can type straight over it. Answering **No**, or cancelling, posts nothing.
+- Pubsplash will not post twice within thirty seconds under any circumstances. That limit is fixed.
+
+Whether a post succeeded or failed is recorded in the [log](#logging), the same way speech failures are, rather than in a dialog box that would interrupt your broadcast.
+
+## The Go to menu
+
+The **Go to** menu (`ALT+G`) has two items.
+
+**Go to stream page** (`S`) opens the page your listeners see for the stream you are broadcasting, in your default browser. If there is no such page it tells you why instead of doing nothing: you are not streaming, the stream is still connecting or shutting down, or you are streaming straight to an Icecast server, which has no Audio Pub page.
+
+**Go to Pubsplash data directory** (`D`) opens the folder described under [Configuration](#configuration) in File Explorer. That is where `config.json`, the logs, and any crash dumps are, so it is the item to reach for when a bug report asks for a log.
+
 ## Configuration
 
-Pubsplash stores its configuration data in `C:\Users\<Your-user-name>\AppData\Local\pubsplash`.
+Pubsplash stores its configuration data in `C:\Users\<Your-user-name>\AppData\Local\pubsplash`. **Go to > Go to Pubsplash data directory** opens it for you.
 
 **config.json** is where all of your app settings live. It holds things like preferences, your streaming service profiles, your scenes and sources, and so on. It is written when the app is first launched. Pubsplash will also regenerate it if it becomes missing or if it is found to be corrupt. In the latter case, the corrupted file will be renamed and given a .bak extension, allowing you to fix it if you so choose.
 

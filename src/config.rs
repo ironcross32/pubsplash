@@ -23,6 +23,7 @@ pub struct Config {
     pub sounds: SoundsConfig,
     pub speech: SpeechConfig,
     pub keybinds: crate::keybind::KeybindsConfig,
+    pub mastodon: MastodonConfig,
 }
 
 impl Default for Config {
@@ -38,6 +39,7 @@ impl Default for Config {
             sounds: SoundsConfig::default(),
             speech: SpeechConfig::default(),
             keybinds: crate::keybind::KeybindsConfig::default(),
+            mastodon: MastodonConfig::default(),
         }
     }
 }
@@ -453,6 +455,94 @@ impl ArchivingConfig {
         } else {
             PathBuf::from(trimmed)
         }
+    }
+}
+
+/// The linked Mastodon account and the announcement settings around it.
+///
+/// One account, not a list: announcing a stream is a single act, and a
+/// per-account fan-out is a feature nobody has asked for. The credentials are
+/// [`Secret`]s in both directions — the app's client secret and the access token
+/// are as good as a password, and `Secret`'s hand-written `Debug` is what keeps
+/// them out of the rotating log file that users are asked to share.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct MastodonConfig {
+    /// Base URL of the server, e.g. `https://mastodon.social`. Empty when no
+    /// account is linked.
+    pub instance: String,
+    /// The OAuth app registered with `instance`. Re-registered on every
+    /// authorization, because the redirect URI carries a loopback port.
+    pub client_id: String,
+    pub client_secret: Secret,
+    pub access_token: Secret,
+    /// `@user@host`, shown in Preferences so the user can see what is linked.
+    pub account: String,
+    /// Seeds the "Post to Mastodon when this stream starts" box in the Set
+    /// stream info dialog. The per-stream box is what actually decides.
+    pub post_on_start: bool,
+    /// Seeds the "Post periodic still-streaming announcements" box.
+    pub periodic: bool,
+    /// How often a still-streaming post goes out, in minutes. One of
+    /// `mastodon::INTERVALS`; `fix_up` snaps anything else to the nearest.
+    pub interval_minutes: u32,
+    pub templates: Vec<crate::mastodon::Template>,
+    /// When the last post succeeded, as seconds since the Unix epoch. Kept
+    /// alongside the in-memory stamp so the flood gate survives a restart being
+    /// used to work around it.
+    pub last_post_unix: u64,
+}
+
+impl Default for MastodonConfig {
+    fn default() -> Self {
+        Self {
+            instance: String::new(),
+            client_id: String::new(),
+            client_secret: Secret::default(),
+            access_token: Secret::default(),
+            account: String::new(),
+            post_on_start: false,
+            periodic: false,
+            interval_minutes: crate::mastodon::DEFAULT_INTERVAL_MINUTES,
+            templates: Vec::new(),
+            last_post_unix: 0,
+        }
+    }
+}
+
+impl MastodonConfig {
+    /// True when there is an account to post as.
+    pub fn is_linked(&self) -> bool {
+        !self.instance.is_empty() && !self.access_token.is_empty()
+    }
+
+    /// Forgets the account. The server-side revoke is separate and best-effort;
+    /// this is the part that must always happen.
+    pub fn unlink(&mut self) {
+        self.instance = String::new();
+        self.client_id = String::new();
+        self.client_secret = Secret::default();
+        self.access_token = Secret::default();
+        self.account = String::new();
+    }
+
+    /// Repairs a hand-edited or future-version file: drops templates that would
+    /// not survive expansion, and snaps the interval to an offered value so the
+    /// dropdown always has a selection.
+    pub fn fix_up(&mut self) {
+        self.interval_minutes = crate::mastodon::clamp_interval(self.interval_minutes);
+        self.templates
+            .retain(|template| match crate::mastodon::validate(&template.text) {
+                Ok(()) => true,
+                Err(error) => {
+                    log::warn!(
+                        "Dropping an unusable Mastodon template ({error}): {:?}",
+                        template.text
+                    );
+                    false
+                }
+            });
+        crate::mastodon::sort(&mut self.templates);
     }
 }
 
@@ -958,6 +1048,7 @@ pub fn load_from(path: &PathBuf) -> Config {
             config.fix_up_routing();
             config.fix_up_tts_profiles();
             config.keybinds.fix_up();
+            config.mastodon.fix_up();
             config
         }
         // Missing, or corrupt and now renamed aside: either way the path is
@@ -1091,6 +1182,109 @@ mod tests {
         assert!(!source.boost, "volume boost must default off");
         assert!(!config.audio.master_boost, "master boost must default off");
         assert_eq!(config.audio.bitrate_kbps, 192);
+    }
+
+    #[test]
+    fn old_config_without_mastodon_loads_unlinked() {
+        let path = temp_path("old_mastodon.json");
+        std::fs::write(&path, r#"{ "audio": { "bitrate_kbps": 128 } }"#).unwrap();
+        let config = load_from(&path);
+        assert_eq!(config.mastodon, MastodonConfig::default());
+        assert!(!config.mastodon.is_linked());
+        assert!(!config.mastodon.post_on_start);
+        assert_eq!(
+            config.mastodon.interval_minutes,
+            crate::mastodon::DEFAULT_INTERVAL_MINUTES,
+            "an absent interval must still select a row in the dropdown"
+        );
+    }
+
+    /// A hand-edited or downgraded file must not be able to leave the app with a
+    /// template it cannot expand or an interval the dropdown cannot show.
+    #[test]
+    fn mastodon_settings_are_repaired_on_load() {
+        let path = temp_path("mastodon_repair.json");
+        let json = r#"{
+            "mastodon": {
+                "interval_minutes": 77,
+                "templates": [
+                    { "kind": "continuation", "text": "still going {url}" },
+                    { "kind": "start", "text": "broken {nonsense}" },
+                    { "kind": "start", "text": "live at {url}" }
+                ]
+            }
+        }"#;
+        std::fs::write(&path, json).unwrap();
+        let config = load_from(&path);
+        assert_eq!(config.mastodon.interval_minutes, 90, "77 snaps to 90");
+        // The unusable one is gone, and what is left is in list order.
+        let rows: Vec<String> = config
+            .mastodon
+            .templates
+            .iter()
+            .map(|t| t.list_label())
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                "Start of stream: live at {url}",
+                "Stream continuation: still going {url}",
+            ]
+        );
+    }
+
+    /// The access token is a `Secret`, so a plaintext one from a hand-edited
+    /// file is taken as-is and written back encrypted.
+    #[test]
+    fn a_plaintext_mastodon_token_is_re_encrypted_on_save() {
+        let path = temp_path("mastodon_token.json");
+        let json = r#"{
+            "mastodon": {
+                "instance": "https://mastodon.social",
+                "access_token": "plaintext-token",
+                "client_secret": "plaintext-secret"
+            }
+        }"#;
+        std::fs::write(&path, json).unwrap();
+        let config = load_from(&path);
+        assert!(config.mastodon.is_linked());
+        assert_eq!(config.mastodon.access_token.as_str(), "plaintext-token");
+        save_to(&config, &path);
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !on_disk.contains("plaintext-token") && !on_disk.contains("plaintext-secret"),
+            "credentials must not survive a save in the clear"
+        );
+        assert_eq!(
+            load_from(&path).mastodon.access_token.as_str(),
+            "plaintext-token"
+        );
+        // And `Debug` must never print either of them: the log file is rotated
+        // and users are asked to share it.
+        let dumped = format!("{:?}", config.mastodon);
+        assert!(!dumped.contains("plaintext"), "{dumped}");
+    }
+
+    #[test]
+    fn unlinking_forgets_every_credential() {
+        let mut config = MastodonConfig {
+            instance: "https://mastodon.social".into(),
+            client_id: "id".into(),
+            client_secret: Secret::new("secret"),
+            access_token: Secret::new("token"),
+            account: "@me@mastodon.social".into(),
+            post_on_start: true,
+            ..MastodonConfig::default()
+        };
+        config.unlink();
+        assert!(!config.is_linked());
+        assert!(config.access_token.is_empty());
+        assert!(config.client_secret.is_empty());
+        assert!(config.client_id.is_empty());
+        assert!(config.account.is_empty());
+        // Preferences that are not credentials survive: unlinking is not a
+        // reset of how the user wants announcements to work.
+        assert!(config.post_on_start);
     }
 
     #[test]

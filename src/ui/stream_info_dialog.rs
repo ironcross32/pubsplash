@@ -99,6 +99,60 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
             && app.config.borrow().archiving.record_streams_by_default);
     record_check.set_value(default_record);
 
+    // Mastodon group. Its two boxes are seeded from Preferences the same way
+    // the archive and record boxes above are, and decide on their own from
+    // there: unchecking one here silences the announcements for this stream
+    // without touching the saved defaults.
+    let (mastodon_group, mastodon_box) = super::group_box(&panel, "Mastodon");
+    let linked = app.config.borrow().mastodon.is_linked();
+
+    let announce_start = CheckBox::builder(&mastodon_box)
+        .with_label("Post to Mastodon when this stream starts")
+        .build();
+    super::help::tag(
+        &announce_start,
+        "dialog.streamInfo.mastodonStart",
+        "Post to Mastodon when this stream starts checkbox",
+    );
+    let announce_periodic = CheckBox::builder(&mastodon_box)
+        .with_label("Post periodic still-streaming announcements")
+        .build();
+    super::help::tag(
+        &announce_periodic,
+        "dialog.streamInfo.mastodonPeriodic",
+        "Post periodic still-streaming announcements checkbox",
+    );
+    for (check, label, default) in [
+        (
+            &announce_start,
+            "Post to Mastodon when this stream starts",
+            current.announce_start
+                || (!app.run.borrow().stream_info_set
+                    && app.config.borrow().mastodon.post_on_start),
+        ),
+        (
+            &announce_periodic,
+            "Post periodic still-streaming announcements",
+            current.announce_periodic
+                || (!app.run.borrow().stream_info_set && app.config.borrow().mastodon.periodic),
+        ),
+    ] {
+        check.set_value(linked && default);
+        check.enable(linked);
+        // The accessible name says *why* the box is unavailable, because a
+        // disabled checkbox with no explanation is a dead end.
+        super::set_accessible_name(
+            check,
+            &if linked {
+                label.to_string()
+            } else {
+                format!("{label}, unavailable until a Mastodon account is linked in Preferences")
+            },
+        );
+    }
+    mastodon_group.add(&announce_start, 0, SizerFlag::All, 4);
+    mastodon_group.add(&announce_periodic, 0, SizerFlag::All, 4);
+
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let ok_button = super::ok_button(&panel, "OK");
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
@@ -117,6 +171,7 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
     sizer.add(&quality_choice, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&archive_check, 0, SizerFlag::All, 8);
     sizer.add(&record_check, 0, SizerFlag::All, 8);
+    sizer.add_sizer(&mastodon_group, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add_sizer(&buttons, 0, SizerFlag::All, 4);
     panel.set_sizer(sizer, true);
     let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
@@ -140,6 +195,8 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
         let description_input = description_input.clone();
         let archive_check = archive_check.clone();
         let record_check = record_check.clone();
+        let announce_start = announce_start.clone();
+        let announce_periodic = announce_periodic.clone();
         let quality_choice = quality_choice.clone();
         ok_button.on_click(move |_| {
             let mut title = title_input.get_value().trim().to_string();
@@ -152,6 +209,8 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
             run.stream_info.description = description_input.get_value().trim().to_string();
             run.stream_info.archive = archive_check.get_value();
             run.stream_info.record = record_check.get_value();
+            run.stream_info.announce_start = announce_start.get_value();
+            run.stream_info.announce_periodic = announce_periodic.get_value();
             run.stream_info_set = true;
             drop(run);
 

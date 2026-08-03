@@ -189,13 +189,7 @@ fn start_network_worker(queue: Queue<SpeakRequest>, feeds: ExternalFeeds, proble
                     fed += samples.len();
                     feeds.feed_all(&request.source_name, samples, "TTS");
                 });
-                super::usage::record(
-                    engine.id(),
-                    characters,
-                    model,
-                    voice,
-                    result.is_err(),
-                );
+                super::usage::record(engine.id(), characters, model, voice, result.is_err());
                 match result {
                     Ok(()) if fed == 0 => {
                         log::debug!("{} returned no audio", request.engine);

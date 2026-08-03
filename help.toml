@@ -247,6 +247,48 @@ file = "src/ui/buses.rs"
 message = "Load the selected FX chain and apply it to the bus you're working with."
 
 [[control]]
+id = "dialog.mastodonAuth.status"
+label = "Mastodon authorization status"
+file = "src/ui/mastodon_post.rs"
+message = "Says what the authorization is waiting for. Pubsplash opens your browser so you can sign in to your Mastodon server and approve it; this window closes on its own once you have. Use Cancel, or press ESCAPE, to give up."
+
+[[control]]
+id = "dialog.mastodonResume.help"
+label = "Token help button on the resumed stream post"
+file = "src/ui/mastodon_templates.rs"
+message = "Lists the tokens you can put in this post and what each one is replaced with."
+
+[[control]]
+id = "dialog.mastodonResume.text"
+label = "Resumed stream post"
+file = "src/ui/mastodon_templates.rs"
+message = "What to post about resuming this stream. It starts out filled in and selected, so you can type straight over it. Tokens in curly braces work here exactly as they do in a saved template; press Help for the list. The hashtag PubsplashStreamInfo is added to the end for you."
+
+[[control]]
+id = "dialog.mastodonTemplate.help"
+label = "Token help button"
+file = "src/ui/mastodon_templates.rs"
+message = "Lists the tokens you can put in a template and what each one is replaced with."
+
+[[control]]
+id = "dialog.mastodonTemplate.kind"
+label = "Announcement type selector"
+file = "src/ui/mastodon_templates.rs"
+message = "Choose when this template is used. Start of stream templates go out when a stream begins; stream continuation templates are the ones used for the periodic still-streaming posts. If you have written several of a type, Pubsplash picks one of them at random each time."
+
+[[control]]
+id = "dialog.mastodonTemplate.text"
+label = "Template text input"
+file = "src/ui/mastodon_templates.rs"
+message = "The wording of the announcement. Put a token in curly braces anywhere you want the real value, for example: I am live at {url}. Press Help for the list of tokens. If a token is misspelled, or a brace is left unclosed, you are told which one when you choose OK and brought straight back here with your text still in place. The hashtag PubsplashStreamInfo is added to the end of every post for you."
+
+[[control]]
+id = "dialog.mastodonTokens.text"
+label = "Template token reference"
+file = "src/ui/mastodon_templates.rs"
+message = "The tokens you can use in a template, one per line, each with what it is replaced with. You can select text here and copy it with CONTROL plus C."
+
+[[control]]
 id = "dialog.missingPlugins.apply"
 label = "Apply chain with available plugins button"
 file = "src/ui/buses.rs"
@@ -311,6 +353,72 @@ id = "dialog.preferences.keybinds.reset"
 label = "Reset keybinds to defaults button"
 file = "src/ui/keybinds_ui.rs"
 message = "Throws away every shortcut you have made and puts back the two Pubsplash ships with, F9 for streaming and F10 for recording. You are asked to confirm first."
+
+[[control]]
+id = "dialog.preferences.mastodon.addTemplate"
+label = "Add template button"
+file = "src/ui/mastodon_prefs.rs"
+message = "Write a new announcement template. You choose whether it is for the start of a stream or for the still-streaming posts, then type the wording."
+
+[[control]]
+id = "dialog.preferences.mastodon.authorize"
+label = "Authorize with Mastodon button"
+file = "src/ui/mastodon_prefs.rs"
+message = "Link your Mastodon account. Pubsplash opens your browser at the server named above so you can sign in and approve it, then stores the authorization. Nothing is posted until you also turn an announcement on."
+
+[[control]]
+id = "dialog.preferences.mastodon.editTemplate"
+label = "Edit template button"
+file = "src/ui/mastodon_prefs.rs"
+message = "Change the template highlighted in the list."
+
+[[control]]
+id = "dialog.preferences.mastodon.interval"
+label = "Still-streaming post interval choice"
+file = "src/ui/mastodon_prefs.rs"
+message = "How long to wait between still-streaming posts. The clock starts when the stream goes live, so on the hourly setting the first one goes out an hour after you start. Available only while still-streaming posts are turned on."
+
+[[control]]
+id = "dialog.preferences.mastodon.periodic"
+label = "Make periodic still-streaming Mastodon posts checkbox"
+file = "src/ui/mastodon_prefs.rs"
+message = "When checked, Pubsplash keeps posting a reminder that you are still on the air while a stream runs, using the interval in the list after this box. This only sets the starting state of the matching box in the Set stream info dialog; you can still turn it off for one stream there."
+
+[[control]]
+id = "dialog.preferences.mastodon.postOnStart"
+label = "Post to Mastodon when I start a new stream checkbox"
+file = "src/ui/mastodon_prefs.rs"
+message = "When checked, Pubsplash posts to Mastodon once a new stream is live. This only sets the starting state of the matching box in the Set stream info dialog; you can still turn it off for one stream there."
+
+[[control]]
+id = "dialog.preferences.mastodon.removeTemplate"
+label = "Remove template button"
+file = "src/ui/mastodon_prefs.rs"
+message = "Delete the template highlighted in the list. You can also press DELETE in the list. Deleting all of them is safe: Pubsplash falls back on its own wording."
+
+[[control]]
+id = "dialog.preferences.mastodon.server"
+label = "Mastodon server input"
+file = "src/ui/mastodon_prefs.rs"
+message = "The Mastodon server your account is on, such as mastodon dot social. Type just the host name; Pubsplash works out the rest. Fill this in before choosing Authorize."
+
+[[control]]
+id = "dialog.preferences.mastodon.status"
+label = "Linked Mastodon account"
+file = "src/ui/mastodon_prefs.rs"
+message = "Which account is linked, if any. Read-only."
+
+[[control]]
+id = "dialog.preferences.mastodon.templateList"
+label = "Mastodon announcement templates list"
+file = "src/ui/mastodon_prefs.rs"
+message = "The announcement templates you have written. Each row gives the type, a colon, and the wording. Start of stream templates come first, then the stream continuation ones. Arrow up and down to choose one, then use Edit or Remove. If you have more than one of a type, Pubsplash picks one of them at random each time it posts."
+
+[[control]]
+id = "dialog.preferences.mastodon.unlink"
+label = "Unlink the Mastodon account button"
+file = "src/ui/mastodon_prefs.rs"
+message = "Forget the linked Mastodon account. Pubsplash stops posting and asks the server to cancel the authorization. Available only while an account is linked."
 
 [[control]]
 id = "dialog.preferences.sounds.importPack"
@@ -545,6 +653,18 @@ id = "dialog.streamInfo.description"
 label = "Stream description input"
 file = "src/ui/stream_info_dialog.rs"
 message = "Type a description for your live stream which appears under the title on Audiopub."
+
+[[control]]
+id = "dialog.streamInfo.mastodonPeriodic"
+label = "Post periodic still-streaming announcements checkbox"
+file = "src/ui/stream_info_dialog.rs"
+message = "When checked, Pubsplash posts a still-streaming reminder to Mastodon at the interval set in Preferences, Mastodon, for as long as this stream runs. Available only when a Mastodon account is linked."
+
+[[control]]
+id = "dialog.streamInfo.mastodonStart"
+label = "Post to Mastodon when this stream starts checkbox"
+file = "src/ui/stream_info_dialog.rs"
+message = "When checked, Pubsplash posts to Mastodon once this stream is live. It waits until the stream is really up, so the link in the post always works. Available only when a Mastodon account is linked."
 
 [[control]]
 id = "dialog.streamInfo.quality"
@@ -851,6 +971,12 @@ id = "tab.chat.messageList"
 label = "Chat message list"
 file = "src/ui/chat.rs"
 message = "All chats you receive while streaming can be viewed here. Use arrows, page up, page down, home, and end to navigate this list."
+
+[[control]]
+id = "tab.chat.reconnectButton"
+label = "Reconnect chat feed button"
+file = "src/ui/chat.rs"
+message = "Open a fresh connection to the chat feed without interrupting your stream. Pubsplash reconnects on its own when it notices the feed has gone quiet, so you should rarely need this; use it if chat has stopped arriving and you would rather not wait. Your audio keeps going out either way."
 
 [[control]]
 id = "tab.chat.sendButton"

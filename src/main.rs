@@ -8,6 +8,7 @@ mod fx;
 mod json_store;
 mod keybind;
 mod logging;
+mod mastodon;
 mod net;
 mod secret;
 mod soundpack;
@@ -77,6 +78,7 @@ fn main() {
     let _ = wxdragon::main(move |_| {
         let (apps_tx, apps_rx) = crossbeam_channel::unbounded();
         let (usage_tx, usage_rx) = crossbeam_channel::unbounded();
+        let (mastodon_tx, mastodon_rx) = crossbeam_channel::unbounded();
         let (tts_catalog_tx, tts_catalog_rx) = crossbeam_channel::unbounded();
         tts::catalog::start_refresh(config.speech.clone(), tts_catalog_tx);
         ui::run_when_ready(move || {
@@ -116,6 +118,8 @@ fn main() {
             apps_pending: std::cell::Cell::new(false),
             usage_tx,
             usage_rx,
+            mastodon_tx,
+            mastodon_rx,
             pump_timer: RefCell::new(None),
             fast_timer: RefCell::new(None),
             shutdown_cue: RefCell::new(None),

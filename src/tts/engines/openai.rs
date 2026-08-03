@@ -96,7 +96,11 @@ fn model_for(request: &SynthRequest) -> &str {
     match &request.provider_settings {
         Some(TtsEngineSettings::OpenAi(settings)) => {
             let model = settings.model.trim();
-            if model.is_empty() { DEFAULT_MODEL } else { model }
+            if model.is_empty() {
+                DEFAULT_MODEL
+            } else {
+                model
+            }
         }
         _ => DEFAULT_MODEL,
     }

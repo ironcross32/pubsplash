@@ -270,6 +270,9 @@ pub enum OverviewRow {
 /// can be built (and tested) without touching widgets or the clock.
 pub struct OverviewState {
     pub stream: StreamState,
+    /// Whether outgoing audio is currently interrupted and being retried. A
+    /// separate axis from `stream`, because the stream survives the outage.
+    pub audio_link: super::AudioLink,
     /// Whether a recording is running — either standalone or alongside the
     /// stream. See `Runtime::recording_started`.
     pub recording: bool,
@@ -292,16 +295,25 @@ fn overview_rows(state: &OverviewState) -> Vec<(OverviewRow, String)> {
         // says what is actually happening instead.
         (StreamState::Idle, true) => "Recording".to_string(),
         (StreamState::Idle, false) => "Not streaming".to_string(),
-        (state, recording) => {
-            let base = match state {
+        (phase, recording) => {
+            let base = match phase {
                 StreamState::Starting => "Starting",
                 StreamState::Live { .. } => "Streaming",
                 _ => "Stopping",
             };
-            if recording {
+            let base = if recording {
                 format!("{base} and recording")
             } else {
                 base.to_string()
+            };
+            // Said plainly, because the alternative is a UI that claims to be
+            // streaming while listeners hear nothing. The duration is
+            // deliberately left running underneath it: the server holds the
+            // stream open, so the broadcast really is still this old.
+            if state.audio_link == super::AudioLink::Reconnecting {
+                format!("{base} (reconnecting)")
+            } else {
+                base
             }
         }
     };
@@ -373,6 +385,7 @@ fn refresh(app: &App, selected_rows: Selected) {
         let streaming = matches!(run.stream, StreamState::Live { .. });
         OverviewState {
             stream: run.stream.clone(),
+            audio_link: run.audio_link,
             recording: run.recording_started.is_some(),
             listeners: run.listeners,
             listener_peak: run.listener_peak,
@@ -1166,12 +1179,56 @@ mod tests {
     fn state(stream: StreamState, recording: bool, elapsed: Option<u64>) -> OverviewState {
         OverviewState {
             stream,
+            audio_link: super::super::AudioLink::Ok,
             recording,
             listeners: 4,
             listener_peak: 7,
             quality: "128 kbps MP3".into(),
             elapsed: elapsed.map(Duration::from_secs),
         }
+    }
+
+    /// A network blip must say so, and must *not* look like a fresh stream:
+    /// the duration keeps running because the server holds the stream open and
+    /// a reconnect resumes the very same one.
+    #[test]
+    fn an_interrupted_stream_says_reconnecting_and_keeps_its_clock() {
+        let mut s = state(
+            StreamState::Live {
+                stream_id: "s1".into(),
+            },
+            false,
+            Some(95),
+        );
+        s.audio_link = super::super::AudioLink::Reconnecting;
+        let rows = overview_rows(&s);
+        assert_eq!(
+            rows[0],
+            (OverviewRow::Status, "Status: Streaming (reconnecting)".into())
+        );
+        assert_eq!(
+            rows.last().unwrap(),
+            &(OverviewRow::Duration, "Duration: 00:01:35".into())
+        );
+    }
+
+    #[test]
+    fn reconnecting_while_recording_says_both() {
+        let mut s = state(
+            StreamState::Live {
+                stream_id: "s1".into(),
+            },
+            true,
+            Some(5),
+        );
+        s.audio_link = super::super::AudioLink::Reconnecting;
+        assert_eq!(
+            overview_rows(&s)[0],
+            (
+                OverviewRow::Status,
+                "Status: Streaming and recording (reconnecting)".into()
+            )
+        );
     }
 
     #[test]

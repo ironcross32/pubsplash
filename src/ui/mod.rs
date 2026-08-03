@@ -15,6 +15,9 @@ mod home;
 mod keybinds;
 mod keybinds_ui;
 mod list;
+mod mastodon_post;
+mod mastodon_prefs;
+mod mastodon_templates;
 mod native_acc;
 mod panes;
 mod preferences;
@@ -63,6 +66,8 @@ const ID_MENU_SOUND_PACK_MANAGER: i32 = 2005;
 const ID_MENU_ABOUT: i32 = 2101;
 const ID_MENU_README: i32 = 2102;
 const ID_MENU_CHANGELOG: i32 = 2103;
+const ID_MENU_GOTO_STREAM: i32 = 2401;
+const ID_MENU_GOTO_DATA_DIR: i32 = 2402;
 /// Command id of the "Enable volume boost" item in a mixer slider's context
 /// menu. One id serves every strip: the menu is popped up on the slider, so
 /// the command comes back to that slider's own handler.
@@ -88,6 +93,17 @@ pub enum StreamState {
     Starting,
     Live { stream_id: String },
     Stopping,
+}
+
+/// Whether audio is actually reaching the streaming server.
+///
+/// Orthogonal to [`StreamState`]: a broadcast that is `Live` can still be
+/// `Reconnecting`, which is the whole point — the stream survives the outage.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum AudioLink {
+    #[default]
+    Ok,
+    Reconnecting,
 }
 
 /// One received chat message plus when we got it (for relative timestamps).
@@ -126,6 +142,11 @@ pub struct StreamInfo {
     pub description: String,
     pub archive: bool,
     pub record: bool,
+    /// Announce this stream on Mastodon once it is live. Seeded from the
+    /// Preferences default, but the per-stream box is what decides.
+    pub announce_start: bool,
+    /// Keep posting still-streaming announcements while this stream runs.
+    pub announce_periodic: bool,
 }
 
 impl Default for StreamInfo {
@@ -135,8 +156,22 @@ impl Default for StreamInfo {
             description: "This is just a stream".to_string(),
             archive: false,
             record: false,
+            announce_start: false,
+            announce_periodic: false,
         }
     }
+}
+
+/// The title a stream had and when it ended, kept after the stream is gone.
+///
+/// Restarting quickly under the same title is a reconnect, not a new broadcast,
+/// and must not produce a second announcement. Restarting later under the same
+/// title is a resumption, which the user is asked about. See
+/// `ui::mastodon_post::on_stream_started`.
+#[derive(Clone)]
+pub struct LastStream {
+    pub title: String,
+    pub ended: Instant,
 }
 
 /// Mutable runtime state (not persisted).
@@ -167,6 +202,16 @@ pub struct Runtime {
     /// Identity names (`SourceConfig.name`) of sources whose capture thread is
     /// currently failing and retrying. Drives the "(reconnecting)" labels.
     pub failing: HashSet<String>,
+    /// Whether the outgoing audio connection is down and being retried.
+    ///
+    /// Deliberately *not* a [`StreamState`] variant. During a reconnect the
+    /// stream really is still live: the server keeps the row in `disconnected`
+    /// for five minutes and a reconnect resumes the same stream id, so chat
+    /// sending, the Mastodon announcement clock and the duration timer must all
+    /// keep behaving exactly as they were. A new `StreamState` variant would
+    /// change the answer at every `StreamState::Live` match site — eight of
+    /// them, across four files — and quietly break each of those.
+    pub audio_link: AudioLink,
     /// The `tts::catalog::generation()` the source labels were last built from.
     /// A background voice refresh landing is the one thing that can change a
     /// label with no config edit and no process coming or going behind it, so
@@ -181,6 +226,12 @@ pub struct Runtime {
     pub monitors: Monitors,
     /// What `refresh_stream_ui` last wrote to the stream/record controls.
     pub shown: ShownStreamUi,
+    /// When the next still-streaming Mastodon post is due, or `None` when none
+    /// is. A deadline rather than a tick count, so it survives ticks missed
+    /// under a modal dialog and a stream that started mid-interval.
+    pub next_announcement: Option<Instant>,
+    /// The previous stream of this session, for the reconnect/resume rules.
+    pub last_stream: Option<LastStream>,
 }
 
 /// The last values `App::refresh_stream_ui` wrote to each control.
@@ -427,6 +478,7 @@ impl Default for Runtime {
         Self {
             stream: StreamState::Idle,
             stream_started: None,
+            audio_link: AudioLink::Ok,
             connected_service: None,
             connecting: false,
             listeners: 0,
@@ -448,6 +500,8 @@ impl Default for Runtime {
             usage_generation: crate::tts::usage::generation(),
             monitors: Monitors::default(),
             shown: ShownStreamUi::default(),
+            next_announcement: None,
+            last_stream: None,
         }
     }
 }
@@ -561,6 +615,8 @@ pub struct Widgets {
     pub chat_list: ListBox,
     #[allow(dead_code)]
     pub chat_input: TextCtrl,
+    #[allow(dead_code)]
+    pub chat_reconnect: Button,
     pub scenes_list: ListBox,
     pub sources_list: ListBox,
     pub bus_list: ListBox,
@@ -638,8 +694,11 @@ pub struct App {
     pub scan_pumping: std::cell::Cell<bool>,
     /// Process snapshots from the worker started by
     /// [`App::request_app_processes`], and whether one is outstanding.
-    pub apps_tx: crossbeam_channel::Sender<HashMap<String, crate::audio::device::AppProcess>>,
-    pub apps_rx: crossbeam_channel::Receiver<HashMap<String, crate::audio::device::AppProcess>>,
+    /// The snapshot carries the name list it was asked for, so a result that
+    /// no longer describes the configured sources can be recognized and thrown
+    /// away — see [`App::apply_app_processes`].
+    pub apps_tx: crossbeam_channel::Sender<AppSnapshot>,
+    pub apps_rx: crossbeam_channel::Receiver<AppSnapshot>,
     pub apps_pending: std::cell::Cell<bool>,
     /// Balance lookups that *failed*, from the worker
     /// `tts::usage::start_balance_refresh` spawns. Successes go straight into
@@ -648,6 +707,11 @@ pub struct App {
     /// why nothing changed.
     pub usage_tx: crossbeam_channel::Sender<crate::tts::usage::BalanceResult>,
     pub usage_rx: crossbeam_channel::Receiver<crate::tts::usage::BalanceResult>,
+    /// Outcomes of Mastodon posts, from the `mastodon` worker thread. Drained by
+    /// the pump and written to the log — never a modal, which would interrupt a
+    /// live broadcast.
+    pub mastodon_tx: crossbeam_channel::Sender<crate::mastodon::net::PostResult>,
+    pub mastodon_rx: crossbeam_channel::Receiver<crate::mastodon::net::PostResult>,
     /// The 100 ms pump timer. Owned here (not leaked) so `on_close` can stop it
     /// before the frame is destroyed: a running timer whose owner frame has been
     /// torn down keeps firing `WM_TIMER` into the freed frame handler and
@@ -661,6 +725,67 @@ pub struct App {
     /// teardown once the cue is done, so the sound is never cut off by the
     /// process exiting and the UI never freezes waiting for it.
     pub shutdown_cue: RefCell<Option<ShutdownCue>>,
+}
+
+/// One finished process enumeration, stamped with what it was asked to resolve.
+pub struct AppSnapshot {
+    /// [`snapshot_key`] of the name list at request time.
+    asked_for: Vec<String>,
+    apps: HashMap<String, crate::audio::device::AppProcess>,
+}
+
+/// Normalizes a list of configured Application names into something two points
+/// in time can be compared by: same keys as `device::resolve_apps` uses, order
+/// and duplicates removed, so merely reordering a scene's sources does not look
+/// like a different question.
+fn snapshot_key(names: &[String]) -> Vec<String> {
+    let mut keys: Vec<String> = names
+        .iter()
+        .map(|name| name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
+/// The public page of a live stream, or `None` when there is not one to link to.
+///
+/// Split out of [`App::stream_url`] so it can be tested without an `App`, which
+/// owns the audio engine and the network thread.
+fn live_stream_url(site_url: &str, stream_id: &str) -> Option<String> {
+    let site = site_url.trim().trim_end_matches('/');
+    // A direct Icecast service has no public page: `net_loop` synthesizes its
+    // "stream id" as `icecast:<mount>` because there is no server-side stream.
+    if site.is_empty() || stream_id.is_empty() || stream_id.starts_with("icecast:") {
+        return None;
+    }
+    Some(format!("{site}/live/{stream_id}"))
+}
+
+/// Why the "Go to stream page" item has nowhere to go, phrased for the user.
+///
+/// The Go to menu is always enabled — a greyed-out item tells a screen reader
+/// nothing about *why* — so every state that [`App::stream_url`] answers `None`
+/// for needs its own sentence. Pure so the wording is testable without an `App`.
+fn no_stream_page_reason(stream: &StreamState) -> &'static str {
+    match stream {
+        StreamState::Idle => {
+            "You are not streaming. Start a stream, and this will open its page."
+        }
+        StreamState::Starting => {
+            "The stream is still connecting, so its page is not available yet."
+        }
+        StreamState::Stopping => "The stream is shutting down.",
+        // Live, but `stream_url` still declined: either a direct Icecast target,
+        // which has no page at all, or a service whose site URL is not set.
+        StreamState::Live { stream_id } if stream_id.starts_with("icecast:") => {
+            "This is a direct Icecast stream, which has no Audio Pub page."
+        }
+        StreamState::Live { .. } => {
+            "Pubsplash does not have a page address for this stream. Check the site address of the service you are streaming to."
+        }
+    }
 }
 
 /// Handle on the in-flight shutdown cue thread.
@@ -752,32 +877,21 @@ fn sound_event_enabled(
         crate::soundpack::StreamEvent::OutgoingChat => settings.outgoing_chat,
     }
 }
-/// Surfaces speech failures the workers reported, into the chat log.
+/// Records speech failures the workers reported, in the log.
 ///
 /// Not a dialog: these arrive while chat is flowing, and a modal per failed
 /// message would make a wrong API key unusable rather than merely annoying.
-/// The chat list is where the user is already reading, it persists, and a
-/// screen reader reaches it — and the worker has already rate-limited repeats
-/// to one a minute, so this cannot flood.
-/// Returns how many entries were added, so the caller refreshes the list.
-fn report_speech_problems(app: &Rc<App>) -> usize {
-    let problems = app.speaker.take_problems();
-    if problems.is_empty() {
-        return 0;
+/// Not the chat list either — that list is for what viewers said, and Pubsplash
+/// does not report its own state there. The worker has already rate-limited
+/// repeats to one a minute, so this cannot flood the log.
+fn report_speech_problems(app: &Rc<App>) {
+    for problem in app.speaker.take_problems() {
+        log::warn!(
+            "{} could not speak: {}",
+            crate::tts::engines::display_name(&problem.engine),
+            problem.message
+        );
     }
-    let mut run = app.run.borrow_mut();
-    let added = problems.len();
-    for problem in problems {
-        run.chat.push(ChatEntry::new(
-            "Speech".into(),
-            format!(
-                "{} could not speak: {}",
-                crate::tts::engines::display_name(&problem.engine),
-                problem.message
-            ),
-        ));
-    }
-    added
 }
 
 /// Whether a source's audio should reach the listeners.
@@ -797,6 +911,92 @@ fn tts_reaches_the_stream(source: &crate::config::SourceConfig) -> bool {
 
 /// Reads an incoming chat message through every unmuted TTS source in the
 /// active scene.
+/// The log line for a change in the live-events connection.
+///
+/// The log rather than a message box, because a modal during a live broadcast is
+/// exactly what the user cannot afford; and the log rather than the chat list,
+/// because that list carries what viewers said and nothing else. Never spoken
+/// either: `speak_chat` feeds TTS sources whose audio may be going out to the
+/// stream, and a Pubsplash status notice must not reach listeners.
+fn chat_feed_line(state: &crate::net::ChatFeedState) -> String {
+    use crate::net::ChatFeedState;
+    match state {
+        ChatFeedState::Interrupted { reason } => {
+            format!("Chat connection lost ({reason}). Reconnecting.")
+        }
+        // Deliberately hedged. A reconnect proves this end of the connection is
+        // healthy, but it cannot prove messages will flow: the server keeps a
+        // dead listener's handlers registered, and because its event emitter
+        // runs handlers in order and stops at the first one that throws, chat
+        // can stay blocked for every listener that registered afterwards --
+        // including the one we just opened. Restarting the stream changes the
+        // stream id, which is why that is the only reliable cure.
+        ChatFeedState::Restored => "Chat connection restored. If messages still do not \
+             arrive, stopping and restarting the stream is the only fix."
+            .to_string(),
+        ChatFeedState::StreamGone => "The server no longer has a live stream here, so chat \
+             cannot come back. Your audio is still going out; restart the stream to \
+             restore chat."
+            .to_string(),
+        ChatFeedState::Archived => "The server archived this stream.".to_string(),
+        ChatFeedState::ServerState { state } if state == "disconnected" => {
+            "The server says it has lost the audio connection. If it does not come back, \
+             the server will end this stream within a few minutes."
+                .to_string()
+        }
+        ChatFeedState::ServerState { state } => {
+            format!("The server reports this stream as {state}.")
+        }
+    }
+}
+
+/// A short duration in words, for lines that read as prose.
+///
+/// `format_duration`'s `00:00:15` is right for a clock that ticks in place, but
+/// these appear mid-sentence, where a bare timestamp reads badly — in a log line
+/// as much as in anything a screen reader is handed.
+fn spoken_gap(seconds: u64) -> String {
+    fn plural(n: u64, unit: &str) -> String {
+        format!("{n} {unit}{}", if n == 1 { "" } else { "s" })
+    }
+    let (minutes, seconds) = (seconds / 60, seconds % 60);
+    match (minutes, seconds) {
+        (0, s) => plural(s, "second"),
+        (m, 0) => plural(m, "minute"),
+        (m, s) => format!("{} {}", plural(m, "minute"), plural(s, "second")),
+    }
+}
+
+/// The log line for a change in the outgoing audio connection.
+///
+/// Same rules as [`chat_feed_line`], and for the same reasons: the log rather
+/// than a message box, because a modal during a live broadcast is exactly what
+/// the user cannot afford; never the chat list; and never spoken, because
+/// `speak_chat` feeds TTS sources whose audio may be going out to the listeners.
+fn audio_link_line(state: &crate::net::AudioLinkState) -> String {
+    use crate::net::AudioLinkState;
+    match state {
+        AudioLinkState::Interrupted { reason } => format!(
+            "Audio connection lost ({reason}). Reconnecting — your stream, its chat and its \
+             recording are being kept."
+        ),
+        AudioLinkState::StillRetrying { remaining_seconds } => format!(
+            "Still reconnecting. If the connection does not come back within about {}, the \
+             stream will end.",
+            spoken_gap(*remaining_seconds)
+        ),
+        // Deliberately silent about chat. A reconnect keeps the *same* stream
+        // id, and the server's poisoned-listener bug is keyed on that id, so
+        // this cannot promise messages are flowing -- `chat_feed_line` above
+        // stays the authority on chat, and Reconnect chat the separate remedy.
+        AudioLinkState::Restored { gap_seconds } => format!(
+            "Audio connection restored after {}. Listeners heard silence for that time; the \
+             stream, its chat and its recording carry on unchanged.",
+            spoken_gap(*gap_seconds)
+        ),
+    }
+}
+
 fn speak_chat(app: &Rc<App>, user: &str, content: &str) {
     let config = app.config.borrow();
     let Some(scene) = config.scenes.active_scene() else {
@@ -891,8 +1091,10 @@ impl App {
             return None;
         }
         let sender = self.apps_tx.clone();
+        let asked_for = snapshot_key(&all_names);
         std::thread::spawn(move || {
-            let _ = sender.send(crate::audio::device::resolve_apps(&all_names));
+            let apps = crate::audio::device::resolve_apps(&all_names);
+            let _ = sender.send(AppSnapshot { asked_for, apps });
         });
         None
     }
@@ -901,12 +1103,26 @@ impl App {
     ///
     /// Driven by arrival rather than by the request on purpose: acting at
     /// request time would compare against a `run.apps` the snapshot never saw.
+    ///
+    /// A snapshot resolves the name list as it stood when the worker started,
+    /// which is not necessarily the list that is configured when it finishes:
+    /// editing an Application source takes about as long as an enumeration, and
+    /// `on_sources_changed` has already resolved the new name synchronously by
+    /// then. Absorbing the older answer would drop that source back out of
+    /// `run.apps`, report `capture_changed`, and leave the pump logging
+    /// "not running" and feeding the strip nothing until the next poll caught
+    /// up two seconds later. So a snapshot that no longer describes the
+    /// configured sources is discarded, and the next tick asks again.
     pub fn apply_app_processes(&self) -> (bool, bool) {
-        let Ok(apps) = self.apps_rx.try_recv() else {
+        let Ok(snapshot) = self.apps_rx.try_recv() else {
             return (false, false);
         };
         self.apps_pending.set(false);
-        self.absorb_apps(apps)
+        if snapshot.asked_for != snapshot_key(&self.application_source_names(false)) {
+            log::debug!("discarding a process snapshot taken for an older source list");
+            return (false, false);
+        }
+        self.absorb_apps(snapshot.apps)
     }
 
     /// Enumerates synchronously.
@@ -1124,14 +1340,26 @@ impl App {
     }
 
     /// The public page of the current live stream, once it is live.
-    #[allow(dead_code)]
+    ///
+    /// `connected_service` holds a service **id**, not a URL — for the built-in
+    /// site the two happen to be the same string, which is why formatting the id
+    /// straight into a link went unnoticed, but any user-added service has an id
+    /// like `service-2` and would have produced `service-2/live/abc123`. The id
+    /// is resolved through the config, whose lookup matches on id or url.
     pub fn stream_url(&self) -> Option<String> {
-        let run = self.run.borrow();
-        let StreamState::Live { stream_id } = &run.stream else {
-            return None;
+        let stream_id = match &self.run.borrow().stream {
+            StreamState::Live { stream_id } => stream_id.clone(),
+            _ => return None,
         };
-        let site = run.connected_service.as_deref()?;
-        Some(format!("{}/live/{}", site.trim_end_matches('/'), stream_id))
+        let service_id = self.run.borrow().connected_service.clone()?;
+        let site = self
+            .config
+            .borrow()
+            .connection
+            .site(&service_id)?
+            .url
+            .clone();
+        live_stream_url(&site, &stream_id)
     }
 
     pub fn stop_streaming(&self) {
@@ -1399,13 +1627,6 @@ pub fn start_streaming(app: &Rc<App>) {
     chat::refresh_chat_list(app);
 }
 
-/// Expands `{title}` and `{url}` placeholders in a template, for sharing the
-/// stream elsewhere (e.g. social media announcements).
-#[allow(dead_code)]
-pub fn expand_stream_tokens(template: &str, title: &str, url: &str) -> String {
-    template.replace("{title}", title).replace("{url}", url)
-}
-
 pub fn format_duration(d: std::time::Duration) -> String {
     let s = d.as_secs();
     format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
@@ -1414,6 +1635,15 @@ pub fn format_duration(d: std::time::Duration) -> String {
 pub fn show_error(parent: &dyn WxWidget, caption: &str, message: &str) {
     let dialog = MessageDialog::builder(parent, message, caption)
         .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconError)
+        .build();
+    dialog.show_modal();
+}
+
+/// For "that will not work, fix it" — a bad template token, say — as distinct
+/// from `show_error`'s "something went wrong".
+pub fn show_warning(parent: &dyn WxWidget, caption: &str, message: &str) {
+    let dialog = MessageDialog::builder(parent, message, caption)
+        .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconWarning)
         .build();
     dialog.show_modal();
 }
@@ -1507,7 +1737,7 @@ pub fn build(app: Rc<App>) {
     // Tabs fill in the Widgets struct.
     let (overview, stream_button, record_button, home_scene_list, mixer_panel) =
         home::build(&app, &home_panel);
-    let (chat_list, chat_input) = chat::build(&app, &chat_panel);
+    let (chat_list, chat_input, chat_reconnect) = chat::build(&app, &chat_panel);
     let (scenes_list, sources_list) = scenes::build(&app, &scenes_panel);
     let (bus_list, fx_list, fx_bypass) = buses::build(&app, &buses_panel);
     let (usage_list, usage_refresh) = api::build(&app, &api_panel);
@@ -1525,6 +1755,7 @@ pub fn build(app: Rc<App>) {
         home_panel: home_panel.clone(),
         chat_list,
         chat_input,
+        chat_reconnect,
         scenes_list,
         sources_list,
         bus_list,
@@ -1690,6 +1921,9 @@ pub fn build(app: Rc<App>) {
             }
             chat::refresh_chat_times(&app);
             app.flush_config();
+            // A deadline check, not a tick count: an interval measured in hours
+            // must not drift because ticks were missed under a modal dialog.
+            mastodon_post::maybe_periodic(&app);
 
             ticks = ticks.wrapping_add(1);
             if ticks % 2 == 0 {
@@ -1830,6 +2064,18 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
             "Create and compile Pubsplash sound packs",
         )
         .build();
+    let goto_menu = Menu::builder()
+        .append_item(
+            ID_MENU_GOTO_STREAM,
+            "Go to &stream page",
+            "Open the current stream's page in your browser",
+        )
+        .append_item(
+            ID_MENU_GOTO_DATA_DIR,
+            "Go to Pubsplash &data directory",
+            "Open the folder holding settings, logs, and crash dumps",
+        )
+        .build();
     let help_menu = Menu::builder()
         .append_item(ID_MENU_ABOUT, "&About Pubsplash", "Version information")
         .append_item(
@@ -1846,6 +2092,7 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
     let menu_bar = MenuBar::builder()
         .append(file_menu, "&File")
         .append(tools_menu, "&Tools")
+        .append(goto_menu, "&Go to")
         .append(help_menu, "&Help")
         .build();
     frame.set_menu_bar(menu_bar);
@@ -1866,6 +2113,31 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
             ID_MENU_SOUND_PACK_MANAGER => {
                 if let Err(message) = launch_sound_pack_manager() {
                     show_error(&frame, "Sound Pack Manager", &message);
+                }
+            }
+            ID_MENU_GOTO_STREAM => {
+                match app.stream_url() {
+                    Some(url) => {
+                        if let Err(message) = shell_open(&url) {
+                            show_error(
+                                &frame,
+                                "Go to stream page",
+                                &format!("Could not open {url}: {message}"),
+                            );
+                        }
+                    }
+                    None => {
+                        // The borrow is dropped before the modal: showing a
+                        // dialog pumps the message queue, which re-enters the
+                        // pump timer and borrows `run` again.
+                        let reason = no_stream_page_reason(&app.run.borrow().stream);
+                        show_warning(&frame, "Go to stream page", reason);
+                    }
+                }
+            }
+            ID_MENU_GOTO_DATA_DIR => {
+                if let Err(message) = open_data_dir() {
+                    show_error(&frame, "Go to Pubsplash data directory", &message);
                 }
             }
             ID_MENU_ABOUT => {
@@ -1929,6 +2201,17 @@ fn open_doc(name: &str, fallback_url: &str) -> Result<(), String> {
         }
     }
     shell_open(fallback_url).map_err(|e| format!("Could not open {fallback_url}: {e}"))
+}
+
+/// Opens `%LOCALAPPDATA%\pubsplash` — settings, logs, crash dumps — in Explorer.
+///
+/// Created first: on a first run that has never saved anything the directory may
+/// not exist yet, and `ShellExecuteW` on a missing path only reports a number.
+fn open_data_dir() -> Result<(), String> {
+    let dir = crate::config::config_dir();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    shell_open(&dir.to_string_lossy()).map_err(|e| format!("Could not open {}: {e}", dir.display()))
 }
 
 /// Finds a documentation file that ships with Pubsplash.
@@ -2109,7 +2392,8 @@ fn pump_events(app: &Rc<App>) {
     run_pending();
 
     let mut stream_ui_dirty = false;
-    let mut chat_arrived = report_speech_problems(app);
+    report_speech_problems(app);
+    let mut chat_arrived = 0usize;
     let mut sound_events = Vec::new();
 
     while let Ok(event) = app.net.events.try_recv() {
@@ -2177,31 +2461,43 @@ fn pump_events(app: &Rc<App>) {
                 let mut run = app.run.borrow_mut();
                 run.stream = StreamState::Live { stream_id };
                 run.stream_started = Some(Instant::now());
+                run.audio_link = AudioLink::Ok;
                 run.listeners = 0;
                 run.listener_peak = 0;
                 run.listener_baseline = false;
                 drop(run);
                 stream_ui_dirty = true;
+                // Only here: this event is sent after the stream is created and
+                // both Icecast and the SSE feed are up, so it is the first
+                // moment `stream_url` can answer.
+                mastodon_post::on_stream_started(app);
             }
             NetEvent::StreamEnded => {
                 app.engine.send(EngineCommand::StopEncoding);
                 app.engine.send(EngineCommand::StopRecording);
+                mastodon_post::on_stream_ended(app);
                 let mut run = app.run.borrow_mut();
                 run.stream = StreamState::Idle;
                 run.stream_started = None;
                 run.recording_started = None;
+                run.audio_link = AudioLink::Ok;
                 drop(run);
                 stream_ui_dirty = true;
             }
             NetEvent::StreamError { message } => {
-                app.engine.send(EngineCommand::StopEncoding);
-                app.engine.send(EngineCommand::StopRecording);
-                let mut run = app.run.borrow_mut();
-                run.stream = StreamState::Idle;
-                run.stream_started = None;
-                run.recording_started = None;
-                drop(run);
-                stream_ui_dirty = true;
+                // The net thread still holds the `ActiveStream`: its chat task,
+                // and the server-side row that only `end_stream` finishes.
+                // Setting the UI to Idle here without telling it -- which is
+                // what this arm used to do -- left the two sides disagreeing
+                // about whether a stream existed at all. `StopStream` answers
+                // with `StreamEnded` even when nothing is active, so the arm
+                // above does all the teardown exactly once and none of it is
+                // duplicated here.
+                app.net.send(NetCommand::StopStream);
+                // Sent before the modal, so the net thread is already unwinding
+                // while this holds the pump. This is the one streaming failure
+                // that has given up for good -- every recoverable one is a chat
+                // line -- which is why it may be a modal at all.
                 if let Some(frame) = app.widgets(|w| w.frame.clone()) {
                     show_error(&frame, "Streaming problem", &message);
                 }
@@ -2237,6 +2533,19 @@ fn pump_events(app: &Rc<App>) {
             }
             NetEvent::ChatSent => {
                 play_sound_event(app, crate::soundpack::StreamEvent::OutgoingChat)
+            }
+            // Both connection notices go to the log only. The user sees an
+            // outage in the Home tab's stream state ("Streaming (reconnecting)"),
+            // which is where Pubsplash reports on itself; the chat list is for
+            // what viewers said.
+            NetEvent::ChatFeed(state) => log::info!("Chat feed: {}", chat_feed_line(&state)),
+            NetEvent::AudioLink(state) => {
+                log::info!("Audio link: {}", audio_link_line(&state));
+                app.run.borrow_mut().audio_link = match state {
+                    crate::net::AudioLinkState::Restored { .. } => AudioLink::Ok,
+                    _ => AudioLink::Reconnecting,
+                };
+                stream_ui_dirty = true;
             }
             NetEvent::ChatSendFailed { message } => {
                 app.widgets(|w| {
@@ -2316,7 +2625,10 @@ fn pump_events(app: &Rc<App>) {
             api::refresh_usage(app);
         }
     }
-    chat_arrived += api::report_balance_failures(app);
+    api::report_balance_failures(app);
+    // Mastodon post outcomes go to the log rather than a modal: a modal here
+    // would interrupt a live broadcast, and these are for the record.
+    mastodon_post::drain_results(app);
 
     // F1 help: one relaxed atomic unless F1 was actually pressed, and the hook
     // rings the idle doorbell when it was. F6 pane cycling arrives the same way.
@@ -2443,6 +2755,51 @@ fn pump_scan_events(app: &Rc<App>) {
 }
 
 #[cfg(test)]
+mod snapshot_key_tests {
+    use super::snapshot_key;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|n| n.to_string()).collect()
+    }
+
+    /// The point of the key: an arriving snapshot is compared against the
+    /// configured names, so it must see the same list `resolve_apps` did.
+    #[test]
+    fn the_same_names_key_the_same_however_they_are_written() {
+        assert_eq!(
+            snapshot_key(&names(&["Brave.exe", " spotify.exe "])),
+            snapshot_key(&names(&["spotify.exe", "brave.exe"]))
+        );
+    }
+
+    /// A blank Application source is not a question anyone asked, and
+    /// `resolve_apps` filters it out — so the key must too, or every snapshot
+    /// taken while one exists would look stale and be discarded forever.
+    #[test]
+    fn blank_names_are_not_part_of_the_question() {
+        assert_eq!(snapshot_key(&names(&["", "  ", "mpv.exe"])), ["mpv.exe"]);
+    }
+
+    /// Adding a source really is a different question, and its snapshot must
+    /// be the one that gets discarded.
+    #[test]
+    fn adding_a_name_changes_the_key() {
+        assert_ne!(
+            snapshot_key(&names(&["cyclepath.exe"])),
+            snapshot_key(&names(&["cyclepath.exe", "brave.exe"]))
+        );
+    }
+
+    #[test]
+    fn duplicate_names_do_not_change_the_key() {
+        assert_eq!(
+            snapshot_key(&names(&["brave.exe", "brave.exe"])),
+            snapshot_key(&names(&["brave.exe"]))
+        );
+    }
+}
+
+#[cfg(test)]
 mod accessible_tests {
     use super::NameOnlyAccessible;
     use wxdragon::accessible::AccessibleImpl;
@@ -2473,21 +2830,146 @@ mod accessible_tests {
 }
 
 #[cfg(test)]
-mod token_tests {
+mod chat_feed_line_tests {
+    use crate::net::ChatFeedState;
+
+    /// A reconnect proves our end of the connection is alive; it does not prove
+    /// messages will flow. The Audiopub server keeps a dead listener's handlers
+    /// registered, and its event emitter stops at the first handler that
+    /// throws, so chat can stay blocked for a listener that reconnects —
+    /// changing the stream id is what clears it. Telling the user chat is fixed
+    /// would be wrong often enough to matter, so the hedge is load-bearing:
+    /// keep it if this wording is ever revised.
     #[test]
-    fn expands_title_and_url() {
+    fn a_restored_feed_still_points_at_restarting_the_stream() {
+        let line = super::chat_feed_line(&ChatFeedState::Restored);
+        assert!(line.contains("restarting the stream"), "{line}");
+        // The line continuations in these literals must not leave doubled
+        // spaces or a stray newline in something a screen reader reads out.
+        assert!(!line.contains("  "), "{line}");
+        assert!(!line.contains('\n'), "{line}");
+    }
+
+    #[test]
+    fn gaps_are_worded_for_speech_not_as_a_clock() {
+        use super::spoken_gap;
+        assert_eq!(spoken_gap(0), "0 seconds");
+        assert_eq!(spoken_gap(1), "1 second");
+        assert_eq!(spoken_gap(15), "15 seconds");
+        assert_eq!(spoken_gap(60), "1 minute");
+        assert_eq!(spoken_gap(120), "2 minutes");
+        assert_eq!(spoken_gap(61), "1 minute 1 second");
+        assert_eq!(spoken_gap(125), "2 minutes 5 seconds");
+    }
+
+    /// These end up in a log a user is asked to read and quote, so they owe the
+    /// same tidiness as `chat_feed_line`: no double spaces, no stray line
+    /// breaks from the multi-line string literals they are built from.
+    #[test]
+    fn audio_link_lines_are_clean_and_reassuring() {
+        use crate::net::AudioLinkState;
+        let lines = [
+            super::audio_link_line(&AudioLinkState::Interrupted {
+                reason: "the connection timed out".into(),
+            }),
+            super::audio_link_line(&AudioLinkState::StillRetrying {
+                remaining_seconds: 120,
+            }),
+            super::audio_link_line(&AudioLinkState::Restored { gap_seconds: 15 }),
+        ];
+        for line in &lines {
+            assert!(!line.contains("  "), "{line}");
+            assert!(!line.contains('\n'), "{line}");
+        }
+        // An outage is not a lost broadcast, and saying so is the whole point.
+        assert!(lines[0].contains("Reconnecting"), "{}", lines[0]);
+        assert!(lines[2].contains("15 seconds"), "{}", lines[2]);
+    }
+
+    /// The audio reconnect keeps the *same* stream id, and the server's
+    /// poisoned-listener bug is keyed on that id — so restoring audio cannot
+    /// promise chat is flowing. `chat_feed_line` stays the authority on chat.
+    /// Do not "improve" this line into reassurance it cannot back up.
+    #[test]
+    fn restored_audio_makes_no_promise_about_chat() {
+        use crate::net::AudioLinkState;
+        let line = super::audio_link_line(&AudioLinkState::Restored { gap_seconds: 3 });
+        assert!(!line.to_lowercase().contains("chat is"), "{line}");
+        assert!(!line.to_lowercase().contains("messages will"), "{line}");
+    }
+
+    #[test]
+    fn a_gone_stream_says_the_audio_is_unaffected() {
+        let line = super::chat_feed_line(&ChatFeedState::StreamGone);
+        assert!(line.contains("audio is still going out"), "{line}");
+        assert!(!line.contains("  "), "{line}");
+    }
+
+    /// `disconnected` means the server has lost the source link and will finish
+    /// the stream within minutes, which is worth more than the bare state name.
+    #[test]
+    fn a_disconnected_state_is_explained_rather_than_named() {
+        let line = super::chat_feed_line(&ChatFeedState::ServerState {
+            state: "disconnected".to_string(),
+        });
+        assert!(line.contains("lost the audio connection"), "{line}");
+        assert!(!line.contains("  "), "{line}");
+    }
+}
+
+#[cfg(test)]
+mod token_tests {
+    // Token expansion itself now lives in `crate::mastodon`, which owns the
+    // token table and is tested there.
+
+    /// `App::stream_url` used to format `Runtime::connected_service` — a service
+    /// **id** — straight into the link. For the built-in site the id happens to
+    /// equal its URL, so it worked there and nowhere else. The id is resolved
+    /// through the config now; this pins what the resolved URL turns into.
+    #[test]
+    fn a_live_stream_url_is_the_site_plus_the_stream_id() {
         assert_eq!(
-            super::expand_stream_tokens(
-                "Now live: {title} - listen at {url}",
-                "Tuesday hangout",
-                "https://audiopub.site/live/abc123"
-            ),
-            "Now live: Tuesday hangout - listen at https://audiopub.site/live/abc123"
+            super::live_stream_url("https://audiopub.site/", "abc123").as_deref(),
+            Some("https://audiopub.site/live/abc123")
         );
+        // A self-hosted service, which is the case the old code got wrong.
         assert_eq!(
-            super::expand_stream_tokens("no tokens", "t", "u"),
-            "no tokens"
+            super::live_stream_url("https://pub.example.test", "xyz").as_deref(),
+            Some("https://pub.example.test/live/xyz")
         );
+    }
+
+    #[test]
+    fn a_direct_icecast_service_has_no_public_page() {
+        assert_eq!(
+            super::live_stream_url("https://x.test", "icecast:/live"),
+            None
+        );
+        assert_eq!(super::live_stream_url("", "abc"), None);
+        assert_eq!(super::live_stream_url("https://x.test", ""), None);
+    }
+
+    /// Every state the Go to > stream page item can find itself in says
+    /// something different, since the item is never greyed out.
+    #[test]
+    fn every_missing_stream_page_has_its_own_reason() {
+        use super::{no_stream_page_reason, StreamState};
+        let live = |id: &str| StreamState::Live {
+            stream_id: id.to_string(),
+        };
+        let reasons = [
+            no_stream_page_reason(&StreamState::Idle),
+            no_stream_page_reason(&StreamState::Starting),
+            no_stream_page_reason(&StreamState::Stopping),
+            no_stream_page_reason(&live("icecast:/live")),
+            no_stream_page_reason(&live("abc123")),
+        ];
+        let mut unique: Vec<&str> = reasons.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), reasons.len());
+        assert!(reasons[0].contains("not streaming"));
+        assert!(reasons[3].contains("Icecast"));
     }
 
     #[test]

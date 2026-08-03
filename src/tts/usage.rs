@@ -221,8 +221,8 @@ pub struct BalanceResult {
 ///
 /// Successes are written straight into the store — the pump notices the
 /// generation bump and redraws. Only failures come back on `sender`, because a
-/// user who pressed Refresh and got nothing deserves to be told why, and the
-/// caller puts that in the chat list rather than a modal.
+/// user who pressed Refresh and got nothing deserves a record of why, and the
+/// caller puts that in the log rather than a modal.
 pub fn start_balance_refresh(
     speech: SpeechConfig,
     sender: crossbeam_channel::Sender<BalanceResult>,
@@ -285,12 +285,18 @@ mod tests {
         record(engines::ELEVENLABS, 1, None, None, false);
         record(engines::SAPI, 1, None, None, false);
         let order: Vec<&str> = snapshot().iter().map(|u| u.engine).collect();
-        assert_eq!(order, vec![engines::SAPI, engines::ELEVENLABS, engines::OPENAI]);
+        assert_eq!(
+            order,
+            vec![engines::SAPI, engines::ELEVENLABS, engines::OPENAI]
+        );
 
         // Speaking again on an older engine moves it back to the top.
         record(engines::OPENAI, 1, None, None, false);
         let order: Vec<&str> = snapshot().iter().map(|u| u.engine).collect();
-        assert_eq!(order, vec![engines::OPENAI, engines::SAPI, engines::ELEVENLABS]);
+        assert_eq!(
+            order,
+            vec![engines::OPENAI, engines::SAPI, engines::ELEVENLABS]
+        );
     }
 
     #[test]

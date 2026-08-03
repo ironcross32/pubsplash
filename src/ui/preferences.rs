@@ -1,5 +1,6 @@
-//! Preferences dialog. Tabbed: "Archiving", "Speech", "Sound packs",
-//! "VST plugins", and "Keybinds" (whose body lives in `ui/keybinds_ui.rs`).
+//! Preferences dialog. Tabbed: "Archiving", "Mastodon" (whose body lives in
+//! `ui/mastodon_prefs.rs`), "Speech", "Sound packs", "VST plugins", and
+//! "Keybinds" (whose body lives in `ui/keybinds_ui.rs`).
 //! The VST tab manages the plugin folder list and starts scans; scan progress
 //! arrives on the pump (see `pump_scan_events` in `ui/mod.rs`). Every tab saves
 //! as the user changes a control, so the dialog only needs a Close button.
@@ -22,6 +23,9 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     let archiving_panel = Panel::builder(&notebook).build();
     notebook.add_page(&archiving_panel, "Archiving", true, None);
     build_archiving_tab(app, &dialog, &archiving_panel);
+    let mastodon_panel = Panel::builder(&notebook).build();
+    notebook.add_page(&mastodon_panel, "Mastodon", false, None);
+    super::mastodon_prefs::build_tab(app, &dialog, &mastodon_panel);
     let speech_alive = Rc::new(std::cell::Cell::new(true));
     let speech_panel = Panel::builder(&notebook).build();
     notebook.add_page(&speech_panel, "Speech", false, None);

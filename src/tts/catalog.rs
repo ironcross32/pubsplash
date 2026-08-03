@@ -540,7 +540,10 @@ mod tests {
                 CatalogModel::plain("eleven_multilingual_v2"),
                 CatalogModel::plain("eleven_v3"),
             ],
-            vec![Voice::new("premade", "Rachel"), Voice::new("cloned", "Mine")],
+            vec![
+                Voice::new("premade", "Rachel"),
+                Voice::new("cloned", "Mine"),
+            ],
         );
         for model in ["", "eleven_multilingual_v2", "eleven_v3"] {
             let offered = entry

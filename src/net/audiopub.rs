@@ -3,6 +3,7 @@
 
 use crate::secret::Secret;
 use serde_json::Value;
+use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -14,6 +15,22 @@ pub enum ApiError {
     Unexpected(String),
 }
 
+/// What [`AudioPubClient::open_events`] found at the live-events endpoint.
+///
+/// The server answers a stream that is finished — or that never existed — with
+/// **`204 No Content`, not a 404** (`src/routes/live/[id]/events/+server.ts` in
+/// the audiopub-sv source). `error_for_status` treats 204 as success, so this
+/// case arrives as a perfectly good response whose body ends immediately, and
+/// is otherwise indistinguishable from a feed that dropped the instant it
+/// opened. Telling the two apart is the difference between "retry" and "this
+/// stream is over"; hence the enum.
+pub enum EventsStream {
+    /// A live feed. The caller pumps the byte stream through an `SseParser`.
+    Open(reqwest::Response),
+    /// No live stream under this id any more.
+    Gone,
+}
+
 #[derive(Debug, Clone)]
 pub struct StreamIdentity {
     /// Audio Pub user id — also the Icecast mount name.
@@ -21,6 +38,15 @@ pub struct StreamIdentity {
     /// The Icecast source password.
     pub stream_key: Secret,
 }
+
+/// Matches `mastodon::net` and `tts::net`, the app's other HTTP clients.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Shorter, because ending a stream runs on the app-exit path: `NetHandle::drop`
+/// joins the network thread, so a wedged request here holds up the whole
+/// shutdown with no window on screen to explain the wait.
+const END_STREAM_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct AudioPubClient {
     http: reqwest::Client,
@@ -34,6 +60,11 @@ impl AudioPubClient {
             .cookie_store(true)
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!("pubsplash/", env!("CARGO_PKG_VERSION")))
+            // Connect only. A client-wide `.timeout()` would cover the whole
+            // response including a streamed body, which would cut the endless
+            // live-events feed in `open_events` -- so the finite calls carry
+            // their own per-request timeouts instead.
+            .connect_timeout(CONNECT_TIMEOUT)
             .build()?;
         Ok(Self {
             http,
@@ -51,6 +82,7 @@ impl AudioPubClient {
         let response = self
             .http
             .post(format!("{}/login", self.base))
+            .timeout(REQUEST_TIMEOUT)
             .form(&[("email", email), ("password", password)])
             .send()
             .await?;
@@ -70,6 +102,7 @@ impl AudioPubClient {
         let response = self
             .http
             .get(format!("{}/stream/instructions/__data.json", self.base))
+            .timeout(REQUEST_TIMEOUT)
             .send()
             .await?
             .error_for_status()?;
@@ -94,6 +127,7 @@ impl AudioPubClient {
         let response = self
             .http
             .post(format!("{}/live/new", self.base))
+            .timeout(REQUEST_TIMEOUT)
             .form(&form)
             .send()
             .await?;
@@ -119,6 +153,7 @@ impl AudioPubClient {
         let response = self
             .http
             .post(format!("{}/live/{stream_id}", self.base))
+            .timeout(REQUEST_TIMEOUT)
             .json(&serde_json::json!({ "content": content }))
             .send()
             .await?
@@ -130,6 +165,7 @@ impl AudioPubClient {
     pub async fn end_stream(&self, stream_id: &str) -> Result<(), ApiError> {
         self.http
             .delete(format!("{}/live/{stream_id}", self.base))
+            .timeout(END_STREAM_TIMEOUT)
             .send()
             .await?
             .error_for_status()?;
@@ -138,14 +174,18 @@ impl AudioPubClient {
 
     /// Opens the live-events SSE response for a stream. The caller pumps the
     /// byte stream through an `SseParser`.
-    pub async fn open_events(&self, stream_id: &str) -> Result<reqwest::Response, ApiError> {
-        Ok(self
+    pub async fn open_events(&self, stream_id: &str) -> Result<EventsStream, ApiError> {
+        let response = self
             .http
             .get(format!("{}/live/{stream_id}/events", self.base))
             .header(reqwest::header::ACCEPT, "text/event-stream")
             .send()
             .await?
-            .error_for_status()?)
+            .error_for_status()?;
+        if response.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(EventsStream::Gone);
+        }
+        Ok(EventsStream::Open(response))
     }
 
     #[allow(dead_code)]
@@ -348,6 +388,49 @@ mod tests {
             }
             _ => panic!("expected redirect"),
         }
+    }
+
+    /// Answers one request with `status` and closes, returning the bound port.
+    fn one_shot_server(status: &'static str) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let Ok((mut socket, _)) = listener.accept() else {
+                return;
+            };
+            let mut scratch = [0u8; 1024];
+            let _ = socket.read(&mut scratch);
+            let _ = socket
+                .write_all(format!("HTTP/1.1 {status}\r\nConnection: close\r\n\r\n").as_bytes());
+        });
+        port
+    }
+
+    /// The server answers a finished or unknown stream with **204, not 404**
+    /// (`src/routes/live/[id]/events/+server.ts` in audiopub-sv). 204 is a
+    /// success status, so `error_for_status` passes it straight through and it
+    /// arrives as a good response whose body ends at once — indistinguishable
+    /// from a feed that dropped instantly unless the status is checked. Getting
+    /// this wrong means reconnecting forever against a stream that is over.
+    #[tokio::test]
+    async fn finished_stream_reports_gone_not_a_live_feed() {
+        let port = one_shot_server("204 No Content");
+        let client = AudioPubClient::new(&format!("http://127.0.0.1:{port}")).unwrap();
+        assert!(matches!(
+            client.open_events("dead-stream").await.unwrap(),
+            EventsStream::Gone
+        ));
+    }
+
+    #[tokio::test]
+    async fn live_stream_reports_an_open_feed() {
+        let port = one_shot_server("200 OK\r\nContent-Type: text/event-stream");
+        let client = AudioPubClient::new(&format!("http://127.0.0.1:{port}")).unwrap();
+        assert!(matches!(
+            client.open_events("live-stream").await.unwrap(),
+            EventsStream::Open(_)
+        ));
     }
 
     #[test]

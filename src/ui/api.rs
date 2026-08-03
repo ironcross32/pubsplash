@@ -120,7 +120,9 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, Button) {
 
     {
         let app = app.clone();
-        refresh_button.clone().on_click(move |_| refresh_balances(&app));
+        refresh_button
+            .clone()
+            .on_click(move |_| refresh_balances(&app));
     }
 
     (usage_list, refresh_button)
@@ -137,36 +139,34 @@ fn refresh_balances(app: &Rc<App>) {
         .iter()
         .any(|entry| usage::reports_balance(entry.engine));
     if !any {
-        // Silence would read as a broken button. Say why nothing happened, in
-        // the place the user already reads — never a modal.
-        app.run.borrow_mut().chat.push(super::ChatEntry::new(
-            "Speech".into(),
-            "No engine used this session reports a credit balance.".into(),
-        ));
-        super::chat::append_new_messages(app, 1);
+        // Silence would read as a broken button, so this one notice is a modal.
+        // It is safe as one here and nowhere else in the speech paths: it can
+        // only fire on a deliberate press of Refresh balances, never per
+        // utterance and never while chat is flowing.
+        app.widgets(|w| {
+            super::show_info(
+                &w.frame,
+                "Refresh balances",
+                "No engine used this session reports a credit balance.",
+            )
+        });
         return;
     }
     usage::start_balance_refresh(speech, app.usage_tx.clone());
 }
 
-/// Reports balance lookups that failed. Drained by the pump.
+/// Logs balance lookups that failed. Drained by the pump.
 ///
-/// Returns how many chat entries were added, so the caller refreshes the list —
-/// the same contract as `super::report_speech_problems`.
-pub fn report_balance_failures(app: &Rc<App>) -> usize {
-    let mut added = 0;
+/// The log, not the chat list — the same rule as `super::report_speech_problems`
+/// keeps to. The row itself already shows the balance as unread.
+pub fn report_balance_failures(app: &Rc<App>) {
     while let Ok(failure) = app.usage_rx.try_recv() {
-        app.run.borrow_mut().chat.push(super::ChatEntry::new(
-            "Speech".into(),
-            format!(
-                "Could not read the {} balance: {}",
-                crate::tts::engines::display_name(failure.engine),
-                failure.error
-            ),
-        ));
-        added += 1;
+        log::warn!(
+            "Could not read the {} balance: {}",
+            crate::tts::engines::display_name(failure.engine),
+            failure.error
+        );
     }
-    added
 }
 
 /// Brings the usage list up to date without disturbing the selected row.
@@ -257,7 +257,10 @@ fn usage_rows(
         );
         push(
             ApiField::Models,
-            format!("{INDENT}Models used: {}", join_or_unavailable(&entry.models)),
+            format!(
+                "{INDENT}Models used: {}",
+                join_or_unavailable(&entry.models)
+            ),
         );
         let voices: Vec<String> = entry
             .voices
@@ -314,11 +317,7 @@ fn balance_text(entry: &EngineUsage) -> String {
 }
 
 fn join_or_unavailable<'a>(values: impl IntoIterator<Item = &'a String>) -> String {
-    let joined = values
-        .into_iter()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ");
+    let joined = values.into_iter().cloned().collect::<Vec<_>>().join(", ");
     if joined.is_empty() {
         UNAVAILABLE.to_string()
     } else {
@@ -418,9 +417,9 @@ mod tests {
     fn elevenlabs_reports_credits_and_points_at_the_button_before_a_fetch() {
         let rows = texts(&[entry(engines::ELEVENLABS)]);
         assert!(rows.contains(&"Credits spent: 1,204".to_string()));
-        assert!(rows.contains(
-            &"Remaining balance: not fetched, press Refresh balances".to_string()
-        ));
+        assert!(
+            rows.contains(&"Remaining balance: not fetched, press Refresh balances".to_string())
+        );
     }
 
     #[test]
@@ -463,7 +462,10 @@ mod tests {
         let rows = usage_rows(&[entry(engines::ELEVENLABS)], &|_, id| {
             (id == "21m00Tcm4TlvDq8ikWAM").then(|| "Rachel".to_string())
         });
-        assert!(rows.iter().any(|(_, text)| text.contains("Voices used: Rachel")));
+        assert!(
+            rows.iter()
+                .any(|(_, text)| text.contains("Voices used: Rachel"))
+        );
     }
 
     #[test]

@@ -9,7 +9,7 @@ use wxdragon::prelude::*;
 /// Shown when there are no messages. See [`super::list`].
 const NO_CHATS: &str = "No chats";
 
-pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl) {
+pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl, Button) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     let list_label = StaticText::builder(panel).with_label("Messages").build();
@@ -41,12 +41,24 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl) {
         "Send chat message button",
     );
 
+    // Created last so the common path (list, view, input, send) keeps the tab
+    // order it had. ALT+O, because mnemonics are searched frame-wide and the
+    // obvious letters are all spoken for: C is "Stop re&cording" and R is
+    // "Start &recording" on the Home tab, H and T and F are the menu bar.
+    let reconnect_button = Button::builder(panel).with_label("Rec&onnect chat").build();
+    super::help::tag(
+        &reconnect_button,
+        "tab.chat.reconnectButton",
+        "Reconnect chat feed button",
+    );
+
     sizer.add(&list_label, 0, SizerFlag::All, 4);
     sizer.add(&chat_list, 1, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&view_button, 0, SizerFlag::All, 4);
     sizer.add(&input_label, 0, SizerFlag::All, 4);
     sizer.add(&chat_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&send_button, 0, SizerFlag::All, 4);
+    sizer.add(&reconnect_button, 0, SizerFlag::All, 4);
     panel.set_sizer(sizer, true);
 
     // The message rows are never rewritten while selected (see
@@ -121,7 +133,30 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl) {
         });
     }
 
-    (chat_list, chat_input)
+    {
+        let app = app.clone();
+        let button = reconnect_button.clone();
+        reconnect_button
+            .clone()
+            .on_click(move |_| reconnect_chat(&app, &button));
+    }
+
+    (chat_list, chat_input, reconnect_button)
+}
+
+/// Drops the live-events connection and opens a new one. The stream itself is
+/// untouched: the chat feed and the Icecast connection are separate tasks, so
+/// this costs the broadcast nothing.
+fn reconnect_chat(app: &Rc<App>, button: &Button) {
+    if !matches!(app.run.borrow().stream, super::StreamState::Live { .. }) {
+        super::show_error(
+            button,
+            "Chat",
+            "You can only reconnect the chat feed while streaming.",
+        );
+        return;
+    }
+    app.net.send(NetCommand::ReconnectChat);
 }
 
 fn send_message(app: &Rc<App>, input: &TextCtrl) {
