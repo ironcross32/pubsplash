@@ -233,7 +233,7 @@ pub fn edit_parameters(
     slot: usize,
     plugin: Arc<PluginInstance>,
 ) {
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     // Re-read the parameter list before showing it. A plugin may change its
@@ -345,9 +345,6 @@ pub fn edit_parameters(
     let show_value = {
         let src = src.clone();
         let visible = visible.clone();
-        let param_choice = param_choice.clone();
-        let value_slider = value_slider.clone();
-        let value_text = value_text.clone();
         let announcer = announcer.clone();
         move || {
             let Some(sel) = param_choice.get_selection() else {
@@ -372,9 +369,6 @@ pub fn edit_parameters(
     let repopulate = {
         let infos = infos.clone();
         let visible = visible.clone();
-        let filter_box = filter_box.clone();
-        let param_choice = param_choice.clone();
-        let unnamed_check = unnamed_check.clone();
         let show_value = show_value.clone();
         move || {
             let filter = filter_box.get_value();
@@ -415,7 +409,6 @@ pub fn edit_parameters(
     // Moves to the next/previous visible parameter (Ctrl+Tab), wrapping.
     let cycle_param = {
         let visible = visible.clone();
-        let param_choice = param_choice.clone();
         let show_value = show_value.clone();
         move |forward: bool| {
             let count = visible.borrow().len();
@@ -437,11 +430,7 @@ pub fn edit_parameters(
     {
         let src = src.clone();
         let visible = visible.clone();
-        let param_choice = param_choice.clone();
-        let value_slider = value_slider.clone();
-        let value_text = value_text.clone();
         let cycle_param = cycle_param.clone();
-        let dialog = dialog.clone();
         let announcer = announcer.clone();
         value_slider.clone().on_key_down(move |event| {
             let Some((code, ctrl)) = super::key_of(&event) else {
@@ -510,9 +499,6 @@ pub fn edit_parameters(
     let apply_typed = {
         let src = src.clone();
         let visible = visible.clone();
-        let param_choice = param_choice.clone();
-        let value_slider = value_slider.clone();
-        let value_text = value_text.clone();
         let announcer = announcer.clone();
         move || {
             let Some(sel) = param_choice.get_selection() else {
@@ -566,7 +552,6 @@ pub fn edit_parameters(
     // (The value slider handles both itself, above.)
     let nav_keys = {
         let cycle_param = cycle_param.clone();
-        let dialog = dialog.clone();
         move |event: WindowEventData| match super::key_of(&event) {
             Some((WXK_ESCAPE, _)) => dialog.end_modal(ID_OK),
             Some((WXK_TAB, true)) => cycle_param(!event_shift(&event)),
@@ -591,7 +576,6 @@ pub fn edit_parameters(
     }
 
     {
-        let dialog = dialog.clone();
         close.on_click(move |_| dialog.end_modal(ID_OK));
     }
 

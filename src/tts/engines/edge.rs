@@ -219,11 +219,9 @@ async fn collect_audio(document: String) -> Result<Vec<u8>, TtsError> {
             break;
         };
         match message.map_err(|e| TtsError::Network(e.to_string()))? {
-            Message::Binary(bytes) => audio.extend_from_slice(&audio_of(&bytes)),
-            Message::Text(text) => {
-                if text.contains("Path:turn.end") {
-                    break;
-                }
+            Message::Binary(bytes) => audio.extend_from_slice(audio_of(&bytes)),
+            Message::Text(text) if text.contains("Path:turn.end") => {
+                break;
             }
             Message::Close(_) => break,
             _ => {}

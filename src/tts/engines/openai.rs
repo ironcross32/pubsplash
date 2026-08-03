@@ -119,13 +119,12 @@ fn request_body(request: &SynthRequest, voice: &str, speed: f32) -> serde_json::
         "speed": speed,
         "response_format": "pcm",
     });
-    if model.starts_with("gpt-4o-mini-tts") {
-        if let Some(instructions) = selected
+    if model.starts_with("gpt-4o-mini-tts")
+        && let Some(instructions) = selected
             .map(|settings| settings.instructions.trim())
             .filter(|instructions| !instructions.is_empty())
-        {
-            body["instructions"] = serde_json::json!(instructions);
-        }
+    {
+        body["instructions"] = serde_json::json!(instructions);
     }
     body
 }

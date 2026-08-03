@@ -66,12 +66,12 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
         if kb.vkCode == VK_F6.0 as u32 {
             unsafe {
                 let root = GetAncestor(GetForegroundWindow(), GA_ROOT);
-                if let Ok(hwnds) = EDITOR_HWNDS.lock() {
-                    if hwnds.contains(&(root.0 as usize)) {
-                        ESCAPE_TO.store(root.0 as usize, Ordering::Relaxed);
-                        // Swallow F6 so the plugin never sees it.
-                        return LRESULT(1);
-                    }
+                if let Ok(hwnds) = EDITOR_HWNDS.lock()
+                    && hwnds.contains(&(root.0 as usize))
+                {
+                    ESCAPE_TO.store(root.0 as usize, Ordering::Relaxed);
+                    // Swallow F6 so the plugin never sees it.
+                    return LRESULT(1);
                 }
             }
         }
@@ -113,7 +113,7 @@ pub fn open_editor(
     slot: usize,
     plugin: std::sync::Arc<PluginInstance>,
 ) {
-    let Some(parent) = app.widgets(|w| w.frame.clone()) else {
+    let Some(parent) = app.widgets(|w| w.frame) else {
         return;
     };
     let effect_id = plugin.effect_id();
@@ -230,20 +230,17 @@ pub fn open_editor(
     }
     {
         let app = app.clone();
-        let bypass = bypass.clone();
         bypass.clone().on_toggled(move |_| {
             fx::set_bypass(&app, target, slot, bypass.get_value());
             super::buses::refresh_fx_list(&app);
         });
     }
     {
-        let host = host.clone();
         focus_plugin.clone().on_click(move |_| unsafe {
             let _ = SetFocus(Some(HWND(host.get_handle())));
         });
     }
     {
-        let frame = frame.clone();
         close.clone().on_click(move |_| frame.close(false));
     }
 
@@ -252,15 +249,14 @@ pub fn open_editor(
     // themselves, so it must still reach them. F6 lands focus here first.
     {
         let esc_closes = {
-            let frame = frame.clone();
             move |event: WindowEventData| match super::key_of(&event) {
                 Some((WXK_ESCAPE, _)) => frame.close(false),
                 _ => event.skip(true),
             }
         };
-        params.on_key_down(esc_closes.clone());
-        bypass.clone().on_key_down(esc_closes.clone());
-        focus_plugin.on_key_down(esc_closes.clone());
+        params.on_key_down(esc_closes);
+        bypass.clone().on_key_down(esc_closes);
+        focus_plugin.on_key_down(esc_closes);
         close.clone().on_key_down(esc_closes);
     }
 

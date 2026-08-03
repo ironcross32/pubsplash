@@ -43,7 +43,7 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 
 To record locally without going live, use **Start recording** (`ALT+R`) next to the streaming button; press **Stop recording** (`ALT+C`) to finish. It saves the same MP3 to your recording folder without connecting to the server. Recording and streaming can't run at the same time.
 
-The **Stream overview** at the top of the Home tab is a list you can arrow through, one fact per row. The status row is always there and says whether you're streaming, recording, or both; listener and listener peak rows appear while you're streaming to Audiopub; and a duration row shows how long the current stream or recording has been running.
+The **Stream overview** at the top of the Home tab is a list you can arrow through, one fact per row. The status row is always there and says whether you're streaming, recording, or both; listener and listener peak rows appear while you're streaming to Audiopub; and a duration row shows how long the current stream or recording has been running. The status row is also where trouble shows up rather than staying hidden: it reads "starting a recording" until the file has genuinely been created, "(reconnecting)" while a dropped connection is being restored, and "(encoder failed, not sending audio)" if the encoder stops, so it never claims a healthy broadcast you aren't actually making.
 
 ## Keyboard shortcuts
 
@@ -235,7 +235,7 @@ Nothing here is fetched unless you press the button, and none of it is kept betw
 
 Pubsplash can announce your stream on Mastodon. Open **File → Preferences** (`CTRL+,`) and choose the **Mastodon** tab.
 
-Under **Account**, type your server — just the host name, such as `mastodon.social` — and press **Authorize**. Your browser opens at that server so you can sign in and approve Pubsplash, and the authorization comes straight back to the app; there is nothing to copy or paste. **Unlink** removes it and asks the server to cancel it, and can be used at any time. Both the authorization and the app's own secret are encrypted for your Windows account, exactly as your speech credentials are, and neither ever appears in the log file.
+Under **Account**, type your server — just the host name, such as `mastodon.social` — and press **Authorize**. Your browser opens at that server so you can sign in and approve Pubsplash, and the authorization comes straight back to the app; there is nothing to copy or paste. **Unlink** removes it and asks the server to cancel it, and can be used at any time. Both the authorization and the app's own secret are encrypted for your Windows account, exactly as your speech credentials are, and neither ever appears in the log file. If the address is not a Mastodon server, Pubsplash says so before your browser opens rather than after — and Mastodon-compatible servers such as Pleroma, Akkoma, GoToSocial and Firefish work here too.
 
 Under **Announcements**, "Post to Mastodon when I start a new stream" and "Make periodic still-streaming Mastodon posts" set how the matching boxes in the **Set stream info** dialog start out. Checking the second one makes the interval dropdown next to it available: every hour, every one-and-a-half hours, every two, two-and-a-half, three, or five hours, counted from the moment the stream goes live. The **Set stream info** dialog now has a **Mastodon** group of its own with the same two boxes, so you can turn either off for one stream without changing your defaults. They are unavailable until an account is linked.
 

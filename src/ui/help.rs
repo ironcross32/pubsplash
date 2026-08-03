@@ -218,11 +218,11 @@ unsafe extern "system" fn frame_subclass(
     _id: usize,
     _refdata: usize,
 ) -> LRESULT {
-    if msg == WM_GETOBJECT && lparam.0 as i32 == UiaRootObjectId {
-        if let Some(provider) = FRAME_PROVIDER.with(|r| r.borrow().get(&(hwnd.0 as isize)).cloned())
-        {
-            return unsafe { UiaReturnRawElementProvider(hwnd, wparam, lparam, &provider) };
-        }
+    if msg == WM_GETOBJECT
+        && lparam.0 as i32 == UiaRootObjectId
+        && let Some(provider) = FRAME_PROVIDER.with(|r| r.borrow().get(&(hwnd.0 as isize)).cloned())
+    {
+        return unsafe { UiaReturnRawElementProvider(hwnd, wparam, lparam, &provider) };
     }
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
 }

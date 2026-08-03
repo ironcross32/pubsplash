@@ -163,10 +163,10 @@ fn send_one(job: &PostJob) -> Result<(), MastodonError> {
     }
     // The gate. Held across the request so two jobs can never both pass it.
     let mut last = LAST_POST.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(previous) = *last {
-        if previous.elapsed() < MIN_POST_INTERVAL {
-            return Err(MastodonError::RateLimited);
-        }
+    if let Some(previous) = *last
+        && previous.elapsed() < MIN_POST_INTERVAL
+    {
+        return Err(MastodonError::RateLimited);
     }
     let result = block_on(api::post_status(
         &job.instance,

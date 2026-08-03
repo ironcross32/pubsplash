@@ -282,10 +282,10 @@ pub fn on_bus_moved(app: &Rc<App>, a: usize, b: usize) {
 
 // --- Chain editing (add / remove / move / bypass a plugin) ---
 
-fn instances_mut<'a>(
-    fx: &'a mut super::FxRuntime,
+fn instances_mut(
+    fx: &mut super::FxRuntime,
     target: ChainTarget,
-) -> Option<&'a mut Vec<Option<Arc<PluginInstance>>>> {
+) -> Option<&mut Vec<Option<Arc<PluginInstance>>>> {
     match target {
         ChainTarget::Bus(i) => fx.buses.get_mut(i),
         ChainTarget::Master => Some(&mut fx.master),

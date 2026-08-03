@@ -105,7 +105,9 @@ impl IcecastError {
         match self {
             IcecastError::Io(_) | IcecastError::Timeout { .. } => true,
             IcecastError::Rejected {
-                status, status_line, ..
+                status,
+                status_line,
+                ..
             } => match status {
                 // Every 401 is terminal: a bad or revoked stream key, a banned
                 // or untrusted user, or a stream row the server has already
@@ -431,8 +433,8 @@ mod tests {
 
     #[test]
     fn other_403s_are_terminal() {
-        let err =
-            parse_handshake("HTTP/1.0 403 Content-type audio/ogg not supported\r\n\r\n").unwrap_err();
+        let err = parse_handshake("HTTP/1.0 403 Content-type audio/ogg not supported\r\n\r\n")
+            .unwrap_err();
         assert!(!err.retryable());
     }
 
@@ -501,7 +503,9 @@ mod tests {
             let (mut sock, _) = listener.accept().await.unwrap();
             let mut buf = vec![0u8; 4096];
             let _ = sock.read(&mut buf).await.unwrap();
-            sock.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await.unwrap();
+            sock.write_all(b"HTTP/1.1 100 Continue\r\n\r\n")
+                .await
+                .unwrap();
             // Never read again, and hold the socket open so there is no RST:
             // this is the half-open case a bare `write_all` cannot detect.
             std::future::pending::<()>().await;

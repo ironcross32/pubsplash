@@ -208,7 +208,7 @@ pub fn take_size_requests() -> Vec<(u64, i32, i32)> {
 
 thread_local! {
     static TIME_INFO: std::cell::UnsafeCell<VstTimeInfo> =
-        std::cell::UnsafeCell::new(VstTimeInfo {
+        const { std::cell::UnsafeCell::new(VstTimeInfo {
             sample_pos: 0.0,
             sample_rate: SCAN_SAMPLE_RATE as f64,
             nano_seconds: 0.0,
@@ -224,7 +224,7 @@ thread_local! {
             samples_to_next_clock: 0,
             // kVstTempoValid | kVstTimeSigValid.
             flags: (1 << 10) | (1 << 13),
-        });
+        }) };
 }
 
 fn fill_host_string(ptr: *mut c_void, text: &str) -> isize {
@@ -493,11 +493,11 @@ impl Vst2Plugin {
     /// reached by anything else — so unlike every other dispatching method here
     /// it takes no lock, and must not start taking one.
     fn restore(&self, slot: &FxSlotConfig) {
-        if self.uses_chunks {
-            if let Some(chunk) = slot.chunk.as_ref().and_then(|c| base64_decode(c)) {
-                self.set_chunk(&chunk);
-                return;
-            }
+        if self.uses_chunks
+            && let Some(chunk) = slot.chunk.as_ref().and_then(|c| base64_decode(c))
+        {
+            self.set_chunk(&chunk);
+            return;
         }
         for pv in &slot.params {
             if pv.index >= 0 && pv.index < self.num_params {
@@ -632,10 +632,10 @@ impl Vst2Plugin {
         // engine is told to fade this plugin out before the lock is taken.
         let _suspended = self.suspend.raise();
         let _guard = self.lock();
-        if self.uses_chunks {
-            if let Some(chunk) = self.get_chunk() {
-                return (Some(base64_encode(&chunk)), Vec::new());
-            }
+        if self.uses_chunks
+            && let Some(chunk) = self.get_chunk()
+        {
+            return (Some(base64_encode(&chunk)), Vec::new());
         }
         let params = (0..self.num_params)
             .map(|index| ParamValue {

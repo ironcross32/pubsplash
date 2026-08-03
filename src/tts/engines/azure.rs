@@ -254,8 +254,10 @@ mod tests {
 
     #[test]
     fn both_the_key_and_the_region_are_required_by_name() {
-        let mut config = SpeechConfig::default();
-        config.azure_key = crate::secret::Secret::new("k");
+        let config = SpeechConfig {
+            azure_key: crate::secret::Secret::new("k"),
+            ..Default::default()
+        };
         let error = Azure::new(&config).voices().unwrap_err();
         assert!(error.to_string().contains("region"), "{error}");
 
@@ -267,8 +269,10 @@ mod tests {
     /// The region goes into a URL; a stray space or capital would break it.
     #[test]
     fn the_region_is_normalised_for_the_endpoint_host() {
-        let mut config = SpeechConfig::default();
-        config.azure_region = "  EastUS  ".into();
+        let config = SpeechConfig {
+            azure_region: "  EastUS  ".into(),
+            ..Default::default()
+        };
         let engine = Azure::new(&config);
         assert_eq!(
             engine.endpoint("cognitiveservices/v1"),

@@ -149,17 +149,17 @@ fn build_tab(
     };
 
     {
-        let source_path = controls.source_path.clone();
+        let source_path = controls.source_path;
         controls.browse.clone().on_click(move |_| {
             let dialog = FileDialog::builder(&panel)
                 .with_message("Select a WAV file")
                 .with_wildcard("WAV files (*.wav)|*.wav")
                 .with_style(FileDialogStyle::Open)
                 .build();
-            if dialog.show_modal() == ID_OK {
-                if let Some(path) = dialog.get_path() {
-                    source_path.set_value(&path);
-                }
+            if dialog.show_modal() == ID_OK
+                && let Some(path) = dialog.get_path()
+            {
+                source_path.set_value(&path);
             }
         });
     }
@@ -193,13 +193,13 @@ fn wire_project_buttons(
     compile: &Button,
 ) {
     {
-        let frame = frame.clone();
+        let frame = *frame;
         let state = Rc::clone(state);
-        let project_label = project_label.clone();
+        let project_label = *project_label;
         let interface_tab = interface_tab.clone();
         let stream_tab = stream_tab.clone();
-        let save = save.clone();
-        let compile = compile.clone();
+        let save = *save;
+        let compile = *compile;
         new_project.on_click(move |_| {
             let Some((name, parent)) = show_new_project_dialog(&frame) else {
                 return;
@@ -224,13 +224,13 @@ fn wire_project_buttons(
         });
     }
     {
-        let frame = frame.clone();
+        let frame = *frame;
         let state = Rc::clone(state);
-        let project_label = project_label.clone();
+        let project_label = *project_label;
         let interface_tab = interface_tab.clone();
         let stream_tab = stream_tab.clone();
-        let save = save.clone();
-        let compile = compile.clone();
+        let save = *save;
+        let compile = *compile;
         open_project.on_click(move |_| {
             let dialog = DirDialog::builder(&frame, "Open a sound pack project folder", "").build();
             if dialog.show_modal() != ID_OK {
@@ -259,13 +259,13 @@ fn wire_project_buttons(
         });
     }
     {
-        let frame = frame.clone();
+        let frame = *frame;
         let state = Rc::clone(state);
-        let project_label = project_label.clone();
+        let project_label = *project_label;
         let interface_tab = interface_tab.clone();
         let stream_tab = stream_tab.clone();
-        let save_button = save.clone();
-        let compile = compile.clone();
+        let save_button = *save;
+        let compile = *compile;
         save.on_click(move |_| {
             remember_source_path(&state, &interface_tab, &soundpack::SoundKind::INTERFACE);
             remember_source_path(&state, &stream_tab, &soundpack::SoundKind::STREAM_EVENTS);
@@ -292,13 +292,13 @@ fn wire_project_buttons(
         });
     }
     {
-        let frame = frame.clone();
+        let frame = *frame;
         let state = Rc::clone(state);
-        let project_label = project_label.clone();
+        let project_label = *project_label;
         let interface_tab = interface_tab.clone();
         let stream_tab = stream_tab.clone();
-        let save = save.clone();
-        let compile_for_refresh = compile.clone();
+        let save = *save;
+        let compile_for_refresh = *compile;
         compile.on_click(move |_| {
             let Some(project) = state.borrow().project.clone() else {
                 show_error(&frame, "Open or create a sound pack project first.");
@@ -363,7 +363,7 @@ fn wire_tab_slice(
         });
     }
     {
-        let frame = frame.clone();
+        let frame = *frame;
         let controls = controls.clone();
         controls.test.clone().on_click(move |_| {
             let typed = controls.source_path.get_value();
@@ -430,24 +430,18 @@ fn show_new_project_dialog(frame: &Frame) -> Option<(String, PathBuf)> {
     dialog.set_sizer(dialog_sizer, true);
 
     {
-        let panel = panel.clone();
-        let folder = folder.clone();
         browse.on_click(move |_| {
             let picker = DirDialog::builder(&panel, "Choose a parent folder", "")
                 .with_style(DirDialogStyle::MustExist.bits())
                 .build();
-            if picker.show_modal() == ID_OK {
-                if let Some(path) = picker.get_path() {
-                    folder.set_value(&path);
-                }
+            if picker.show_modal() == ID_OK
+                && let Some(path) = picker.get_path()
+            {
+                folder.set_value(&path);
             }
         });
     }
     {
-        let dialog = dialog.clone();
-        let panel = panel.clone();
-        let name = name.clone();
-        let folder = folder.clone();
         ok.on_click(move |_| {
             if let Err(err) = soundpack::sanitize_pack_name(&name.get_value()) {
                 show_error(&panel, &err);
@@ -466,7 +460,6 @@ fn show_new_project_dialog(frame: &Frame) -> Option<(String, PathBuf)> {
         });
     }
     {
-        let dialog = dialog.clone();
         cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
 

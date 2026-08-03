@@ -112,12 +112,11 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, Button, Button, ListBox,
     // Scene switching: button, or Enter/double-click on the list.
     {
         let app = app.clone();
-        let scene_list = scene_list.clone();
         switch_button.on_click(move |_| switch_to_selected_scene(&app, &scene_list));
     }
     {
         let app = app.clone();
-        let scene_list_for_handler = scene_list.clone();
+        let scene_list_for_handler = scene_list;
         scene_list.on_item_double_clicked(move |_| {
             switch_to_selected_scene(&app, &scene_list_for_handler);
         });
@@ -137,7 +136,14 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, Button, Button, ListBox,
     {
         let app = app.clone();
         record_button.on_click(move |_| {
-            if app.run.borrow().recording {
+            // `recording_pending` counts as recording here so that a second
+            // press during the gap before the engine answers cancels the
+            // recording rather than being swallowed as a duplicate start.
+            let busy = {
+                let run = app.run.borrow();
+                run.recording || run.recording_pending
+            };
+            if busy {
                 app.stop_recording();
             } else {
                 app.start_recording();
@@ -245,10 +251,10 @@ pub fn refresh_scene_list(app: &Rc<App>) {
         if super::list::sync(&w.home_scene_list, &labels, NO_SCENES) == super::list::Synced::Kept {
             return;
         }
-        if let Some(index) = selected {
-            if index < w.home_scene_list.get_count() {
-                w.home_scene_list.set_selection(index, true);
-            }
+        if let Some(index) = selected
+            && index < w.home_scene_list.get_count()
+        {
+            w.home_scene_list.set_selection(index, true);
         }
     });
 }
@@ -276,6 +282,11 @@ pub struct OverviewState {
     /// Whether a recording is running — either standalone or alongside the
     /// stream. See `Runtime::recording_started`.
     pub recording: bool,
+    /// A recording has been asked for and the engine has not confirmed it. See
+    /// `Runtime::recording_pending`.
+    pub recording_pending: bool,
+    /// Whether the outgoing encoder has failed. See `Runtime::encoder_failed`.
+    pub encoder_failed: bool,
     pub listeners: u32,
     pub listener_peak: u32,
     /// Encoder settings, pre-formatted ("128 kbps MP3"). Held as a string so
@@ -290,27 +301,43 @@ pub struct OverviewState {
 /// recording is a one-row list.
 fn overview_rows(state: &OverviewState) -> Vec<(OverviewRow, String)> {
     let streaming = !matches!(state.stream, StreamState::Idle);
-    let status = match (&state.stream, state.recording) {
+    // Never `recording` and `recording_pending` at once, but ordered so that if
+    // they ever were, the confirmed answer wins over the hoped-for one.
+    let recording_word = if state.recording {
+        Some("recording")
+    } else if state.recording_pending {
+        Some("starting a recording")
+    } else {
+        None
+    };
+    let status = match (&state.stream, recording_word) {
         // "Not streaming and recording" would be nonsense, so the idle case
         // says what is actually happening instead.
-        (StreamState::Idle, true) => "Recording".to_string(),
-        (StreamState::Idle, false) => "Not streaming".to_string(),
+        (StreamState::Idle, Some("recording")) => "Recording".to_string(),
+        (StreamState::Idle, Some(_)) => "Starting a recording".to_string(),
+        (StreamState::Idle, None) => "Not streaming".to_string(),
         (phase, recording) => {
             let base = match phase {
                 StreamState::Starting => "Starting",
                 StreamState::Live { .. } => "Streaming",
                 _ => "Stopping",
             };
-            let base = if recording {
-                format!("{base} and recording")
-            } else {
-                base.to_string()
+            let base = match recording {
+                Some(word) => format!("{base} and {word}"),
+                None => base.to_string(),
             };
             // Said plainly, because the alternative is a UI that claims to be
             // streaming while listeners hear nothing. The duration is
             // deliberately left running underneath it: the server holds the
             // stream open, so the broadcast really is still this old.
-            if state.audio_link == super::AudioLink::Reconnecting {
+            //
+            // An encoder failure is checked first because it outranks a
+            // reconnect: a reconnect is the network dropping a stream it will
+            // get back, while a dead encoder means there is nothing to send in
+            // the first place and no amount of waiting will change that.
+            if state.encoder_failed {
+                format!("{base} (encoder failed, not sending audio)")
+            } else if state.audio_link == super::AudioLink::Reconnecting {
                 format!("{base} (reconnecting)")
             } else {
                 base
@@ -387,6 +414,8 @@ fn refresh(app: &App, selected_rows: Selected) {
             stream: run.stream.clone(),
             audio_link: run.audio_link,
             recording: run.recording_started.is_some(),
+            recording_pending: run.recording_pending,
+            encoder_failed: run.encoder_failed,
             listeners: run.listeners,
             listener_peak: run.listener_peak,
             quality,
@@ -465,8 +494,8 @@ pub enum StripTarget {
 pub fn rebuild_mixer(app: &Rc<App>) {
     let Some((mixer_panel, home_panel, old_inner)) = app.widgets(|w| {
         (
-            w.mixer_panel.clone(),
-            w.home_panel.clone(),
+            w.mixer_panel,
+            w.home_panel,
             w.mixer_inner.borrow_mut().take(),
         )
     }) else {
@@ -708,9 +737,9 @@ fn add_strip(
     let strip = MixerStrip {
         source_index,
         target,
-        label: label.clone(),
-        slider: slider.clone(),
-        mute: mute_check.clone(),
+        label,
+        slider,
+        mute: mute_check,
         announcer: announcer.clone(),
         name: Rc::new(RefCell::new(name.to_string())),
         boost: Rc::new(Cell::new(boost)),
@@ -750,7 +779,7 @@ fn add_strip(
     // Volume changes.
     {
         let app = app.clone();
-        let slider_for_handler = slider.clone();
+        let slider_for_handler = slider;
         let announcer = announcer.clone();
         let max = max.clone();
         let name = name.clone();
@@ -778,7 +807,7 @@ fn add_strip(
     // and the resulting `wxEVT_SLIDER` overwrites what we just saved.
     {
         let app = app.clone();
-        let slider_for_keys = slider.clone();
+        let slider_for_keys = slider;
         let announcer = announcer.clone();
         let max = max.clone();
         let name = name.clone();
@@ -837,7 +866,7 @@ fn add_strip(
     // rule blocks adding it, so bind the raw event types instead.
     {
         let app = app.clone();
-        let slider_for_menu = slider.clone();
+        let slider_for_menu = slider;
         slider.bind_internal(EventType::CONTEXT_MENU, move |_| {
             let boost = boost_of(&app, target);
             let monitor = monitor_of(&app, target);
@@ -865,7 +894,7 @@ fn add_strip(
     // The popup is shown on the slider, so its command comes back here.
     {
         let app = app.clone();
-        let slider_for_boost = slider.clone();
+        let slider_for_boost = slider;
         let max = max.clone();
         let boost_now = boost_now.clone();
         slider.bind_with_id_internal(EventType::MENU, ID_MIXER_BOOST, move |_| {
@@ -896,7 +925,6 @@ fn add_strip(
     // checkbox's checked state is the mute state.
     {
         let app = app.clone();
-        let mute_check = mute_check.clone();
         mute_check.clone().on_toggled(move |_| {
             set_mute(&app, target, mute_check.get_value());
         });
@@ -1118,8 +1146,21 @@ pub fn on_sources_changed(app: &Rc<App>, previous_sources: Option<&[SourceConfig
         app.clear_source_monitors();
     }
     app.sync_engine_sources();
+    // Beside `sync_engine_sources`, because that is where `ExternalFeeds` gains
+    // and loses its rings: a cue worker for a source that just left the scene
+    // has nothing left to feed.
+    app.cues.retain(&active_source_names(app));
     rebuild_mixer(app);
     refresh_scene_list(app);
+}
+
+/// Identity names (`SourceConfig.name`) of the active scene's sources.
+fn active_source_names(app: &Rc<App>) -> std::collections::HashSet<String> {
+    let config = app.config.borrow();
+    match config.scenes.active_scene() {
+        Some(scene) => scene.sources.iter().map(|s| s.name.clone()).collect(),
+        None => std::collections::HashSet::new(),
+    }
 }
 
 #[cfg(test)]
@@ -1181,11 +1222,81 @@ mod tests {
             stream,
             audio_link: super::super::AudioLink::Ok,
             recording,
+            recording_pending: false,
+            encoder_failed: false,
             listeners: 4,
             listener_peak: 7,
             quality: "128 kbps MP3".into(),
             elapsed: elapsed.map(Duration::from_secs),
         }
+    }
+
+    /// The engine creates the file, so between the button press and its answer
+    /// the status must promise nothing. Saying "Recording" here is what let a
+    /// broadcaster finish a session and find no file.
+    #[test]
+    fn a_recording_that_has_not_started_yet_does_not_claim_to_have() {
+        let mut s = state(StreamState::Idle, false, None);
+        s.recording_pending = true;
+        let rows = overview_rows(&s);
+        assert_eq!(rows[0].1, "Status: Starting a recording");
+        assert!(
+            !rows.iter().any(|(kind, _)| *kind == OverviewRow::Duration),
+            "no clock until there is something to time"
+        );
+    }
+
+    #[test]
+    fn a_pending_recording_alongside_a_stream_says_so_too() {
+        let mut s = state(
+            StreamState::Live {
+                stream_id: "abc".into(),
+            },
+            false,
+            Some(30),
+        );
+        s.recording_pending = true;
+        assert_eq!(
+            overview_rows(&s)[0].1,
+            "Status: Streaming and starting a recording"
+        );
+    }
+
+    /// A dead encoder means listeners are hearing nothing, so the status line
+    /// must stop reading like a healthy broadcast.
+    #[test]
+    fn a_failed_encoder_is_visible_in_the_status() {
+        let mut s = state(
+            StreamState::Live {
+                stream_id: "abc".into(),
+            },
+            false,
+            Some(30),
+        );
+        s.encoder_failed = true;
+        assert_eq!(
+            overview_rows(&s)[0].1,
+            "Status: Streaming (encoder failed, not sending audio)"
+        );
+    }
+
+    /// A reconnect is recoverable and an encoder failure is not, so when both
+    /// are true the worse one is the one reported.
+    #[test]
+    fn a_failed_encoder_outranks_a_reconnect() {
+        let mut s = state(
+            StreamState::Live {
+                stream_id: "abc".into(),
+            },
+            true,
+            Some(30),
+        );
+        s.encoder_failed = true;
+        s.audio_link = super::super::AudioLink::Reconnecting;
+        assert_eq!(
+            overview_rows(&s)[0].1,
+            "Status: Streaming and recording (encoder failed, not sending audio)"
+        );
     }
 
     /// A network blip must say so, and must *not* look like a fresh stream:
@@ -1204,7 +1315,10 @@ mod tests {
         let rows = overview_rows(&s);
         assert_eq!(
             rows[0],
-            (OverviewRow::Status, "Status: Streaming (reconnecting)".into())
+            (
+                OverviewRow::Status,
+                "Status: Streaming (reconnecting)".into()
+            )
         );
         assert_eq!(
             rows.last().unwrap(),

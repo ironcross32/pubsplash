@@ -240,8 +240,10 @@ mod tests {
 
     #[test]
     fn a_blank_configured_language_falls_back_rather_than_sending_an_empty_tag() {
-        let mut config = SpeechConfig::default();
-        config.google_language_code = "   ".into();
+        let config = SpeechConfig {
+            google_language_code: "   ".into(),
+            ..Default::default()
+        };
         assert_eq!(GoogleCloud::new(&config).language_code, "en-US");
     }
 

@@ -5,10 +5,11 @@
 //!
 //! It scans `src/ui/*.rs` for `help::tag(<widget>, "<id>", "<label>")`, then
 //! merges into `help.toml`:
-//!   - new ids are appended with a blank `message`,
-//!   - existing ids keep their authored `message` (only `label`/`file` refresh),
-//!   - ids gone from the source move to a trailing `[[stale]]` section so a
-//!     rename never loses authored text.
+//! - new ids are appended with a blank `message`,
+//! - existing ids keep their authored `message` (only `label`/`file` refresh),
+//! - ids gone from the source move to a trailing `[[stale]]` section so a
+//!   rename never loses authored text.
+//!
 //! Entries are sorted by id within each section for stable diffs.
 
 use std::collections::BTreeMap;
@@ -130,14 +131,14 @@ fn scan_source(content: &str, file: &str) -> Vec<Scanned> {
     let mut search = 0;
     while let Some(rel) = content[search..].find(needle) {
         let after = search + rel + needle.len();
-        if let Some((id, id_end)) = next_string(&content[after..]) {
-            if let Some((label, _)) = next_string(&content[after + id_end..]) {
-                out.push(Scanned {
-                    id,
-                    label,
-                    file: file.to_string(),
-                });
-            }
+        if let Some((id, id_end)) = next_string(&content[after..])
+            && let Some((label, _)) = next_string(&content[after + id_end..])
+        {
+            out.push(Scanned {
+                id,
+                label,
+                file: file.to_string(),
+            });
         }
         search = after;
     }

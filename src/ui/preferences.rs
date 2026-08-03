@@ -43,7 +43,6 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     // Dismiss-only, so `dismiss_button` puts both Escape and Enter on it.
     let close_button = super::dismiss_button(&dialog, "C&lose");
     {
-        let dialog = dialog.clone();
         close_button.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
 
@@ -87,7 +86,6 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     stream_group.add(&archive_default, 0, SizerFlag::All, 4);
     {
         let app = app.clone();
-        let archive_default = archive_default.clone();
         archive_default.clone().on_toggled(move |_| {
             app.config.borrow_mut().archiving.archive_streams_by_default =
                 archive_default.get_value();
@@ -111,7 +109,6 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     recording_group.add(&record_default, 0, SizerFlag::All, 4);
     {
         let app = app.clone();
-        let record_default = record_default.clone();
         record_default.clone().on_toggled(move |_| {
             app.config.borrow_mut().archiving.record_streams_by_default =
                 record_default.get_value();
@@ -135,7 +132,6 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     recording_group.add(&folder_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
     {
         let app = app.clone();
-        let folder_input = folder_input.clone();
         folder_input.clone().on_text_updated(move |_| {
             app.config.borrow_mut().archiving.recording_folder =
                 folder_input.get_value().trim().to_string();
@@ -154,8 +150,7 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     recording_group.add(&browse, 0, SizerFlag::All, 4);
     {
         let app = app.clone();
-        let dialog = dialog.clone();
-        let folder_input = folder_input.clone();
+        let dialog = *dialog;
         browse.on_click(move |_| {
             let start = app.config.borrow().archiving.recording_dir();
             let picker = DirDialog::builder(
@@ -253,10 +248,10 @@ fn build_speech_tab(app: &Rc<App>, panel: &Panel, alive: &Rc<std::cell::Cell<boo
 
     {
         let app = app.clone();
-        let panel = panel.clone();
+        let panel = *panel;
         let pages = pages.clone();
         let ids: Vec<&'static str> = engine_list.iter().map(|(id, _)| *id).collect();
-        let choice = engine_choice.clone();
+        let choice = engine_choice;
         engine_choice.clone().on_selection_changed(move |_| {
             let id = choice
                 .get_selection()
@@ -289,7 +284,6 @@ fn build_speech_tab(app: &Rc<App>, panel: &Panel, alive: &Rc<std::cell::Cell<boo
     limits.add(&chars, 0, SizerFlag::All, 2);
     {
         let app = app.clone();
-        let chars = chars.clone();
         chars.clone().on_value_changed(move |_| {
             app.config.borrow_mut().speech.max_chars = chars.value().max(1) as usize;
             app.save_config();
@@ -313,7 +307,6 @@ fn build_speech_tab(app: &Rc<App>, panel: &Panel, alive: &Rc<std::cell::Cell<boo
     limits.add(&interval, 0, SizerFlag::All, 2);
     {
         let app = app.clone();
-        let interval = interval.clone();
         interval.clone().on_value_changed(move |_| {
             app.config.borrow_mut().speech.min_request_interval_ms = interval.value().max(0) as u64;
             app.save_config();
@@ -373,7 +366,7 @@ fn build_engine_page(
                 "dialog.preferences.speech.openaiKey",
                 "OpenAI API key",
             ); // validation-openai-marker
-            let draft_key = key.clone();
+            let draft_key = key;
             validation_button(app, page, sizer, engines::OPENAI, alive, move |speech| {
                 speech.openai_api_key = Secret::new(draft_key.get_value().trim().to_string());
             });
@@ -393,7 +386,7 @@ fn build_engine_page(
                 "dialog.preferences.speech.elevenlabsKey",
                 "ElevenLabs API key",
             );
-            let draft_key = key.clone();
+            let draft_key = key;
             validation_button(
                 app,
                 page,
@@ -435,8 +428,8 @@ fn build_engine_page(
                 "dialog.preferences.speech.azureRegion",
                 "Azure region",
             );
-            let draft_key = key.clone();
-            let draft_region = region.clone();
+            let draft_key = key;
+            let draft_region = region;
             validation_button(app, page, sizer, engines::AZURE, alive, move |speech| {
                 speech.azure_key = Secret::new(draft_key.get_value().trim().to_string());
                 speech.azure_region = draft_region.get_value().trim().to_string();
@@ -477,9 +470,9 @@ fn build_engine_page(
                 |s, v| s.aws_region = v,
             );
             super::help::tag(&region, "dialog.preferences.speech.awsRegion", "AWS region");
-            let draft_id = id.clone();
-            let draft_key = key.clone();
-            let draft_region = region.clone();
+            let draft_id = id;
+            let draft_key = key;
+            let draft_region = region;
             validation_button(app, page, sizer, engines::AWS, alive, move |speech| {
                 speech.aws_access_key_id = draft_id.get_value().trim().to_string();
                 speech.aws_secret_access_key =
@@ -502,7 +495,7 @@ fn build_engine_page(
                 "dialog.preferences.speech.googleKey",
                 "Google Cloud API key",
             );
-            let draft_key = key.clone();
+            let draft_key = key;
             validation_button(app, page, sizer, engines::GOOGLE, alive, move |speech| {
                 speech.google_api_key = Secret::new(draft_key.get_value().trim().to_string());
             });
@@ -555,8 +548,8 @@ fn validation_button(
     let apply_draft = Rc::new(apply_draft);
     {
         let app = app.clone();
-        let button_for_click = button.clone();
-        let status_for_click = status.clone();
+        let button_for_click = button;
+        let status_for_click = status;
         let alive = alive.clone();
         button.on_click(move |_| {
             let mut draft = app.config.borrow().speech.clone();
@@ -580,8 +573,8 @@ fn validation_button(
                 })
                 .ok();
             let app = app.clone();
-            let button = button_for_click.clone();
-            let status = status_for_click.clone();
+            let button = button_for_click;
+            let status = status_for_click;
             let alive = alive.clone();
             super::run_when_ready(move || {
                 if !alive.get() {
@@ -701,7 +694,7 @@ fn speech_row(
     // their widgets until validation succeeds.
     if engine == crate::tts::engines::STAR {
         let app = app.clone();
-        let input_for_update = input.clone();
+        let input_for_update = input;
         input.clone().on_text_updated(move |_| {
             write(
                 &mut app.config.borrow_mut().speech,
@@ -774,7 +767,6 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
         Rc::new(std::cell::RefCell::new(Vec::new()));
 
     let selected_pack: Rc<dyn Fn() -> String> = {
-        let pack_choice = pack_choice.clone();
         let packs = packs.clone();
         Rc::new(move || match pack_choice.get_selection() {
             Some(0) | None => String::new(),
@@ -789,8 +781,6 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
     // Refills the list from disk and selects `select` by file name, falling
     // back to the built-in pack when it is gone.
     let refresh_packs: Rc<dyn Fn(&str)> = {
-        let pack_choice = pack_choice.clone();
-        let remove_pack = remove_pack.clone();
         let packs = packs.clone();
         Rc::new(move |select: &str| {
             let installed = crate::soundpack::installed_packs();
@@ -822,8 +812,7 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
 
     let apply_pack: Rc<dyn Fn()> = {
         let app = app.clone();
-        let dialog = dialog.clone();
-        let pack_choice = pack_choice.clone();
+        let dialog = *dialog;
         let selected_pack = selected_pack.clone();
         let applied = applied.clone();
         let alive = alive.clone();
@@ -857,8 +846,8 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
                 .ok();
 
             let app = app.clone();
-            let dialog = dialog.clone();
-            let pack_choice = pack_choice.clone();
+            let dialog = dialog;
+            let pack_choice = pack_choice;
             let applied = applied.clone();
             let alive = alive.clone();
             let generation = generation.clone();
@@ -915,8 +904,7 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
 
     {
         let settle = settle.clone();
-        let remove_pack = remove_pack.clone();
-        let pack_choice_for_event = pack_choice.clone();
+        let pack_choice_for_event = pack_choice;
         pack_choice.clone().on_selection_changed(move |_| {
             // Immediate, because it is only the button's own state: the load
             // itself waits for the timer.
@@ -938,7 +926,7 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
     }
 
     {
-        let dialog = dialog.clone();
+        let dialog = *dialog;
         let apply_pack = apply_pack.clone();
         let refresh_packs = refresh_packs.clone();
         import_pack.on_click(move |_| {
@@ -994,11 +982,10 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
     }
 
     {
-        let dialog = dialog.clone();
+        let dialog = *dialog;
         let apply_pack = apply_pack.clone();
         let refresh_packs = refresh_packs.clone();
         let selected_pack = selected_pack.clone();
-        let pack_choice = pack_choice.clone();
         remove_pack.clone().on_click(move |_| {
             apply_pack();
             let file_name = selected_pack();
@@ -1046,7 +1033,6 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
     interface_group.add(&startup, 0, SizerFlag::All, 4);
     {
         let app = app.clone();
-        let startup = startup.clone();
         startup.clone().on_toggled(move |_| {
             app.config.borrow_mut().sounds.play_startup = startup.get_value();
             app.save_config();
@@ -1066,7 +1052,6 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
     interface_group.add(&shutdown, 0, SizerFlag::All, 4);
     {
         let app = app.clone();
-        let shutdown = shutdown.clone();
         shutdown.clone().on_toggled(move |_| {
             app.config.borrow_mut().sounds.play_shutdown = shutdown.get_value();
             app.save_config();
@@ -1141,7 +1126,6 @@ fn build_vst_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     let refresh_folders = {
         let app = app.clone();
-        let folders_list = folders_list.clone();
         move |select: Option<&str>| {
             let config = app.config.borrow();
             let folders = &config.plugins.folders;
@@ -1159,7 +1143,7 @@ fn build_vst_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     {
         let app = app.clone();
-        let dialog = dialog.clone();
+        let dialog = *dialog;
         let refresh_folders = refresh_folders.clone();
         add_folder.on_click(move |_| {
             let picker = DirDialog::builder(&dialog, "Choose a folder containing VST plugins", "")
@@ -1196,7 +1180,6 @@ fn build_vst_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     let do_remove = {
         let app = app.clone();
-        let folders_list = folders_list.clone();
         let refresh_folders = refresh_folders.clone();
         move || {
             let count = app.config.borrow().plugins.folders.len();
@@ -1221,12 +1204,12 @@ fn build_vst_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     {
         let app = app.clone();
-        let dialog = dialog.clone();
+        let dialog = *dialog;
         scan_new.on_click(move |_| begin_scan(&app, &dialog, ScanMode::NewOnly));
     }
     {
         let app = app.clone();
-        let dialog = dialog.clone();
+        let dialog = *dialog;
         rescan_all.on_click(move |_| begin_scan(&app, &dialog, ScanMode::RescanAll));
     }
 }
@@ -1259,7 +1242,7 @@ fn begin_scan(app: &Rc<App>, dialog: &Dialog, mode: ScanMode) {
             *app.scan.borrow_mut() = Some(ScanUi {
                 handle,
                 progress: None,
-                parent: dialog.clone(),
+                parent: *dialog,
             });
             // Enumeration alone can take a while on big folders, so the dialog
             // goes up now and says so; the plugin count follows on `Started`.
@@ -1282,8 +1265,10 @@ mod speech_validation_tests {
 
     #[test]
     fn validation_commits_only_the_selected_provider() {
-        let mut saved = crate::config::SpeechConfig::default();
-        saved.google_api_key = Secret::new("old-google");
+        let mut saved = crate::config::SpeechConfig {
+            google_api_key: Secret::new("old-google"),
+            ..Default::default()
+        };
         let mut draft = saved.clone();
         draft.openai_api_key = Secret::new("new-openai");
         draft.google_api_key = Secret::new("draft-google");

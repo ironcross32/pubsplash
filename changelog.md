@@ -20,6 +20,28 @@
 
 ### Fixes
 
+- **Authorizing against something that is not a Mastodon server now says so.** Typing an address that is not a Mastodon server — a typo, or a plain web site such as `google.com` — answered with that site's own error page pasted into a message box, starting "The server answered 404:" and followed by a couple of hundred characters of raw HTML, read out one angle bracket at a time. Pubsplash now asks the address whether it speaks the Mastodon API before anything else happens, so a wrong address is caught before your browser is ever opened, and the message is a single sentence: which host it was, what gave it away, and that the address is the thing to check. Servers that cannot be reached at all are separated out too — "that host name could not be found", "the connection was refused", "it did not answer in time", "the secure connection could not be set up" — instead of a line of network debugging. Mastodon-compatible servers such as Pleroma, Akkoma, GoToSocial and Firefish are still accepted. Whatever the reason, the cursor goes back to the Server box so you can correct it straight away.
+
+- **No Mastodon message can read a web page at you any more.** Any error from a Mastodon server — while authorizing, while posting, or while unlinking — that turned out to be a web page rather than a message is now reported as such rather than quoted. Refusals also say what kind they were, so a rate limit, a server having trouble, and a request that was turned down no longer all read the same.
+
+- **A recording that cannot start now says why.** If the Recording folder in Preferences pointed somewhere that does not exist — a mistyped path, or a drive that is not plugged in — pressing Start recording did nothing at all: no file, no message, nothing to go on. A message box now names the folder, says whether it is missing or cannot be written to, and points at the Recording folder setting; if the failure was the encoder rather than the folder, it says that instead. When the recording was the one that runs alongside a stream, the message also confirms that the stream itself is still live. A recording that fails *partway* through is unchanged and still reports through the Home tab and the log — that one can happen while you are talking, and a message box in the middle of a broadcast is worse than the status line.
+
+- **A recording that fails to start no longer looks like one that is running.** Pressing Start recording turned the button into Stop recording and started the clock straight away, before anything had actually been created — so if the file could not be made, because the folder was gone or read-only or the disk was full, the window went on showing a healthy recording for the whole session and there was no file at the end of it. The Home tab now reads "Starting a recording" for the moment it takes to create the file, then "Recording" once the file genuinely exists; if it cannot be created, the button goes back to Start recording, the status says nothing about a recording, and the log says exactly what went wrong. This applies to the recording that runs alongside a stream as well as to a standalone one.
+
+- **A recording that fails partway through now stops instead of pretending.** If the encoder failed mid-recording, Pubsplash carried on believing a recording was running: the file stayed open with nothing more written to it, the clock kept counting, and Start recording refused to work again for the rest of the session. The recording is now closed properly, so the audio recorded up to that point is a complete, playable file, and you can start a new one immediately.
+
+- **A failed encoder is no longer a silent broadcast.** If the MP3 encoder could not be created, or failed partway through, nothing was going out — but the Home tab went on reading "Streaming" with the duration counting up, and nothing anywhere said otherwise. It now reads "Streaming (encoder failed, not sending audio)" and the log names the reason.
+
+- **Connecting to a different service while a stream is live now ends that stream first.** Previously the old stream was left running: Pubsplash asked the *new* service to end it, which it knew nothing about, so the old stream stayed live on the server until it expired on its own — and if the new service was a plain Icecast server, there was no way to end it at all.
+
+- **The Audio Pub site address is now properly checked.** Anything beginning with the letters "http" was accepted, including addresses that were not web addresses at all and addresses with no site name in them — and your email and password are sent to whatever that address names. Pubsplash now checks the address is a real one before sending anything, and explains what is wrong with it if not. An address beginning `http://` rather than `https://` is still allowed, since some people run their own server on a home network, but it is noted in the log because your password travels unencrypted over it.
+
+- **A busy chat no longer creates a thread for every message.** Each sound event sent to the stream started an operating-system thread of its own, so a flood of chat messages started a flood of threads — all of them competing with the mixer at the moment it was busiest. Each sound-events source now has a single worker of its own. If cues arrive faster than they can be played, the oldest waiting ones are dropped rather than the newest, so what you hear stays in step with what is happening rather than falling further behind.
+
+- A capture or monitoring device whose event handle stopped working could leave Pubsplash spinning a processor core forever instead of reopening the device. It now notices and goes through its normal reconnect.
+
+- Scanning a VST plugin that printed a lot of text could hang the scan for good. Plugin output is now read as it arrives.
+
 - **A brief internet drop no longer ends your broadcast.** Pubsplash now reconnects the outgoing audio connection on its own and keeps trying for four minutes. Because it reconnects to the same stream rather than starting a new one, your stream keeps its address, its chat history, its listener counts and its recording — listeners hear a gap and nothing else, and there is nothing for you to press. The log records when the connection drops, once more if it is still trying after two minutes, and again when it comes back, with how long the gap was. The Home tab reads "Streaming (reconnecting)" while it works, and the duration keeps counting, because the stream really is still running. If the connection cannot be restored within four minutes the stream ends and Pubsplash says so; four minutes is the limit because the server ends a stream that has been disconnected for five.
 
 - **A drop is now noticed in seconds instead of minutes.** Sending audio had no time limit, so a dropped connection did not report an error until Windows finished retrying the send underneath — up to a couple of minutes during which Pubsplash showed a healthy stream with a running clock while listeners heard silence. Sending, connecting and the initial handshake are all now bounded.
@@ -51,6 +73,14 @@
 - Pressing "Scan for new plugins" or "Rescan all plugins" more than once started that many scans at the same time, all racing over the same plugins and each running its own scanning processes — which made scanning far slower and could make plugins fail to scan that would otherwise have been fine. The second and later presses are now ignored while a scan is running, as they were always meant to be.
 
 ### Changes
+
+- Releases are now checked before they are built: the tag has to be a plain version number, it has to match the version inside Pubsplash, and the changelog has to have a matching heading with nothing left under Unreleased. The test suite also runs before anything is packaged, so a release can no longer be published without it having passed.
+
+- Pubsplash is now built with link-time optimization, which lets the compiler optimize across the whole program rather than one piece at a time. This mainly benefits the audio mixer and the MP3 encoder, which do their work in small steps every ten milliseconds.
+
+- Releases now carry a separate `pubsplash-<version>-debug-symbols.zip`. It is not needed to run Pubsplash and most people should ignore it; it is what turns a crash dump into a readable report, so it is worth mentioning if you are reporting a crash.
+
+- The source code now passes Clippy, Rust's linter, with no warnings left. Nothing Pubsplash does has changed; this is tidying, so that a real problem the linter finds in future is not lost among hundreds of harmless notes.
 
 
 ## 0.1.3

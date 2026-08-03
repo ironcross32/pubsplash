@@ -195,8 +195,10 @@ mod tests {
 
     #[test]
     fn a_blank_host_is_reported_rather_than_dialled() {
-        let mut config = SpeechConfig::default();
-        config.star_host = "  ".into();
+        let config = SpeechConfig {
+            star_host: "  ".into(),
+            ..Default::default()
+        };
         let engine = Star::new(&config);
         assert!(matches!(
             engine.voices().unwrap_err(),

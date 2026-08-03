@@ -258,8 +258,8 @@ fn run_scan(
         });
     }
 
-    plugins.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    rejected.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
+    plugins.sort_by_key(|a| a.name.to_lowercase());
+    rejected.sort_by_key(|a| a.path.to_lowercase());
     let _ = events.send(ScanEvent::Finished {
         cache: PluginCache {
             version: super::types::CACHE_VERSION,
@@ -278,6 +278,41 @@ enum HelperResult {
     Failed(String),
     Skipped,
     Cancelled,
+}
+
+/// How much of one helper's output is kept. The real answer is a single line of
+/// JSON; anything past this is a plugin logging into our pipe, and only the
+/// start of it could ever be useful. Reading continues past the cap so the child
+/// never blocks — the excess is simply thrown away.
+const MAX_CAPTURED_OUTPUT: usize = 1 << 20;
+
+/// Starts a thread that reads `pipe` to EOF, keeping at most
+/// [`MAX_CAPTURED_OUTPUT`] bytes. The thread is what keeps the child running:
+/// see the call site.
+fn drain_pipe<R: std::io::Read + Send + 'static>(mut pipe: R) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut kept: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 8192];
+        loop {
+            match pipe.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let room = MAX_CAPTURED_OUTPUT.saturating_sub(kept.len());
+                    if room > 0 {
+                        kept.extend_from_slice(&buf[..n.min(room)]);
+                    }
+                }
+            }
+        }
+        String::from_utf8_lossy(&kept).into_owned()
+    })
+}
+
+/// Collects what [`drain_pipe`] read. A panicked reader yields an empty string,
+/// which reads downstream as "the helper said nothing" — the same as a plugin
+/// that failed silently.
+fn join_pipe(handle: std::thread::JoinHandle<String>) -> String {
+    handle.join().unwrap_or_default()
 }
 
 /// Runs the helper for one plugin. There is deliberately no timeout: plugins
@@ -310,6 +345,13 @@ fn run_helper(
         Err(e) => return HelperResult::Failed(format!("could not run scan helper: {e}")),
     };
 
+    // Drained *while* the child runs, not after it exits. A pipe holds a few
+    // tens of KB; a plugin chatty enough to fill either one would block on its
+    // own `write` and never reach exit, and the wait below has no timeout by
+    // design — so reading afterwards is a hang with no way out but Cancel.
+    let out_reader = child.stdout.take().map(drain_pipe);
+    let err_reader = child.stderr.take().map(drain_pipe);
+
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -330,15 +372,8 @@ fn run_helper(
         }
     };
 
-    let mut stdout = String::new();
-    let mut stderr = String::new();
-    use std::io::Read;
-    if let Some(mut pipe) = child.stdout.take() {
-        let _ = pipe.read_to_string(&mut stdout);
-    }
-    if let Some(mut pipe) = child.stderr.take() {
-        let _ = pipe.read_to_string(&mut stderr);
-    }
+    let stdout = out_reader.map(join_pipe).unwrap_or_default();
+    let stderr = err_reader.map(join_pipe).unwrap_or_default();
 
     if status.success() {
         match serde_json::from_str::<ScanOutput>(stdout.trim()) {

@@ -155,11 +155,48 @@ pub enum EngineEvent {
     SourceError { name: String, message: String },
     /// A capture source that had reported `SourceError` is running again.
     SourceRecovered { name: String },
-    /// Encoding stopped because the outgoing channel closed.
-    EncodingStopped,
+    /// The recording is running and the file exists. The UI waits for this
+    /// rather than assuming the command worked: creating the file or the
+    /// encoder can fail, and a broadcaster who is told a recording is running
+    /// finds out otherwise only when they go looking for the file.
+    RecordingStarted { path: std::path::PathBuf },
+    /// The recording could not be started, or has stopped on its own. The
+    /// engine has already finalized whatever existed, so there is nothing left
+    /// running by the time this arrives.
+    ///
+    /// `start` is set only for the first case; see [`RecordingStartFailure`].
+    RecordingFailed {
+        message: String,
+        start: Option<RecordingStartFailure>,
+    },
+    /// The stream encoder could not be created; nothing is being encoded.
+    EncodingFailed { message: String },
+    /// Encoding stopped. `reason` is `None` when the outgoing channel simply
+    /// closed, which is the ordinary end of a stream, and `Some` when the
+    /// encoder itself failed mid-stream — the case the user has to be told
+    /// about, because the stream is still nominally up and sending nothing.
+    EncodingStopped { reason: Option<String> },
     /// The engine finished applying the FX portion of a `SetRouting` and queued
     /// every replaced chain for reclamation on the UI thread.
     BusesApplied,
+}
+
+/// Why a recording failed *to start*, as opposed to one that stopped after
+/// running for a while.
+///
+/// The two are told apart because only the start case reaches the user as a
+/// modal: it is the direct answer to a button press with no other visible
+/// effect, so it cannot fire on its own and interrupt a live broadcast. A
+/// recording that dies mid-way can, and stays a log line and a Home tab state.
+/// The fields are what the UI needs to say something a broadcaster can act on
+/// rather than repeating an OS error string.
+#[derive(Debug, Clone)]
+pub struct RecordingStartFailure {
+    /// The file the recording was to be written to.
+    pub path: std::path::PathBuf,
+    /// The filesystem error that stopped the file being created; `None` when
+    /// the encoder, not the file, was the problem.
+    pub kind: Option<std::io::ErrorKind>,
 }
 
 /// The engine thread's end of the event channel.
@@ -214,14 +251,14 @@ impl ExternalFeeds {
         // Written in one bulk chunk rather than a sample at a time: this holds
         // a global mutex, and a few seconds of speech is a six-figure loop.
         let take = producer.slots().min(samples.len());
-        if take > 0 {
-            if let Ok(mut chunk) = producer.write_chunk_uninit(take) {
-                let (first, second) = chunk.as_mut_slices();
-                write_uninit(first, &samples[..first.len()]);
-                write_uninit(second, &samples[first.len()..take]);
-                // SAFETY: both slices were just fully initialized above.
-                unsafe { chunk.commit_all() };
-            }
+        if take > 0
+            && let Ok(mut chunk) = producer.write_chunk_uninit(take)
+        {
+            let (first, second) = chunk.as_mut_slices();
+            write_uninit(first, &samples[..first.len()]);
+            write_uninit(second, &samples[first.len()..take]);
+            // SAFETY: both slices were just fully initialized above.
+            unsafe { chunk.commit_all() };
         }
         if take == samples.len() {
             FeedResult::Done
@@ -616,32 +653,60 @@ fn engine_loop(
                             encoder = Some((enc, out));
                             dropped_blocks = 0;
                         }
-                        Err(e) => log::error!("Failed to create MP3 encoder: {e}"),
+                        Err(e) => {
+                            log::error!("Failed to create MP3 encoder: {e}");
+                            events.send(EngineEvent::EncodingFailed {
+                                message: e.to_string(),
+                            });
+                        }
                     }
                 }
                 Ok(EngineCommand::StopEncoding) => {
-                    if let Some((enc, out)) = encoder.take() {
-                        if let Ok(tail) = enc.finish() {
-                            let _ = out.try_send(tail);
-                        }
+                    if let Some((enc, out)) = encoder.take()
+                        && let Ok(tail) = enc.finish()
+                    {
+                        let _ = out.try_send(tail);
                     }
                 }
                 Ok(EngineCommand::StartRecording { bitrate_kbps, path }) => {
                     if recorder.is_none() {
-                        match (
+                        // Both halves are built before either is kept, and a
+                        // failure keeps neither: half a recording is a file
+                        // open forever with nothing written to it, and — since
+                        // the guard above is `recorder.is_none()` — a recording
+                        // the user can never start again this session.
+                        let (failure, kind) = match (
                             encoder::Mp3Encoder::new(bitrate_kbps),
                             recorder::RecorderHandle::start(&path),
                         ) {
                             (Ok(enc), Ok(rec)) => {
                                 rec_encoder = Some(enc);
                                 recorder = Some(rec);
+                                events.send(EngineEvent::RecordingStarted { path: path.clone() });
+                                (None, None)
                             }
-                            (Err(e), _) => {
-                                log::error!("Failed to create recording encoder: {e}")
+                            (Err(e), rec) => {
+                                if let Ok(rec) = rec {
+                                    rec.finish();
+                                }
+                                (
+                                    Some(format!(
+                                        "the recording encoder could not be created: {e}"
+                                    )),
+                                    None,
+                                )
                             }
-                            (_, Err(e)) => {
-                                log::error!("Failed to start recording {path:?}: {e}")
-                            }
+                            (_, Err(e)) => (
+                                Some(format!("{} could not be created: {e}", path.display())),
+                                Some(e.kind()),
+                            ),
+                        };
+                        if let Some(message) = failure {
+                            log::error!("Recording did not start: {message}");
+                            events.send(EngineEvent::RecordingFailed {
+                                message,
+                                start: Some(RecordingStartFailure { path, kind }),
+                            });
                         }
                     }
                 }
@@ -731,14 +796,14 @@ fn engine_loop(
             // fits and dropping the rest is the only option that keeps the
             // mixer on its cadence.
             let take = out.producer.slots().min(monitor_block.len());
-            if take > 0 {
-                if let Ok(mut chunk) = out.producer.write_chunk_uninit(take) {
-                    let (first, second) = chunk.as_mut_slices();
-                    write_uninit(first, &monitor_block[..first.len()]);
-                    write_uninit(second, &monitor_block[first.len()..take]);
-                    // SAFETY: both slices were just fully initialized above.
-                    unsafe { chunk.commit_all() };
-                }
+            if take > 0
+                && let Ok(mut chunk) = out.producer.write_chunk_uninit(take)
+            {
+                let (first, second) = chunk.as_mut_slices();
+                write_uninit(first, &monitor_block[..first.len()]);
+                write_uninit(second, &monitor_block[first.len()..take]);
+                // SAFETY: both slices were just fully initialized above.
+                unsafe { chunk.commit_all() };
             }
         }
 
@@ -771,7 +836,7 @@ fn engine_loop(
                         // Consumer went away (stream ended remotely).
                         Err(TrySendError::Closed(_)) => {
                             encoder = None;
-                            events.send(EngineEvent::EncodingStopped);
+                            events.send(EngineEvent::EncodingStopped { reason: None });
                         }
                     }
                 }
@@ -779,19 +844,39 @@ fn engine_loop(
                 Err(e) => {
                     log::error!("MP3 encode error: {e}");
                     encoder = None;
-                    events.send(EngineEvent::EncodingStopped);
+                    events.send(EngineEvent::EncodingStopped {
+                        reason: Some(e.to_string()),
+                    });
                 }
             }
         }
 
+        // Either failure here ends the recording outright rather than limping.
+        // Clearing only `rec_encoder` used to leave `recorder` holding the file
+        // open with nothing more ever written to it, and the `recorder.is_none()`
+        // guard on `StartRecording` then refused every attempt to start again.
         if let (Some(enc), Some(rec)) = (&mut rec_encoder, &mut recorder) {
-            match enc.encode(&pcm_i16) {
-                Ok(bytes) if !bytes.is_empty() => rec.write(bytes.to_vec()),
-                Ok(_) => {}
-                Err(e) => {
-                    log::error!("Recording encode error: {e}");
-                    rec_encoder = None;
-                }
+            let failure = match enc.encode(&pcm_i16) {
+                Ok(bytes) if !bytes.is_empty() => match rec.write(bytes.to_vec()) {
+                    recorder::Written::Queued => None,
+                    // The writer is behind but alive; it has logged the drop
+                    // itself. A recording with a gap in it is still worth
+                    // finishing.
+                    recorder::Written::Dropped => None,
+                    recorder::Written::WriterGone => {
+                        Some("the recording writer stopped".to_string())
+                    }
+                },
+                Ok(_) => None,
+                Err(e) => Some(format!("the recording encoder failed: {e}")),
+            };
+            if let Some(message) = failure {
+                log::error!("Recording stopped: {message}");
+                finalize_recording(&mut rec_encoder, &mut recorder);
+                events.send(EngineEvent::RecordingFailed {
+                    message,
+                    start: None,
+                });
             }
         }
 
@@ -898,12 +983,12 @@ fn finalize_recording(
     rec_encoder: &mut Option<encoder::Mp3Encoder>,
     recorder: &mut Option<recorder::RecorderHandle>,
 ) {
-    if let Some(enc) = rec_encoder.take() {
-        if let Ok(tail) = enc.finish() {
-            if let Some(rec) = recorder.as_ref() {
-                rec.write(tail.to_vec());
-            }
-        }
+    if let Some(enc) = rec_encoder.take()
+        && let Ok(tail) = enc.finish()
+        && let Some(rec) = recorder.as_ref()
+    {
+        // The verdict is moot here: the file is closing either way.
+        let _ = rec.write(tail.to_vec());
     }
     if let Some(rec) = recorder.take() {
         rec.finish();

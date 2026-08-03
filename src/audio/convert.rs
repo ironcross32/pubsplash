@@ -99,7 +99,7 @@ pub fn read_wav_samples<R: std::io::Read>(
 }
 
 pub fn convert_to_stereo(samples: &[f32], source_channels: usize) -> Result<Vec<f32>, String> {
-    if source_channels == 0 || samples.len() % source_channels != 0 {
+    if source_channels == 0 || !samples.len().is_multiple_of(source_channels) {
         return Err("WAV data ended in the middle of a frame".into());
     }
 

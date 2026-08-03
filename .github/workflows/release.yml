@@ -29,6 +29,49 @@ jobs:
       - name: Install Ninja
         run: choco install ninja -y
 
+      # A tag is the only thing that publishes, so it is the only thing that
+      # has to agree with the tree. The tag names the artifacts (see the Zip and
+      # upload steps) while the About box and the installer take their version
+      # from Cargo.toml -- so a mismatch ships binaries that disagree with their
+      # own file names. Manual runs have no tag and skip this.
+      - name: Check the tag against Cargo.toml and the changelog
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$tag' is not vX.Y.Z"
+            exit 1
+          fi
+          version="${tag#v}"
+          # The first `version = "..."` in Cargo.toml is the package's own; the
+          # dependency table comes later and must not be matched.
+          manifest="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "(.*)"/\1/')"
+          if [[ "$manifest" != "$version" ]]; then
+            echo "::error::Tag '$tag' does not match Cargo.toml version '$manifest'"
+            exit 1
+          fi
+          if ! grep -qE "^## +\[?${version//./\\.}\]?" changelog.md; then
+            echo "::error::changelog.md has no '## $version' heading"
+            exit 1
+          fi
+          # agents.md: entries live under Unreleased until a release moves them
+          # into a version heading. Anything still there at tag time did not make
+          # it into the release notes.
+          leftovers="$(awk '/^## /{ inside = ($0 ~ /^## +Unreleased/) ; next } inside && /^[-*] /' changelog.md || true)"
+          if [[ -n "$leftovers" ]]; then
+            echo "::error::changelog.md still has entries under '## Unreleased':"
+            echo "$leftovers"
+            exit 1
+          fi
+          echo "Releasing $version"
+
+      # Before packaging, not after: a release that fails its own test suite
+      # should never reach the packaging step, let alone the Releases page.
+      - name: Run tests
+        run: cargo test --all-targets
+
       - name: Install cargo-packager
         run: cargo install cargo-packager --locked
 
@@ -69,8 +112,24 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path bundle/* -DestinationPath "pubsplash-${{ github.ref_name }}.zip"
 
+      # `debug = "line-tables-only"` in Cargo.toml's release profile puts a .pdb
+      # beside each binary. Nothing needs them to run, so they stay out of both
+      # the installer and the portable ZIP -- but a minidump from src/crash.rs
+      # is only readable in our own frames with the .pdb the exe was built with,
+      # and that exact build exists nowhere else once the runner is gone. So
+      # they ship as their own asset, matched to the release by its tag.
+      #
+      # Globbed rather than listed: cargo names a .pdb after the crate, not the
+      # binary (pubsplash-scan.exe -> pubsplash_scan.pdb), and dependency PDBs
+      # live under target/release/deps, not here.
+      - name: Zip debug symbols
+        shell: pwsh
+        run: Compress-Archive -Path target/release/*.pdb -DestinationPath "pubsplash-${{ github.ref_name }}-debug-symbols.zip"
+
       # Manual runs stop here: the build is downloadable from the run's summary
-      # page for 90 days, and nothing is published.
+      # page for 90 days, and nothing is published. The `pubsplash-*.zip` glob
+      # here and in the release step covers the debug-symbols ZIP as well as the
+      # portable one; both are named from the tag.
       - name: Upload artifacts
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4

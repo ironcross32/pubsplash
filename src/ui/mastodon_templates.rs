@@ -97,15 +97,11 @@ pub fn edit(parent: &dyn WxWidget, existing: Option<&Template>) -> Option<Templa
     dialog.set_sizer(dialog_sizer, true);
 
     {
-        let dialog = dialog.clone();
         help_button.on_click(move |_| show_help(&dialog));
     }
 
     let result: Rc<RefCell<Option<Template>>> = Rc::new(RefCell::new(None));
     {
-        let dialog = dialog.clone();
-        let kind_choice = kind_choice.clone();
-        let text_input = text_input.clone();
         let result = result.clone();
         ok.on_click(move |_| {
             let text = text_input.get_value().trim().to_string();
@@ -126,14 +122,13 @@ pub fn edit(parent: &dyn WxWidget, existing: Option<&Template>) -> Option<Templa
         });
     }
     {
-        let dialog = dialog.clone();
         cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
 
     dialog.show_modal();
     dialog.destroy();
-    let template = result.borrow().clone();
-    template
+
+    result.borrow().clone()
 }
 
 /// The token reference. Read-only but selectable, so the user can copy a token
@@ -164,7 +159,6 @@ pub fn show_help(parent: &dyn WxWidget) {
 
     let close = super::dismiss_button(&panel, "Close");
     {
-        let dialog = dialog.clone();
         close.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
 
@@ -200,7 +194,6 @@ pub fn prompt_one_shot(parent: &dyn WxWidget) -> Option<String> {
     super::help::tag(&input, "dialog.mastodonResume.text", "Resumed stream post");
     input.select_all();
     {
-        let input = input.clone();
         input.clone().on_set_focus(move |event| {
             input.select_all();
             event.skip(true);
@@ -232,14 +225,11 @@ pub fn prompt_one_shot(parent: &dyn WxWidget) -> Option<String> {
     dialog.set_sizer(dialog_sizer, true);
 
     {
-        let dialog = dialog.clone();
         help_button.on_click(move |_| show_help(&dialog));
     }
 
     let result: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     {
-        let dialog = dialog.clone();
-        let input = input.clone();
         let result = result.clone();
         ok.on_click(move |_| {
             let text = input.get_value().trim().to_string();
@@ -255,14 +245,13 @@ pub fn prompt_one_shot(parent: &dyn WxWidget) -> Option<String> {
         });
     }
     {
-        let dialog = dialog.clone();
         cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
 
     dialog.show_modal();
     dialog.destroy();
-    let text = result.borrow().clone();
-    text
+
+    result.borrow().clone()
 }
 
 /// Saves an edited template list: sorts it the way the list shows it, writes it

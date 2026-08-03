@@ -19,6 +19,13 @@
 
 use wxdragon::prelude::*;
 
+/// A shared "refill this list" callback, where `Some(row)` names the row the
+/// selection should land on afterwards and `None` keeps the current index.
+///
+/// Every caller is a deliberate edit — the only time a list in this app may
+/// move its own selection (see the module docs above).
+pub type Refresh<T> = std::rc::Rc<dyn Fn(Option<&T>)>;
+
 /// The selected row as an index into the backing data, or `None` when the row
 /// isn't one — either nothing is selected, or the list is showing its
 /// placeholder.

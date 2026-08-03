@@ -87,6 +87,27 @@ windows = { version = "0.62", features = ["Win32_Media_Speech", "Win32_Media_Aud
 # five seconds. Dev-only, so it cannot affect the shipped runtime.
 tokio = { version = "1", features = ["test-util"] }
 
+# The mix path is a chain of small cross-crate calls run every 10 ms block --
+# rtrb ring pops, ChannelStrip gain and fade math, FxChain wet/dry ramps, the
+# LAME shim -- and with the default 16 codegen units and no cross-crate LTO the
+# inliner cannot see across any of those boundaries. This costs a couple of
+# minutes of single-threaded link time per release build; the wxWidgets CMake
+# build is unaffected by it.
+#
+# `panic` stays at the default `unwind` deliberately: wxdragon wraps every event
+# handler in `catch_unwind` and swallows the error (see `logging.rs`), so a panic
+# inside a UI callback is currently survivable and logged. `abort` would turn
+# each one into a dead app mid-stream.
+#
+# Line tables put a .pdb next to the exe, which is what makes the minidumps
+# `crash.rs` writes readable in our own frames rather than bare addresses. It
+# does not meaningfully grow the exe, and cargo-packager bundles only the
+# binaries named below, so the installer does not carry it.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+debug = "line-tables-only"
+
 [package.metadata.packager]
 before-packaging-command = "cargo build --release --bin pubsplash --bin pubsplash-scan --bin pubsplash-soundpack --bin soundpack"
 identifier = "com.github.ironcross32.pubsplash"

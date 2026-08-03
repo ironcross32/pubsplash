@@ -138,10 +138,13 @@ pub enum NetEvent {
 pub struct EventSender(crossbeam_channel::Sender<NetEvent>);
 
 impl EventSender {
-    pub fn send(&self, event: NetEvent) -> Result<(), crossbeam_channel::SendError<NetEvent>> {
+    /// The error is boxed because `NetEvent` is large and every send returns
+    /// this type, hot path included; only the failure needs to carry the event
+    /// back, and no caller looks at it.
+    pub fn send(&self, event: NetEvent) -> Result<(), Box<crossbeam_channel::SendError<NetEvent>>> {
         let result = self.0.send(event);
         wxdragon::wake_up_idle();
-        result
+        result.map_err(Box::new)
     }
 }
 
@@ -309,10 +312,10 @@ fn direct_icecast_target(
 
 async fn end_active_stream(active: &ActiveStream, connection: Option<&Connection>) {
     active.abort();
-    if let Some(client) = connection.and_then(audiopub_client) {
-        if let Err(e) = client.end_stream(&active.stream_id).await {
-            log::warn!("Ending stream reported: {e}");
-        }
+    if let Some(client) = connection.and_then(audiopub_client)
+        && let Err(e) = client.end_stream(&active.stream_id).await
+    {
+        log::warn!("Ending stream reported: {e}");
     }
 }
 
@@ -322,80 +325,98 @@ async fn net_loop(mut commands: tokio_mpsc::UnboundedReceiver<NetCommand>, event
 
     while let Some(command) = commands.recv().await {
         match command {
-            NetCommand::Connect { profile } => match profile {
-                ServiceProfile::Audiopub {
-                    id,
-                    nickname,
-                    site_url,
-                    email,
-                    password,
-                } => {
-                    let client = match AudioPubClient::new(&site_url) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            let _ = events.send(NetEvent::ConnectFailed {
-                                message: e.to_string(),
-                            });
-                            continue;
-                        }
-                    };
-                    match client.login(&email, password.as_str()).await {
-                        Ok(()) => match client.stream_identity().await {
-                            Ok(identity) => {
-                                let display_name = nickname;
-                                connection = Some(Connection::Audiopub {
-                                    client: Arc::new(client),
-                                    identity,
-                                    site_url,
-                                });
-                                let _ = events.send(NetEvent::Connected {
-                                    service_id: id,
-                                    display_name,
-                                });
-                            }
+            NetCommand::Connect { profile } => {
+                // Before `connection` is replaced, not after: `end_active_stream`
+                // ends the server-side row through the client that started it,
+                // and every later cleanup path (`Disconnect`, `StopStream`)
+                // reads whatever `connection` holds *then*. Connecting over a
+                // live stream used to hand the old stream's id to the new
+                // client — or to no client at all, when the new service was a
+                // direct Icecast target with no API — leaving the old row live
+                // until the server expired it. `StartStream` has had this guard
+                // for the same reason.
+                if let Some(previous) = stream.take() {
+                    log::warn!(
+                        "Connecting to a service while a stream is live; ending the old one"
+                    );
+                    end_active_stream(&previous, connection.as_ref()).await;
+                    let _ = events.send(NetEvent::StreamEnded);
+                }
+                match profile {
+                    ServiceProfile::Audiopub {
+                        id,
+                        nickname,
+                        site_url,
+                        email,
+                        password,
+                    } => {
+                        let client = match AudioPubClient::new(&site_url) {
+                            Ok(c) => c,
                             Err(e) => {
                                 let _ = events.send(NetEvent::ConnectFailed {
-                                    message: format!("logged in, but no stream access: {e}"),
+                                    message: e.to_string(),
+                                });
+                                continue;
+                            }
+                        };
+                        match client.login(&email, password.as_str()).await {
+                            Ok(()) => match client.stream_identity().await {
+                                Ok(identity) => {
+                                    let display_name = nickname;
+                                    connection = Some(Connection::Audiopub {
+                                        client: Arc::new(client),
+                                        identity,
+                                        site_url,
+                                    });
+                                    let _ = events.send(NetEvent::Connected {
+                                        service_id: id,
+                                        display_name,
+                                    });
+                                }
+                                Err(e) => {
+                                    let _ = events.send(NetEvent::ConnectFailed {
+                                        message: format!("logged in, but no stream access: {e}"),
+                                    });
+                                }
+                            },
+                            Err(e) => {
+                                let _ = events.send(NetEvent::ConnectFailed {
+                                    message: e.to_string(),
                                 });
                             }
-                        },
-                        Err(e) => {
-                            let _ = events.send(NetEvent::ConnectFailed {
-                                message: e.to_string(),
-                            });
                         }
                     }
-                }
-                ServiceProfile::Icecast {
-                    id,
-                    nickname,
-                    server,
-                    port,
-                    mount,
-                    username,
-                    password,
-                } => {
-                    let armed = Connection::Icecast {
+                    ServiceProfile::Icecast {
+                        id,
+                        nickname,
                         server,
                         port,
                         mount,
                         username,
                         password,
-                    };
-                    match direct_icecast_target(&armed, "audio/mpeg") {
-                        Ok(_) => {
-                            connection = Some(armed);
-                            let _ = events.send(NetEvent::Connected {
-                                service_id: id,
-                                display_name: nickname,
-                            });
-                        }
-                        Err(message) => {
-                            let _ = events.send(NetEvent::ConnectFailed { message });
+                    } => {
+                        let armed = Connection::Icecast {
+                            server,
+                            port,
+                            mount,
+                            username,
+                            password,
+                        };
+                        match direct_icecast_target(&armed, "audio/mpeg") {
+                            Ok(_) => {
+                                connection = Some(armed);
+                                let _ = events.send(NetEvent::Connected {
+                                    service_id: id,
+                                    display_name: nickname,
+                                });
+                            }
+                            Err(message) => {
+                                let _ = events.send(NetEvent::ConnectFailed { message });
+                            }
                         }
                     }
                 }
-            },
+            }
             NetCommand::Disconnect => {
                 if let Some(active) = stream.take() {
                     end_active_stream(&active, connection.as_ref()).await;
@@ -965,8 +986,9 @@ fn spawn_icecast_sender(
                         conn = fresh;
                         let gap_seconds = started.elapsed().as_secs();
                         log::info!("Icecast source: reconnected after {gap_seconds}s");
-                        let _ = events
-                            .send(NetEvent::AudioLink(AudioLinkState::Restored { gap_seconds }));
+                        let _ = events.send(NetEvent::AudioLink(AudioLinkState::Restored {
+                            gap_seconds,
+                        }));
                         said_halfway = false;
                         first_failure = None;
                         attempt = 0;
@@ -1076,7 +1098,9 @@ mod chat_feed_tests {
             let (mut sock, _) = listener.accept().await.unwrap();
             let mut buf = vec![0u8; 4096];
             let _ = sock.read(&mut buf).await.unwrap();
-            sock.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await.unwrap();
+            sock.write_all(b"HTTP/1.1 100 Continue\r\n\r\n")
+                .await
+                .unwrap();
             let _ = sock.read(&mut buf).await;
             drop(sock);
 
@@ -1085,7 +1109,9 @@ mod chat_feed_tests {
             let mut head = vec![0u8; 4096];
             let n = sock.read(&mut head).await.unwrap();
             let request = String::from_utf8_lossy(&head[..n]).to_string();
-            sock.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await.unwrap();
+            sock.write_all(b"HTTP/1.1 100 Continue\r\n\r\n")
+                .await
+                .unwrap();
             let mut audio = vec![0u8; 4];
             sock.read_exact(&mut audio).await.unwrap();
             let _ = report_tx.send((request, audio));
@@ -1167,7 +1193,9 @@ mod chat_feed_tests {
             let (mut sock, _) = listener.accept().await.unwrap();
             let mut buf = vec![0u8; 4096];
             let _ = sock.read(&mut buf).await.unwrap();
-            sock.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await.unwrap();
+            sock.write_all(b"HTTP/1.1 100 Continue\r\n\r\n")
+                .await
+                .unwrap();
             let _ = sock.read(&mut buf).await;
             drop(sock);
             // Every reconnect is refused with a reason that cannot change.
@@ -1269,7 +1297,11 @@ mod chat_feed_tests {
     #[test]
     fn terminal_errors_give_up_without_burning_the_budget() {
         // A wrong stream key answers the same way in four minutes' time.
-        let step = plan_retry(&rejected(401, "HTTP/1.0 401 Unauthorized"), 0, Duration::ZERO);
+        let step = plan_retry(
+            &rejected(401, "HTTP/1.0 401 Unauthorized"),
+            0,
+            Duration::ZERO,
+        );
         assert!(matches!(step, Step::GiveUp { .. }));
     }
 

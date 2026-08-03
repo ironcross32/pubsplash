@@ -193,24 +193,6 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     dialog.set_sizer(dialog_sizer, true);
 
     let update_field_visibility = {
-        let panel = panel.clone();
-        let service_type = service_type.clone();
-        let url_label = url_label.clone();
-        let url_input = url_input.clone();
-        let email_label = email_label.clone();
-        let email_input = email_input.clone();
-        let password_label = password_label.clone();
-        let password_input = password_input.clone();
-        let server_label = server_label.clone();
-        let server_input = server_input.clone();
-        let port_label = port_label.clone();
-        let port_input = port_input.clone();
-        let mount_label = mount_label.clone();
-        let mount_input = mount_input.clone();
-        let username_label = username_label.clone();
-        let username_input = username_input.clone();
-        let icecast_password_label = icecast_password_label.clone();
-        let icecast_password_input = icecast_password_input.clone();
         move || {
             let audiopub = service_type.get_selection() != 1;
             url_label.show(audiopub);
@@ -235,7 +217,6 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
 
     let refresh_services = {
         let app = app.clone();
-        let services_list = services_list.clone();
         move |select_id: Option<&str>| {
             let config = app.config.borrow();
             let services = &config.connection.sites;
@@ -277,9 +258,6 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
 
     let update_actions = {
         let app = app.clone();
-        let services_list = services_list.clone();
-        let rename_service = rename_service.clone();
-        let remove_service = remove_service.clone();
         move || {
             let config = app.config.borrow();
             let enabled = super::list::selection(&services_list, config.connection.sites.len())
@@ -292,14 +270,6 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     };
 
     let clear_fields = {
-        let url_input = url_input.clone();
-        let email_input = email_input.clone();
-        let password_input = password_input.clone();
-        let server_input = server_input.clone();
-        let port_input = port_input.clone();
-        let mount_input = mount_input.clone();
-        let username_input = username_input.clone();
-        let icecast_password_input = icecast_password_input.clone();
         move || {
             url_input.set_value("");
             email_input.set_value("");
@@ -314,19 +284,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
 
     let load_fields = {
         let app = app.clone();
-        let services_list = services_list.clone();
-        let service_type = service_type.clone();
-        let url_input = url_input.clone();
-        let email_input = email_input.clone();
-        let password_input = password_input.clone();
-        let server_input = server_input.clone();
-        let port_input = port_input.clone();
-        let mount_input = mount_input.clone();
-        let username_input = username_input.clone();
-        let icecast_password_input = icecast_password_input.clone();
-        let update_field_visibility = update_field_visibility.clone();
         let update_actions = update_actions.clone();
-        let clear_fields = clear_fields.clone();
         move || {
             let config = app.config.borrow();
             let Some(index) = super::list::selection(&services_list, config.connection.sites.len())
@@ -358,7 +316,6 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
 
     let update_connect_label = {
         let app = app.clone();
-        let connect_button = connect_button.clone();
         move || {
             // While any connection exists the button reads Disconnect, even
             // if a different service is highlighted.
@@ -387,7 +344,6 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     }
 
     {
-        let update_field_visibility = update_field_visibility.clone();
         service_type
             .clone()
             .on_selected(move |_| update_field_visibility());
@@ -396,25 +352,11 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     // Save typed fields into the selected service on Connect and Close.
     let save_fields = {
         let app = app.clone();
-        let services_list = services_list.clone();
-        let service_type = service_type.clone();
-        let url_input = url_input.clone();
-        let email_input = email_input.clone();
-        let password_input = password_input.clone();
-        let server_input = server_input.clone();
-        let port_input = port_input.clone();
-        let mount_input = mount_input.clone();
-        let username_input = username_input.clone();
-        let icecast_password_input = icecast_password_input.clone();
         move || {
             let count = app.config.borrow().connection.sites.len();
-            let Some(index) = super::list::selection(&services_list, count) else {
-                return None;
-            };
+            let index = super::list::selection(&services_list, count)?;
             let mut config = app.config.borrow_mut();
-            let Some(service) = config.connection.sites.get_mut(index) else {
-                return None;
-            };
+            let service = config.connection.sites.get_mut(index)?;
             if !service.is_main() {
                 service.service_type = if service_type.get_selection() == 1 {
                     StreamingServiceType::Icecast
@@ -446,7 +388,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
 
     {
         let app = app.clone();
-        let dialog_for_add = dialog.clone();
+        let dialog_for_add = dialog;
         let refresh_services = refresh_services.clone();
         let load_fields = load_fields.clone();
         add_service.on_click(move |_| {
@@ -471,8 +413,8 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
 
     {
         let app = app.clone();
-        let services_list_for_rename = services_list.clone();
-        let dialog_for_rename = dialog.clone();
+        let services_list_for_rename = services_list;
+        let dialog_for_rename = dialog;
         let refresh_services = refresh_services.clone();
         rename_service.on_click(move |_| {
             let count = app.config.borrow().connection.sites.len();
@@ -501,27 +443,27 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
             )
             .with_default_value(&current_name)
             .build();
-            if entry.show_modal() == ID_OK {
-                if let Some(name) = entry.get_value() {
-                    let name = name.trim();
-                    if name.is_empty() {
-                        show_error(&dialog_for_rename, "Rename service", "Enter a nickname.");
-                        return;
-                    }
-                    if let Some(service) = app.config.borrow_mut().connection.site_mut(&id) {
-                        service.nickname = name.to_string();
-                    }
-                    app.save_config();
-                    refresh_services(Some(&id));
+            if entry.show_modal() == ID_OK
+                && let Some(name) = entry.get_value()
+            {
+                let name = name.trim();
+                if name.is_empty() {
+                    show_error(&dialog_for_rename, "Rename service", "Enter a nickname.");
+                    return;
                 }
+                if let Some(service) = app.config.borrow_mut().connection.site_mut(&id) {
+                    service.nickname = name.to_string();
+                }
+                app.save_config();
+                refresh_services(Some(&id));
             }
         });
     }
 
     {
         let app = app.clone();
-        let services_list_for_remove = services_list.clone();
-        let dialog_for_remove = dialog.clone();
+        let services_list_for_remove = services_list;
+        let dialog_for_remove = dialog;
         let refresh_services = refresh_services.clone();
         let load_fields = load_fields.clone();
         remove_service.on_click(move |_| {
@@ -555,7 +497,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         let app = app.clone();
         let update_connect_label = update_connect_label.clone();
         let save_fields = save_fields.clone();
-        let dialog_for_connect = dialog.clone();
+        let dialog_for_connect = dialog;
         connect_button.on_click(move |_| {
             let connected = app.run.borrow().connected_service.is_some();
             if connected {
@@ -587,7 +529,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     }
 
     {
-        let dialog_for_close = dialog.clone();
+        let dialog_for_close = dialog;
         let save_fields = save_fields.clone();
         close_button.on_click(move |_| {
             let _ = save_fields();
@@ -598,8 +540,8 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     // Register so connection results arriving on the pump report inside
     // this dialog and return focus to the connect button.
     *app.connect_ui.borrow_mut() = Some(super::ConnectUi {
-        dialog: dialog.clone(),
-        connect_button: connect_button.clone(),
+        dialog,
+        connect_button,
     });
     dialog.show_modal();
     *app.connect_ui.borrow_mut() = None;
@@ -640,11 +582,9 @@ fn prompt_new_service(parent: &Dialog) -> Option<(String, StreamingServiceType)>
         .with_label("Cancel")
         .build();
     {
-        let dialog = dialog.clone();
         ok.on_click(move |_| dialog.end_modal(ID_OK));
     }
     {
-        let dialog = dialog.clone();
         cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
     buttons.add(&ok, 0, SizerFlag::All, 4);

@@ -15,7 +15,7 @@ const PAGE_STEP: i32 = 10;
 
 /// Opens the sends dialog for one source of one scene.
 pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let (source_name, to_master, sends, bus_names) = {
@@ -135,7 +135,6 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
 
     let refresh_list = {
         let working = working.clone();
-        let send_list = send_list.clone();
         move |select: Option<usize>| {
             let previous = send_list.get_selection();
             let labels: Vec<String> = working
@@ -159,8 +158,6 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     // slider so the screen reader says which send it now controls).
     let load_selected = {
         let working = working.clone();
-        let send_list = send_list.clone();
-        let level_slider = level_slider.clone();
         let announcer = announcer.clone();
         move || {
             let count = working.borrow().len();
@@ -190,7 +187,6 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     // the screen reader. Shared by the slider's mouse and keyboard paths.
     let apply_level = {
         let working = working.clone();
-        let send_list = send_list.clone();
         let refresh_list = refresh_list.clone();
         let announcer = announcer.clone();
         move |value: u32| {
@@ -216,7 +212,6 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     // Slider edits the selected send's level (mouse drags and the mnemonic path;
     // the keys are handled below).
     {
-        let level_slider = level_slider.clone();
         let apply_level = apply_level.clone();
         level_slider
             .clone()
@@ -226,7 +221,7 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     // Every movement key is handled here rather than by the native trackbar,
     // whose directions are backwards; see `slider_uia::key_step`.
     {
-        let level_slider_for_keys = level_slider.clone();
+        let level_slider_for_keys = level_slider;
         let apply_level = apply_level.clone();
         level_slider.clone().on_key_down(move |event| {
             let Some((code, _)) = super::key_of(&event) else {
@@ -254,7 +249,6 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
         let working = working.clone();
         let refresh_list = refresh_list.clone();
         let load_selected = load_selected.clone();
-        let dialog = dialog.clone();
         let bus_names = bus_names.clone();
         add.on_click(move |_| {
             let available: Vec<String> = {
@@ -296,7 +290,6 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     // Remove send (button or Delete key on the list).
     let remove_selected = {
         let working = working.clone();
-        let send_list = send_list.clone();
         let refresh_list = refresh_list.clone();
         let load_selected = load_selected.clone();
         move || {
@@ -324,11 +317,9 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     }
 
     {
-        let dialog = dialog.clone();
         ok.on_click(move |_| dialog.end_modal(ID_OK));
     }
     {
-        let dialog = dialog.clone();
         cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
 

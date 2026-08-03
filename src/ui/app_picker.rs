@@ -114,9 +114,6 @@ pub fn pick_application(frame: &Frame, current: &str) -> Pick {
     let repopulate = {
         let apps = apps.clone();
         let shown = shown.clone();
-        let list = list.clone();
-        let sound_only = sound_only.clone();
-        let intro = intro.clone();
         let current = current.clone();
         move |keep: Option<String>| {
             let apps = apps.borrow();
@@ -167,7 +164,6 @@ pub fn pick_application(frame: &Frame, current: &str) -> Pick {
     // checkbox does not silently move what Select would commit to.
     let selected_exe = {
         let shown = shown.clone();
-        let list = list.clone();
         move || -> Option<String> {
             let shown = shown.borrow();
             let index = super::list::selection(&list, shown.len())?;
@@ -198,7 +194,6 @@ pub fn pick_application(frame: &Frame, current: &str) -> Pick {
     let commit = {
         let picked = picked.clone();
         let selected_exe = selected_exe.clone();
-        let dialog = dialog.clone();
         move || {
             let exe = selected_exe();
             log::debug!("app picker: committing {exe:?}");
@@ -221,11 +216,9 @@ pub fn pick_application(frame: &Frame, current: &str) -> Pick {
         list.clone().on_item_double_clicked(move |_| commit());
     }
     {
-        let dialog = dialog.clone();
         cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
     {
-        let dialog = dialog.clone();
         let picked = picked.clone();
         type_name.on_click(move |_| {
             *picked.borrow_mut() = Some(Pick::TypeAName);

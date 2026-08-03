@@ -62,11 +62,11 @@ fn back_up(path: &Path, what: &str) {
 
 /// Serializes `value` to `path`, creating the parent directory if needed.
 pub fn save<T: Serialize>(value: &T, path: &Path, what: &str) {
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            log::error!("Failed to create the directory for {what}: {e}");
-            return;
-        }
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        log::error!("Failed to create the directory for {what}: {e}");
+        return;
     }
     match serde_json::to_string_pretty(value) {
         Ok(json) => {
@@ -130,6 +130,24 @@ mod tests {
             std::fs::read_to_string(path.with_extension("json.bak2")).unwrap(),
             "second corruption"
         );
+    }
+
+    #[test]
+    fn a_second_save_replaces_the_first() {
+        // `write_atomic` renames the temp file over a destination that already
+        // exists. That works on Windows because `std::fs::rename` is
+        // `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING` — an external review
+        // claimed otherwise, which would mean every save after the first
+        // silently kept the old value. This pins the behaviour.
+        let path = temp_path("store-replace.json");
+        let _ = std::fs::remove_file(&path);
+
+        save(&1u32, &path, "Test file");
+        assert!(matches!(load::<u32>(&path, "Test file"), Load::Ok(1)));
+        save(&2u32, &path, "Test file");
+        assert!(matches!(load::<u32>(&path, "Test file"), Load::Ok(2)));
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

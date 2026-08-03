@@ -23,16 +23,16 @@ pub const FADE_SECONDS: f32 = 0.05;
 pub fn pull_block(ring: &mut rtrb::Consumer<f32>, dest: &mut [f32]) {
     let take = ring.slots().min(dest.len());
     let mut filled = 0;
-    if take > 0 {
-        if let Ok(chunk) = ring.read_chunk(take) {
-            // The requested range can straddle the end of the buffer.
-            let (first, second) = chunk.as_slices();
-            dest[..first.len()].copy_from_slice(first);
-            dest[first.len()..first.len() + second.len()].copy_from_slice(second);
-            filled = first.len() + second.len();
-            // Every sample handed out was copied, so all of it is consumed.
-            chunk.commit_all();
-        }
+    if take > 0
+        && let Ok(chunk) = ring.read_chunk(take)
+    {
+        // The requested range can straddle the end of the buffer.
+        let (first, second) = chunk.as_slices();
+        dest[..first.len()].copy_from_slice(first);
+        dest[first.len()..first.len() + second.len()].copy_from_slice(second);
+        filled = first.len() + second.len();
+        // Every sample handed out was copied, so all of it is consumed.
+        chunk.commit_all();
     }
     dest[filled..].fill(0.0);
 }

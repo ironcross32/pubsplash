@@ -7,6 +7,7 @@ mod app_picker;
 mod buses;
 mod chat;
 mod connect_dialog;
+mod cue_feed;
 mod fx;
 mod fx_editor;
 mod fx_params;
@@ -191,10 +192,28 @@ pub struct Runtime {
     /// Drives the record button and its mutual exclusion with streaming; a
     /// recording running alongside a stream does *not* set it.
     pub recording: bool,
+    /// A `StartRecording` has been sent and the engine has not answered yet.
+    ///
+    /// The engine creates the file and the encoder, either of which can fail, so
+    /// `recording` is only set once `EngineEvent::RecordingStarted` says the
+    /// recording is genuinely running. Setting it optimistically meant a
+    /// broadcaster could finish a session believing they had a recording and
+    /// find no file. The button reads "Stop recording" during this gap — a press
+    /// that appears to do nothing is worse than one that is answered a tick
+    /// later — but nothing else claims a recording exists.
+    pub recording_pending: bool,
     /// When the current recording started, whichever way it was started —
     /// standalone or alongside a stream. The one signal for "a recording is
     /// underway", and the clock the overview list shows when not streaming.
     pub recording_started: Option<Instant>,
+    /// Whether the outgoing MP3 encoder has failed.
+    ///
+    /// Distinct from [`Runtime::audio_link`]: a reconnect is the network losing
+    /// a healthy stream and getting it back on its own, whereas this is local
+    /// and terminal — nothing is being encoded, so nothing can be sent, and no
+    /// amount of waiting fixes it. Both make the Home tab stop claiming a
+    /// healthy broadcast, which is the point.
+    pub encoder_failed: bool,
     /// Running processes matched to the active scene's Application sources,
     /// keyed by the configured process name (lowercased). Refreshed by the
     /// pump; drives both the labels and the pid an Application source captures.
@@ -488,7 +507,9 @@ impl Default for Runtime {
             stream_info: StreamInfo::default(),
             stream_info_set: false,
             recording: false,
+            recording_pending: false,
             recording_started: None,
+            encoder_failed: false,
             apps: HashMap::new(),
             failing: HashSet::new(),
             // Seeded from the catalog prewarmed before the UI was built, so the
@@ -676,6 +697,9 @@ pub struct App {
     pub orphaned_plugins: RefCell<Vec<Arc<crate::vst::PluginInstance>>>,
     /// Named FX chains saved to fx_chains.json.
     pub chain_library: RefCell<crate::fx::FxChainLibrary>,
+    /// One worker per sound-event source, feeding its cues into the mixer. See
+    /// [`cue_feed`] for why this is not a thread per cue.
+    pub cues: cue_feed::CueFeeds,
     /// Open native plugin editor windows.
     pub open_editors: RefCell<Vec<fx_editor::EditorWindow>>,
     /// Set once the frame is closing. The pump timer keeps firing during the
@@ -770,9 +794,7 @@ fn live_stream_url(site_url: &str, stream_id: &str) -> Option<String> {
 /// for needs its own sentence. Pure so the wording is testable without an `App`.
 fn no_stream_page_reason(stream: &StreamState) -> &'static str {
     match stream {
-        StreamState::Idle => {
-            "You are not streaming. Start a stream, and this will open its page."
-        }
+        StreamState::Idle => "You are not streaming. Start a stream, and this will open its page.",
         StreamState::Starting => {
             "The stream is still connecting, so its page is not available yet."
         }
@@ -857,10 +879,12 @@ fn play_sound_event(app: &Rc<App>, event: crate::soundpack::StreamEvent) {
         };
         crate::audio::cue::play_samples_async(samples.clone());
         if to_stream {
-            let feeds = app.engine.external_feeds.clone();
-            std::thread::spawn(move || {
-                feeds.feed_all(&source_name, &samples, "Sound events");
-            });
+            // Queued to the source's own worker rather than given a thread of
+            // its own: "incoming chat" fires once per message, and a thread per
+            // message is a thread count that follows the chat rate. See
+            // [`cue_feed`].
+            app.cues
+                .play(&source_name, &app.engine.external_feeds, samples);
         }
     }
 }
@@ -1372,7 +1396,11 @@ impl App {
         }
         self.engine.send(EngineCommand::StopEncoding);
         self.engine.send(EngineCommand::StopRecording);
-        self.run.borrow_mut().recording_started = None;
+        {
+            let mut run = self.run.borrow_mut();
+            run.recording_started = None;
+            run.recording_pending = false;
+        }
         self.net.send(NetCommand::StopStream);
         self.refresh_stream_ui();
     }
@@ -1382,7 +1410,7 @@ impl App {
     pub fn start_recording(&self) {
         {
             let run = self.run.borrow();
-            if run.recording || !matches!(run.stream, StreamState::Idle) {
+            if run.recording || run.recording_pending || !matches!(run.stream, StreamState::Idle) {
                 return;
             }
         }
@@ -1398,21 +1426,20 @@ impl App {
             bitrate_kbps: bitrate,
             path,
         });
-        {
-            let mut run = self.run.borrow_mut();
-            run.recording = true;
-            run.recording_started = Some(Instant::now());
-        }
+        // `recording` and its clock wait for `RecordingStarted`; see
+        // `Runtime::recording_pending`.
+        self.run.borrow_mut().recording_pending = true;
         self.refresh_stream_ui();
     }
 
     pub fn stop_recording(&self) {
         {
             let mut run = self.run.borrow_mut();
-            if !run.recording {
+            if !run.recording && !run.recording_pending {
                 return;
             }
             run.recording = false;
+            run.recording_pending = false;
             run.recording_started = None;
         }
         self.engine.send(EngineCommand::StopRecording);
@@ -1432,7 +1459,13 @@ impl App {
         let streaming_or_starting = !matches!(run.stream, StreamState::Idle);
         let phase = StreamPhase::of(&run.stream);
         let recording = run.recording;
-        let record_label = if recording {
+        // The button and the streaming lockout follow the *request*, so a press
+        // is answered at once and a stream cannot be started into a recording
+        // that is still being set up. Everything else — the status line, the
+        // clock, the announcement — follows `recording`, which is only true once
+        // the engine says the file exists.
+        let busy_recording = run.recording || run.recording_pending;
+        let record_label = if busy_recording {
             "Stop re&cording"
         } else {
             "Start &recording"
@@ -1449,9 +1482,9 @@ impl App {
                 shown.stream_label = button_label.to_string();
             }
             // Streaming and standalone recording are mutually exclusive.
-            if shown.stream_enabled != Some(!recording) {
-                w.stream_button.enable(!recording);
-                shown.stream_enabled = Some(!recording);
+            if shown.stream_enabled != Some(!busy_recording) {
+                w.stream_button.enable(!busy_recording);
+                shown.stream_enabled = Some(!busy_recording);
             }
             if shown.record_label != record_label {
                 w.record_button.set_label(record_label);
@@ -1509,21 +1542,68 @@ fn recording_filename() -> String {
     )
 }
 
+/// Checks the Audio Pub site URL and returns it normalized (no trailing slash).
+///
+/// This used to be `starts_with("http")`, which passes `httpfoo://evil.example`
+/// and `http://` with no host at all — the account email and password are
+/// posted to whatever this resolves to, so a mistyped or imported value is a
+/// credential leak rather than a failed connection. Parsing settles the scheme
+/// and the host properly; embedded credentials and a fragment are refused
+/// because a real site URL has neither and both are signs of a pasted mistake.
+///
+/// Plain `http` is allowed on purpose — a self-hosted instance on a LAN is a
+/// legitimate setup — but it is logged, because the password does travel in the
+/// clear over it.
+fn validate_site_url(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Enter a full Audiopub URL starting with https://".to_string());
+    }
+    let url = reqwest::Url::parse(trimmed).map_err(|_| {
+        format!("{trimmed:?} is not a valid URL. It should look like https://audiopub.site")
+    })?;
+    match url.scheme() {
+        "https" => {}
+        "http" => log::warn!(
+            "Audiopub site {} uses plain http; your email and password will be sent unencrypted",
+            url.host_str().unwrap_or("(no host)")
+        ),
+        other => {
+            return Err(format!(
+                "{other:?} is not a web address scheme. The URL should start with https://"
+            ));
+        }
+    }
+    if url.host_str().is_none_or(str::is_empty) {
+        return Err(
+            "That URL has no site name in it. It should look like https://audiopub.site"
+                .to_string(),
+        );
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(
+            "Remove the user name and password from the URL; enter them in the fields below."
+                .to_string(),
+        );
+    }
+    if url.fragment().is_some() {
+        return Err("Remove the '#' and everything after it from the URL.".to_string());
+    }
+    Ok(trimmed.trim_end_matches('/').to_string())
+}
+
 pub fn service_profile_from_site(site: &SiteConfig) -> Result<ServiceProfile, String> {
     let nickname = site.display_name();
     match site.service_type {
         StreamingServiceType::Audiopub => {
-            let site_url = site.url.trim();
-            if site_url.is_empty() || !site_url.starts_with("http") {
-                return Err("Enter a full Audiopub URL starting with http(s)://".to_string());
-            }
+            let site_url = validate_site_url(&site.url)?;
             if site.email.trim().is_empty() || site.password.is_empty() {
                 return Err("Enter your email and password first.".to_string());
             }
             Ok(ServiceProfile::Audiopub {
                 id: site.id.clone(),
                 nickname,
-                site_url: site_url.to_string(),
+                site_url,
                 email: site.email.trim().to_string(),
                 password: site.password.clone(),
             })
@@ -1575,7 +1655,7 @@ pub fn start_streaming(app: &Rc<App>) {
         }
     }
     if !app.run.borrow().stream_info_set {
-        let frame = app.widgets(|w| w.frame.clone());
+        let frame = app.widgets(|w| w.frame);
         let Some(frame) = frame else { return };
         if !stream_info_dialog::show(app, &frame) {
             return;
@@ -1588,6 +1668,9 @@ pub fn start_streaming(app: &Rc<App>) {
     // buffered audio is worse than a gap.
     let (tx, rx) = tokio::sync::mpsc::channel(200);
     let bitrate = app.config.borrow().audio.bitrate_kbps;
+    // A new encoder is a clean slate; the last stream's failure must not stay
+    // on this one's status line.
+    app.run.borrow_mut().encoder_failed = false;
     app.engine.send(EngineCommand::StartEncoding {
         bitrate_kbps: bitrate,
         out: tx,
@@ -1606,10 +1689,11 @@ pub fn start_streaming(app: &Rc<App>) {
             bitrate_kbps: bitrate,
             path,
         });
-        // Not `run.recording`: that flag means a *standalone* recording and
-        // disables the stream button. This is the clock and the overview's
-        // "a recording is underway" signal.
-        app.run.borrow_mut().recording_started = Some(Instant::now());
+        // The clock and the overview's "a recording is underway" signal both
+        // wait for the engine's `RecordingStarted`, exactly as a standalone
+        // recording does — an unwritable archive directory fails here too, and
+        // failing silently is worse mid-stream, not better.
+        app.run.borrow_mut().recording_pending = true;
     }
     app.net.send(NetCommand::StartStream {
         title: info.title,
@@ -1625,6 +1709,54 @@ pub fn start_streaming(app: &Rc<App>) {
     }
     app.refresh_stream_ui();
     chat::refresh_chat_list(app);
+}
+
+/// Turns a recording that would not start into something a broadcaster can act
+/// on: which folder was wrong and what to do about it, rather than the OS's
+/// "(os error 3)".
+///
+/// Kept pure so it can be tested; the caller shows it. `streaming` adds the
+/// reassurance that the stream itself is unaffected — the "Record this stream"
+/// path fails through here too, and a modal mid-broadcast otherwise reads as
+/// the stream having died. `detail` is the engine's own wording, repeated last
+/// so that what a user quotes in a bug report matches the log line.
+fn recording_failure_message(
+    failure: &crate::audio::RecordingStartFailure,
+    detail: &str,
+    streaming: bool,
+) -> String {
+    use std::io::ErrorKind;
+
+    let folder = failure
+        .path
+        .parent()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| failure.path.display().to_string());
+    let cause = match failure.kind {
+        Some(ErrorKind::NotFound) => format!(
+            "The folder {folder} does not exist.\n\n\
+             Choose a folder that does exist under Recording folder in Preferences, \
+             or create that one."
+        ),
+        Some(ErrorKind::PermissionDenied) => format!(
+            "Pubsplash is not allowed to write to {folder}.\n\n\
+             Choose a different folder under Recording folder in Preferences."
+        ),
+        Some(_) => format!(
+            "The recording file could not be created in {folder}.\n\n\
+             Check that the folder exists and can be written to, or choose another \
+             one under Recording folder in Preferences."
+        ),
+        None => "The MP3 encoder for the recording could not be created, so nothing \
+                 could be written."
+            .to_string(),
+    };
+    let mut message = format!("The recording did not start.\n\n{cause}");
+    if streaming {
+        message.push_str("\n\nThe stream itself is unaffected and is still live.");
+    }
+    message.push_str(&format!("\n\nDetails: {detail}"));
+    message
 }
 
 pub fn format_duration(d: std::time::Duration) -> String {
@@ -1743,8 +1875,8 @@ pub fn build(app: Rc<App>) {
     let (usage_list, usage_refresh) = api::build(&app, &api_panel);
 
     *app.widgets.borrow_mut() = Some(Widgets {
-        frame: frame.clone(),
-        notebook: notebook.clone(),
+        frame,
+        notebook,
         overview,
         stream_button,
         record_button,
@@ -1752,7 +1884,7 @@ pub fn build(app: Rc<App>) {
         mixer_panel,
         mixer_inner: RefCell::new(None),
         mixer_strips: RefCell::new(Vec::new()),
-        home_panel: home_panel.clone(),
+        home_panel,
         chat_list,
         chat_input,
         chat_reconnect,
@@ -1816,7 +1948,7 @@ pub fn build(app: Rc<App>) {
     // Exit confirmation while streaming (menu Exit and ALT+F4 both arrive here).
     {
         let app = app.clone();
-        let frame_for_close = frame.clone();
+        let frame_for_close = frame;
         frame.on_close(move |event| {
             // Already sequencing an exit: keep the frame alive for the cue
             // rather than restarting (or short-circuiting) the teardown.
@@ -1855,6 +1987,9 @@ pub fn build(app: Rc<App>) {
             // Close plugin editors (and remove the keyboard hook) before the
             // main frame goes away.
             fx_editor::close_all(&app);
+            // Cue workers hold an `ExternalFeeds` clone and would otherwise sit
+            // on an empty queue through the whole shutdown cue.
+            app.cues.stop_all();
             // Vanish immediately: the user asked to exit, so the app should
             // look gone while the cue finishes in the background.
             frame_for_close.show(false);
@@ -1926,7 +2061,7 @@ pub fn build(app: Rc<App>) {
             mastodon_post::maybe_periodic(&app);
 
             ticks = ticks.wrapping_add(1);
-            if ticks % 2 == 0 {
+            if ticks.is_multiple_of(2) {
                 // Every two seconds: ask for a fresh look at which applications
                 // are running, so their strips say which app they are and (once
                 // running) actually capture it. The enumeration happens on a
@@ -1951,15 +2086,15 @@ pub fn build(app: Rc<App>) {
     // Auto-connect to the last used service.
     {
         let config = app.config.borrow();
-        if let Some(service_id) = config.connection.last_used_site.clone() {
-            if let Some(site) = config.connection.site(&service_id) {
-                match service_profile_from_site(site) {
-                    Ok(profile) => {
-                        app.run.borrow_mut().connecting = true;
-                        app.net.send(NetCommand::Connect { profile });
-                    }
-                    Err(message) => log::warn!("Skipping auto-connect: {message}"),
+        if let Some(service_id) = config.connection.last_used_site.clone()
+            && let Some(site) = config.connection.site(&service_id)
+        {
+            match service_profile_from_site(site) {
+                Ok(profile) => {
+                    app.run.borrow_mut().connecting = true;
+                    app.net.send(NetCommand::Connect { profile });
                 }
+                Err(message) => log::warn!("Skipping auto-connect: {message}"),
             }
         }
     }
@@ -2025,7 +2160,7 @@ fn finish_close(app: &Rc<App>) {
     help::uninstall_announcer();
     // Same for the mixer sliders' providers, while their windows live.
     home::drop_mixer_strips(app);
-    let frame = app.widgets.borrow().as_ref().map(|w| w.frame.clone());
+    let frame = app.widgets.borrow().as_ref().map(|w| w.frame);
     if let Some(frame) = frame {
         // Destroy explicitly (deferred, wx-managed) rather than skipping to
         // the platform default. On the native ALT+F4 path, skipping hands the
@@ -2098,7 +2233,7 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
     frame.set_menu_bar(menu_bar);
 
     let app = app.clone();
-    let frame = frame.clone();
+    let frame = *frame;
     frame
         .clone()
         .on_menu_selected(move |event| match event.get_id() {
@@ -2297,7 +2432,7 @@ pub fn sync_fast_timer(app: &Rc<App>) {
         *slot = None;
         return;
     }
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let timer = Timer::new(&frame);
@@ -2392,6 +2527,8 @@ fn pump_events(app: &Rc<App>) {
     run_pending();
 
     let mut stream_ui_dirty = false;
+    // Set by the recording arm below; shown once the drain is over.
+    let mut recording_failed: Option<String> = None;
     report_speech_problems(app);
     let mut chat_arrived = 0usize;
     let mut sound_events = Vec::new();
@@ -2439,7 +2576,7 @@ fn pump_events(app: &Rc<App>) {
                         // The frame is cloned out before the modal opens:
                         // `widgets` stays borrowed for the whole closure, and
                         // a modal runs a nested event loop underneath it.
-                        if let Some(frame) = app.widgets(|w| w.frame.clone()) {
+                        if let Some(frame) = app.widgets(|w| w.frame) {
                             show_error(&frame, "Connection failed", &text);
                         }
                     }
@@ -2498,7 +2635,7 @@ fn pump_events(app: &Rc<App>) {
                 // while this holds the pump. This is the one streaming failure
                 // that has given up for good -- every recoverable one is a chat
                 // line -- which is why it may be a modal at all.
-                if let Some(frame) = app.widgets(|w| w.frame.clone()) {
+                if let Some(frame) = app.widgets(|w| w.frame) {
                     show_error(&frame, "Streaming problem", &message);
                 }
             }
@@ -2572,7 +2709,57 @@ fn pump_events(app: &Rc<App>) {
             crate::audio::EngineEvent::SourceRecovered { name } => {
                 labels_dirty |= app.run.borrow_mut().failing.remove(&name);
             }
-            crate::audio::EngineEvent::EncodingStopped => {}
+            // The recording lifecycle. All four report through the log and the
+            // Home tab's status line, never a modal: these can fire while the
+            // user is mid-sentence on another tab, and the CLAUDE.md rule is
+            // that Pubsplash reports on itself in the log and the stream state.
+            crate::audio::EngineEvent::RecordingStarted { path } => {
+                log::info!("Recording to {}", path.display());
+                let mut run = app.run.borrow_mut();
+                run.recording_pending = false;
+                // `recording` means a *standalone* recording — the flag that
+                // locks out the stream button. A recording that came up
+                // alongside a stream gets the clock and nothing else, which is
+                // what the stream state here distinguishes.
+                run.recording = matches!(run.stream, StreamState::Idle);
+                run.recording_started = Some(Instant::now());
+                stream_ui_dirty = true;
+            }
+            crate::audio::EngineEvent::RecordingFailed { message, start } => {
+                log::error!("Recording stopped: {message}");
+                let mut run = app.run.borrow_mut();
+                run.recording_pending = false;
+                run.recording = false;
+                run.recording_started = None;
+                // A recording that never started is the answer to a button
+                // press and has no other visible effect, so it is the one
+                // recording event the user is told about directly. Built here
+                // and shown after the drain: a modal runs a nested event loop,
+                // and nothing should sit undrained underneath one.
+                if let Some(failure) = start {
+                    let streaming = !matches!(run.stream, StreamState::Idle);
+                    recording_failed =
+                        Some(recording_failure_message(&failure, &message, streaming));
+                }
+                stream_ui_dirty = true;
+            }
+            crate::audio::EngineEvent::EncodingFailed { message } => {
+                log::error!("Nothing is being sent to the stream: {message}");
+                app.run.borrow_mut().encoder_failed = true;
+                stream_ui_dirty = true;
+            }
+            // `None` is the ordinary end of a stream — the sender's receiver
+            // went away because the stream stopped — and says nothing. `Some`
+            // is the encoder dying underneath a stream that is still nominally
+            // live, which the user has to be told about.
+            crate::audio::EngineEvent::EncodingStopped { reason: None } => {}
+            crate::audio::EngineEvent::EncodingStopped {
+                reason: Some(message),
+            } => {
+                log::error!("Nothing is being sent to the stream: {message}");
+                app.run.borrow_mut().encoder_failed = true;
+                stream_ui_dirty = true;
+            }
             // The audio thread has swapped to the new FX chains and returned
             // the replaced ones. Reclaim them here so plugin teardown follows
             // the UI-thread hosting contract.
@@ -2647,6 +2834,11 @@ fn pump_events(app: &Rc<App>) {
     }
     if chat_arrived > 0 {
         chat::append_new_messages(app, chat_arrived);
+    }
+    // Last, with the Home tab already repainted behind it and every event
+    // drained, so the nested event loop this opens has nothing left to trip on.
+    if let Some(message) = recording_failed {
+        app.widgets(|w| show_error(&w.frame, "Recording", &message));
     }
 }
 
@@ -2752,6 +2944,69 @@ fn pump_scan_events(app: &Rc<App>) {
     // Cancel and Skip work while the scanner is stuck inside one plugin and no
     // events are flowing at all.
     drop(progress);
+}
+
+#[cfg(test)]
+mod recording_failure_tests {
+    use super::recording_failure_message;
+    use crate::audio::RecordingStartFailure;
+    use std::io::ErrorKind;
+    use std::path::PathBuf;
+
+    fn failure(kind: Option<ErrorKind>) -> RecordingStartFailure {
+        RecordingStartFailure {
+            path: PathBuf::from(r"h:\shows\recording_2026-08-03.mp3"),
+            kind,
+        }
+    }
+
+    /// The whole point: the user typed a folder that is not there, so the
+    /// message has to name the *folder*, not the file, and say where to fix it.
+    #[test]
+    fn a_missing_folder_is_named_along_with_where_to_change_it() {
+        let text = recording_failure_message(&failure(Some(ErrorKind::NotFound)), "detail", false);
+        assert!(text.contains(r"h:\shows"), "{text}");
+        assert!(!text.contains("recording_2026-08-03.mp3"), "{text}");
+        assert!(text.contains("does not exist"), "{text}");
+        assert!(text.contains("Preferences"), "{text}");
+    }
+
+    #[test]
+    fn a_read_only_folder_says_so_rather_than_blaming_the_folder_for_missing() {
+        let text =
+            recording_failure_message(&failure(Some(ErrorKind::PermissionDenied)), "detail", false);
+        assert!(text.contains("not allowed to write"), "{text}");
+        assert!(!text.contains("does not exist"), "{text}");
+    }
+
+    /// No `kind` means the file was fine and the encoder was not, so nothing in
+    /// the message may send the user off to change their folder.
+    #[test]
+    fn an_encoder_failure_does_not_blame_the_folder() {
+        let text = recording_failure_message(&failure(None), "detail", false);
+        assert!(text.contains("encoder"), "{text}");
+        assert!(!text.contains(r"h:\shows"), "{text}");
+    }
+
+    /// A modal arriving mid-broadcast reads as the stream having died unless it
+    /// says otherwise — and must not say otherwise when there is no stream.
+    #[test]
+    fn the_stream_is_only_mentioned_when_there_is_one() {
+        let f = failure(Some(ErrorKind::NotFound));
+        assert!(recording_failure_message(&f, "detail", true).contains("still live"));
+        assert!(!recording_failure_message(&f, "detail", false).contains("still live"));
+    }
+
+    /// What the user quotes has to be what is in the log.
+    #[test]
+    fn the_engines_own_wording_is_carried_through() {
+        let text = recording_failure_message(
+            &failure(Some(ErrorKind::NotFound)),
+            "the system cannot find the path specified. (os error 3)",
+            false,
+        );
+        assert!(text.contains("(os error 3)"), "{text}");
+    }
 }
 
 #[cfg(test)]
@@ -2886,6 +3141,43 @@ mod chat_feed_line_tests {
         assert!(lines[2].contains("15 seconds"), "{}", lines[2]);
     }
 
+    /// The account email and password are posted to whatever this URL names, so
+    /// "starts with http" was not a check — it passed `httpfoo://`, a URL with
+    /// no host at all, and a URL carrying its own credentials.
+    #[test]
+    fn a_site_url_that_is_not_a_web_address_is_refused() {
+        for bad in [
+            "",
+            "   ",
+            "httpfoo://evil.example",
+            "http://",
+            "file:///C:/windows",
+            "javascript:alert(1)",
+            "not a url at all",
+            "https://user:pw@audiopub.site",
+            "https://audiopub.site#fragment",
+        ] {
+            assert!(
+                super::validate_site_url(bad).is_err(),
+                "{bad:?} should have been refused"
+            );
+        }
+    }
+
+    /// Plain http is a legitimate self-hosted setup, so it is allowed — with a
+    /// warning in the log, which is where Pubsplash reports on itself.
+    #[test]
+    fn a_real_site_url_is_accepted_and_normalized() {
+        assert_eq!(
+            super::validate_site_url("  https://audiopub.site/  ").as_deref(),
+            Ok("https://audiopub.site")
+        );
+        assert_eq!(
+            super::validate_site_url("http://192.168.1.10:3000").as_deref(),
+            Ok("http://192.168.1.10:3000")
+        );
+    }
+
     /// The audio reconnect keeps the *same* stream id, and the server's
     /// poisoned-listener bug is keyed on that id — so restoring audio cannot
     /// promise chat is flowing. `chat_feed_line` stays the authority on chat.
@@ -2953,7 +3245,7 @@ mod token_tests {
     /// something different, since the item is never greyed out.
     #[test]
     fn every_missing_stream_page_has_its_own_reason() {
-        use super::{no_stream_page_reason, StreamState};
+        use super::{StreamState, no_stream_page_reason};
         let live = |id: &str| StreamState::Live {
             stream_id: id.to_string(),
         };

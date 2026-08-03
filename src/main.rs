@@ -65,12 +65,11 @@ fn main() {
                         Err(e) => log::warn!("Could not load the sound pack {pack}: {e}"),
                     }
                 }
-                if play_startup {
-                    if let Err(e) =
+                if play_startup
+                    && let Err(e) =
                         audio::cue::play_sound_kind_blocking(soundpack::SoundKind::Startup)
-                    {
-                        log::warn!("Could not play the startup sound: {e}");
-                    }
+                {
+                    log::warn!("Could not play the startup sound: {e}");
                 }
             })
             .ok();
@@ -108,6 +107,7 @@ fn main() {
             fx: RefCell::new(ui::FxRuntime::default()),
             orphaned_plugins: RefCell::new(Vec::new()),
             chain_library: RefCell::new(chain_library.clone()),
+            cues: Default::default(),
             open_editors: RefCell::new(Vec::new()),
             shutting_down: std::cell::Cell::new(false),
             config_dirty: std::cell::Cell::new(false),

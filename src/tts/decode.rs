@@ -65,13 +65,10 @@ fn decode_with_symphonia(bytes: Vec<u8>, extension: &str) -> Result<Vec<f32>, St
         .max(1);
     let mut buffer: Option<SampleBuffer<f32>> = None;
 
-    loop {
-        let packet = match format.next_packet() {
-            Ok(packet) => packet,
-            // Any error here is end-of-stream in practice: symphonia reports a
-            // clean end as an IO error, and a torn tail is still worth playing.
-            Err(_) => break,
-        };
+    // Any error from `next_packet` is end-of-stream in practice: symphonia
+    // reports a clean end as an IO error, and a torn tail is still worth
+    // playing, so the loop ends rather than failing.
+    while let Ok(packet) = format.next_packet() {
         if packet.track_id() != track_id {
             continue;
         }

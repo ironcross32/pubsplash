@@ -180,10 +180,11 @@ unsafe extern "system" fn subclass_proc(
     _id: usize,
     _refdata: usize,
 ) -> LRESULT {
-    if msg == WM_GETOBJECT && lparam.0 as i32 == UiaRootObjectId {
-        if let Some(provider) = REGISTRY.with(|r| r.borrow().get(&(hwnd.0 as isize)).cloned()) {
-            return unsafe { UiaReturnRawElementProvider(hwnd, wparam, lparam, &provider) };
-        }
+    if msg == WM_GETOBJECT
+        && lparam.0 as i32 == UiaRootObjectId
+        && let Some(provider) = REGISTRY.with(|r| r.borrow().get(&(hwnd.0 as isize)).cloned())
+    {
+        return unsafe { UiaReturnRawElementProvider(hwnd, wparam, lparam, &provider) };
     }
     if msg == WM_GETDLGCODE {
         // Keep whatever the trackbar asked for (DLGC_WANTARROWS, which is what

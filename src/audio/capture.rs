@@ -48,6 +48,66 @@ fn backoff(attempt: u32) -> Duration {
     Duration::from_millis(SCHEDULE_MS[index])
 }
 
+/// How long the device event is waited on per loop turn, in milliseconds. Short
+/// enough that a retiring thread releases the endpoint promptly — `stop` is only
+/// checked at the top of the loop, and a replacement thread is spawned for the
+/// same device the instant `SetSources` lands, so a long wait here means the two
+/// overlap on the device.
+pub const WAIT_MS: u32 = 200;
+
+/// A failed wait that returned this quickly did not wait at all.
+const IMMEDIATE: Duration = Duration::from_millis(50);
+
+/// How many immediate failures in a row before the wait is declared broken.
+/// Twenty is about a second of spinning — long enough that a burst of scheduler
+/// noise cannot reach it, short enough that the reopen happens while the user is
+/// still wondering why the source went quiet.
+const STALL_LIMIT: u32 = 20;
+
+/// Tracks a wait that keeps failing without waiting.
+///
+/// `wasapi 0.23`'s `Handle::wait_for_event` maps *every* non-signalled return to
+/// the same `WasapiError::EventTimeout` — `WAIT_TIMEOUT` and `WAIT_FAILED`
+/// alike — and does not expose the raw handle, so there is no way to ask which
+/// one happened. But the two do not look alike from outside: a real timeout
+/// takes the full budget, while a dead handle fails instantly. A run of instant
+/// failures is therefore a wait that will never work again, and the loop around
+/// it is spinning a core rather than waiting.
+///
+/// Counting them turns that into an error the caller's existing reopen-with-
+/// backoff loop already knows how to handle.
+#[derive(Default)]
+pub struct StallGuard {
+    immediate_failures: u32,
+}
+
+impl StallGuard {
+    /// Runs one wait. `wait` reports whether the event was signalled; the
+    /// elapsed time decides how a `false` is read.
+    ///
+    /// Returns `Err` once the wait has failed instantly [`STALL_LIMIT`] times
+    /// running, naming `what` in the message.
+    pub fn wait(&mut self, what: &str, wait: impl FnOnce() -> bool) -> Result<(), String> {
+        let started = std::time::Instant::now();
+        if wait() {
+            self.immediate_failures = 0;
+            return Ok(());
+        }
+        if started.elapsed() >= IMMEDIATE {
+            // A genuine timeout, which is normal: loopback with nothing playing
+            // times out every turn forever.
+            self.immediate_failures = 0;
+            return Ok(());
+        }
+        self.immediate_failures += 1;
+        if self.immediate_failures >= STALL_LIMIT {
+            self.immediate_failures = 0;
+            return Err(format!("waiting on the {what} event stopped working"));
+        }
+        Ok(())
+    }
+}
+
 /// Sleeps up to `total`, waking early once `stop` is set.
 fn sleep_interruptibly(total: Duration, stop: &AtomicBool) {
     const SLICE: Duration = Duration::from_millis(50);
@@ -190,6 +250,7 @@ fn run(
     started();
 
     let mut byte_queue: std::collections::VecDeque<u8> = std::collections::VecDeque::new();
+    let mut guard = StallGuard::default();
     while !stop.load(Ordering::Relaxed) {
         let new_frames = capture
             .get_next_packet_size()
@@ -202,15 +263,11 @@ fn run(
                 .map_err(|e| format!("reading from the device: {e}"))?;
             push_f32(&mut byte_queue, producer);
         }
-        // Short enough that a retiring thread releases the endpoint promptly:
-        // `stop` is only checked at the top of this loop, and a replacement
-        // thread is spawned for the same device the instant `SetSources`
-        // lands, so a long wait here means the two overlap on the device.
-        if event.wait_for_event(200).is_err() {
-            // Timeouts are normal for loopback with no audio playing; only
-            // treat it as fatal if the client stopped.
-            continue;
-        }
+        // Timeouts are normal here — loopback with nothing playing times out
+        // every turn — so a failed wait is not itself an error. `StallGuard`
+        // separates those from a wait that has stopped waiting at all, which
+        // would otherwise spin this loop on a core forever; see its docs.
+        guard.wait("capture", || event.wait_for_event(WAIT_MS).is_ok())?;
     }
     let _ = client.stop_stream();
     Ok(())
@@ -227,22 +284,22 @@ fn push_f32(bytes: &mut std::collections::VecDeque<u8>, producer: &mut Producer<
     // that was 96,000 atomic index stores a second per source, plus four
     // `pop_front`s each.
     let take = producer.slots().min(available);
-    if take > 0 {
-        if let Ok(mut chunk) = producer.write_chunk_uninit(take) {
-            let (first, second) = chunk.as_mut_slices();
-            for slot in first.iter_mut().chain(second.iter_mut()) {
-                // `available` was computed from the queue length, so each of
-                // these four bytes is there.
-                slot.write(f32::from_le_bytes([
-                    bytes.pop_front().unwrap(),
-                    bytes.pop_front().unwrap(),
-                    bytes.pop_front().unwrap(),
-                    bytes.pop_front().unwrap(),
-                ]));
-            }
-            // SAFETY: every slot in both slices was just written.
-            unsafe { chunk.commit_all() };
+    if take > 0
+        && let Ok(mut chunk) = producer.write_chunk_uninit(take)
+    {
+        let (first, second) = chunk.as_mut_slices();
+        for slot in first.iter_mut().chain(second.iter_mut()) {
+            // `available` was computed from the queue length, so each of
+            // these four bytes is there.
+            slot.write(f32::from_le_bytes([
+                bytes.pop_front().unwrap(),
+                bytes.pop_front().unwrap(),
+                bytes.pop_front().unwrap(),
+                bytes.pop_front().unwrap(),
+            ]));
         }
+        // SAFETY: every slot in both slices was just written.
+        unsafe { chunk.commit_all() };
     }
     // Full ring: discard the remainder. Capture must never block.
     bytes.drain(..(available - take) * 4);
@@ -264,6 +321,50 @@ mod tests {
             assert!(pair[1] >= pair[0], "backoff went backwards: {delays:?}");
         }
         assert_eq!(*delays.last().unwrap(), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_wait_that_never_waits_is_eventually_an_error() {
+        let mut guard = StallGuard::default();
+        for turn in 0..STALL_LIMIT - 1 {
+            assert!(
+                guard.wait("test", || false).is_ok(),
+                "gave up after only {turn} instant failures"
+            );
+        }
+        let last = guard.wait("test", || false);
+        assert_eq!(
+            last,
+            Err("waiting on the test event stopped working".to_string())
+        );
+    }
+
+    /// The normal case, and the one that must never be mistaken for the case
+    /// above: loopback with nothing playing times out on every single turn, for
+    /// as long as the source exists.
+    #[test]
+    fn real_timeouts_are_not_a_stall() {
+        let mut guard = StallGuard::default();
+        for _ in 0..STALL_LIMIT + 1 {
+            let slow_timeout = || {
+                std::thread::sleep(IMMEDIATE + Duration::from_millis(2));
+                false
+            };
+            assert!(guard.wait("test", slow_timeout).is_ok());
+        }
+    }
+
+    /// A signalled wait clears the count, so instant failures scattered among
+    /// working turns never add up to a stall.
+    #[test]
+    fn a_successful_wait_resets_the_count() {
+        let mut guard = StallGuard::default();
+        for _ in 0..STALL_LIMIT * 3 {
+            for _ in 0..STALL_LIMIT - 1 {
+                assert!(guard.wait("test", || false).is_ok());
+            }
+            assert!(guard.wait("test", || true).is_ok());
+        }
     }
 
     #[test]

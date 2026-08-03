@@ -51,6 +51,11 @@ pub fn run(
     cancel: &Cancel,
 ) -> Result<Link, MastodonError> {
     let instance = api::normalize_instance(instance)?;
+    // Ask the host whether it speaks the Mastodon API before anything is spent
+    // on it. A wrong address costs no port, no app registration and no browser
+    // window, and the user is told what is wrong instead of being read the
+    // host's own 404 page.
+    net::block_on(api::check_instance(&instance))?;
     let verifier = random_token();
     let challenge = challenge_for(&verifier);
     let state = random_token();
@@ -168,7 +173,10 @@ fn read_redirect(mut stream: TcpStream, state: &str) -> Result<Option<String>, M
             .unwrap_or_else(|| error.1.clone());
         return Err(MastodonError::Service {
             status: 400,
-            detail,
+            // Through the same reducer as a response body: this arrives in a
+            // query string the server controls, so it is neither short nor
+            // trustworthy by default.
+            detail: api::summarize(&detail),
         });
     }
     let Some((_, code)) = params.iter().find(|(k, _)| k == "code") else {

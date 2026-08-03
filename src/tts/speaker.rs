@@ -119,10 +119,11 @@ impl Problems {
             return;
         };
         let key = format!("{engine}: {message}");
-        if let Some((previous, at)) = &state.last {
-            if *previous == key && at.elapsed() < PROBLEM_INTERVAL {
-                return;
-            }
+        if let Some((previous, at)) = &state.last
+            && *previous == key
+            && at.elapsed() < PROBLEM_INTERVAL
+        {
+            return;
         }
         state.last = Some((key, Instant::now()));
         state.pending.push(SpeechProblem {

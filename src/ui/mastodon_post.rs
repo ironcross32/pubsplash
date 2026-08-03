@@ -150,7 +150,7 @@ pub fn on_stream_started(app: &Rc<App>) {
 }
 
 fn ask_about_resuming(app: &Rc<App>) {
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let ask = MessageDialog::builder(
@@ -181,10 +181,7 @@ pub fn maybe_periodic(app: &Rc<App>) {
         if !matches!(run.stream, StreamState::Live { .. }) {
             return;
         }
-        match run.next_announcement {
-            Some(deadline) if Instant::now() >= deadline => true,
-            _ => false,
-        }
+        matches!(run.next_announcement, Some(deadline) if Instant::now() >= deadline)
     };
     if !due {
         return;
@@ -284,7 +281,6 @@ pub fn authorize(parent: &Dialog, instance: &str) -> Option<Link> {
     dialog.set_sizer(dialog_sizer, true);
 
     {
-        let dialog = dialog.clone();
         let cancel = cancel.clone();
         cancel_button.on_click(move |_| {
             cancel.store(true, Ordering::Relaxed);
@@ -296,8 +292,6 @@ pub fn authorize(parent: &Dialog, instance: &str) -> Option<Link> {
     let failure: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let timer = Timer::new(&dialog);
     {
-        let dialog = dialog.clone();
-        let status = status.clone();
         let outcome = outcome.clone();
         let failure = failure.clone();
         timer.on_tick(move |_| {
@@ -358,8 +352,8 @@ pub fn authorize(parent: &Dialog, instance: &str) -> Option<Link> {
     if let Some(message) = failure.borrow().clone() {
         super::show_error(parent, "Authorize", &message);
     }
-    let link = outcome.borrow().clone();
-    link
+
+    outcome.borrow().clone()
 }
 
 fn set_status(status: &TextCtrl, text: &str) {

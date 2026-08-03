@@ -115,12 +115,12 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     // Scene buttons.
     {
         let app = app.clone();
-        let list = scenes_list.clone();
+        let list = scenes_list;
         scene_up.on_click(move |_| move_scene(&app, &list, true));
     }
     {
         let app = app.clone();
-        let list = scenes_list.clone();
+        let list = scenes_list;
         scene_down.on_click(move |_| move_scene(&app, &list, false));
     }
     {
@@ -129,14 +129,14 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     }
     {
         let app = app.clone();
-        let list = scenes_list.clone();
+        let list = scenes_list;
         scene_rename.on_click(move |_| rename_scene(&app, &list));
     }
 
     // Scene list keys: CTRL+Up/Down reorder, Delete removes.
     {
         let app = app.clone();
-        let list = scenes_list.clone();
+        let list = scenes_list;
         scenes_list
             .clone()
             .on_key_down(move |event| match super::key_of(&event) {
@@ -154,12 +154,12 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     }
     {
         let app = app.clone();
-        let list = sources_list.clone();
+        let list = sources_list;
         source_edit.on_click(move |_| edit_source(&app, &list));
     }
     {
         let app = app.clone();
-        let list = sources_list.clone();
+        let list = sources_list;
         source_sends.on_click(move |_| {
             let scene_index = selected_scene_index(&app);
             let Some(index) = super::list::selection(&list, source_count(&app, scene_index)) else {
@@ -170,24 +170,24 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     }
     {
         let app = app.clone();
-        let list = sources_list.clone();
+        let list = sources_list;
         source_remove.on_click(move |_| remove_source(&app, &list));
     }
     {
         let app = app.clone();
-        let list = sources_list.clone();
+        let list = sources_list;
         source_up.on_click(move |_| move_source(&app, &list, true));
     }
     {
         let app = app.clone();
-        let list = sources_list.clone();
+        let list = sources_list;
         source_down.on_click(move |_| move_source(&app, &list, false));
     }
 
     // Source list keys.
     {
         let app = app.clone();
-        let list = sources_list.clone();
+        let list = sources_list;
         sources_list
             .clone()
             .on_key_down(move |event| match super::key_of(&event) {
@@ -284,10 +284,10 @@ pub fn refresh_sources_list(app: &Rc<App>) {
             return;
         }
         // The list itself changed, so the focus context genuinely has too.
-        if let Some(index) = selected {
-            if index < w.sources_list.get_count() {
-                w.sources_list.set_selection(index, true);
-            }
+        if let Some(index) = selected
+            && index < w.sources_list.get_count()
+        {
+            w.sources_list.set_selection(index, true);
         }
     });
 }
@@ -351,22 +351,22 @@ fn delete_scene(app: &Rc<App>, list: &ListBox) {
 }
 
 fn add_scene(app: &Rc<App>) {
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let dialog = TextEntryDialog::builder(&frame, "Name for the new scene:", "Add scene").build();
-    if dialog.show_modal() == ID_OK {
-        if let Some(name) = dialog.get_value() {
-            let changed = app.config.borrow_mut().scenes.add_scene(&name);
-            if changed == ListEdit::Changed {
-                after_scene_edit(app);
-            } else if !name.trim().is_empty() {
-                show_error(
-                    &frame,
-                    "Add scene",
-                    "A scene with that name already exists.",
-                );
-            }
+    if dialog.show_modal() == ID_OK
+        && let Some(name) = dialog.get_value()
+    {
+        let changed = app.config.borrow_mut().scenes.add_scene(&name);
+        if changed == ListEdit::Changed {
+            after_scene_edit(app);
+        } else if !name.trim().is_empty() {
+            show_error(
+                &frame,
+                "Add scene",
+                "A scene with that name already exists.",
+            );
         }
     }
 }
@@ -376,7 +376,7 @@ fn rename_scene(app: &Rc<App>, list: &ListBox) {
     let Some(index) = super::list::selection(list, count) else {
         return;
     };
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let current = {
@@ -389,12 +389,12 @@ fn rename_scene(app: &Rc<App>, list: &ListBox) {
     let dialog = TextEntryDialog::builder(&frame, "New name for the scene:", "Rename scene")
         .with_default_value(&current)
         .build();
-    if dialog.show_modal() == ID_OK {
-        if let Some(name) = dialog.get_value() {
-            let changed = app.config.borrow_mut().scenes.rename_scene(index, &name);
-            if changed == ListEdit::Changed {
-                after_scene_edit(app);
-            }
+    if dialog.show_modal() == ID_OK
+        && let Some(name) = dialog.get_value()
+    {
+        let changed = app.config.borrow_mut().scenes.rename_scene(index, &name);
+        if changed == ListEdit::Changed {
+            after_scene_edit(app);
         }
     }
 }
@@ -457,7 +457,7 @@ fn unique_source_name(existing: &[SourceConfig], base: &str) -> String {
 }
 
 fn add_source(app: &Rc<App>) {
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let types = [
@@ -502,7 +502,7 @@ fn add_source(app: &Rc<App>) {
     after_source_edit(app, previous_sources);
     app.widgets(|w| w.sources_list.set_selection(new_index as u32, true));
     // Open the parameter dialog right away for types that need setup.
-    if let Some(w) = app.widgets(|w| w.sources_list.clone()) {
+    if let Some(w) = app.widgets(|w| w.sources_list) {
         edit_source(app, &w);
     }
 }
@@ -575,7 +575,7 @@ fn edit_microphone(
     source_index: usize,
     current: Option<String>,
 ) {
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let devices = crate::audio::device::capture_devices();
@@ -617,7 +617,7 @@ fn edit_microphone(
 }
 
 fn edit_application(app: &Rc<App>, scene_index: usize, source_index: usize, current: String) {
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let process_name = match super::app_picker::pick_application(&frame, &current) {
@@ -652,7 +652,7 @@ fn edit_application(app: &Rc<App>, scene_index: usize, source_index: usize, curr
 }
 
 fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: TtsSourceConfig) {
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let dialog = Dialog::builder(&frame, "Text-to-Speech source")
@@ -836,7 +836,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
 
     // Reads the engine id the picker currently shows.
     let engines_for_read = engines.clone();
-    let engine_choice_for_read = engine_choice.clone();
+    let engine_choice_for_read = engine_choice;
     let selected_engine = move || -> &'static str {
         engines_for_read
             .get(
@@ -892,11 +892,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
 
     // Copies the widgets into the profile of whichever engine they are showing.
     let stash: Rc<dyn Fn()> = {
-        let voice_choice = voice_choice.clone();
         let voices = voices.clone();
-        let volume_slider = volume_slider.clone();
-        let rate_slider = rate_slider.clone();
-        let pitch_slider = pitch_slider.clone();
         let provider_controls = provider_controls.clone();
         let applied = applied.clone();
         let profiles = profiles.clone();
@@ -916,12 +912,6 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     };
 
     let apply_engine: Rc<dyn Fn()> = {
-        let voice_choice = voice_choice.clone();
-        let voice_count_label = voice_count_label.clone();
-        let pitch_slider = pitch_slider.clone();
-        let pitch_label = pitch_label.clone();
-        let rate_slider = rate_slider.clone();
-        let rate_label = rate_label.clone();
         let pitch_announcer = pitch_announcer.clone();
         let voices = voices.clone();
         let selected_engine = selected_engine.clone();
@@ -929,10 +919,8 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         let profiles = profiles.clone();
         let pitch_supported = pitch_supported.clone();
         let provider_controls = provider_controls.clone();
-        let volume_slider = volume_slider.clone();
         let volume_announcer = volume_announcer.clone();
         let rate_announcer = rate_announcer.clone();
-        let panel = panel.clone();
         Rc::new(move || {
             let engine = selected_engine();
             if engine == applied.get() {
@@ -995,9 +983,9 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
 
     {
         let controls = provider_controls.clone();
-        let choice = voice_choice.clone();
+        let choice = voice_choice;
         let voices_for_model = voices.clone();
-        let count_label = voice_count_label.clone();
+        let count_label = voice_count_label;
         provider_controls
             .eleven_model
             .clone()
@@ -1012,9 +1000,9 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     }
     {
         let controls = provider_controls.clone();
-        let choice = voice_choice.clone();
+        let choice = voice_choice;
         let voices_for_model = voices.clone();
-        let count_label = voice_count_label.clone();
+        let count_label = voice_count_label;
         provider_controls
             .openai_model
             .clone()
@@ -1038,11 +1026,9 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     }
     {
         let controls = provider_controls.clone();
-        let pitch_slider = pitch_slider.clone();
-        let pitch_label = pitch_label.clone();
-        let choice = voice_choice.clone();
+        let choice = voice_choice;
         let voices_for_model = voices.clone();
-        let count_label = voice_count_label.clone();
+        let count_label = voice_count_label;
         provider_controls
             .polly_engine
             .clone()
@@ -1059,7 +1045,6 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     }
     {
         let controls = provider_controls.clone();
-        let voice_choice = voice_choice.clone();
         let voices = voices.clone();
         voice_choice.clone().on_selection_changed(move |_| {
             let selected = voice_choice
@@ -1111,10 +1096,8 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         let alive = alive.clone();
         let generation = catalog_generation.clone();
         let selected_engine = selected_engine.clone();
-        let voice_choice = voice_choice.clone();
         let voices = voices.clone();
         let provider_controls = provider_controls.clone();
-        let voice_count_label = voice_count_label.clone();
         super::run_when_ready(move || {
             if !alive.get() {
                 return true;
@@ -1144,12 +1127,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     }
     {
         let app = app.clone();
-        let panel = panel.clone();
-        let voice_choice = voice_choice.clone();
         let voices = voices.clone();
-        let volume_slider = volume_slider.clone();
-        let rate_slider = rate_slider.clone();
-        let pitch_slider = pitch_slider.clone();
         let selected_engine = selected_engine.clone();
         let alive = alive.clone();
         let apply_engine = apply_engine.clone();
@@ -1174,15 +1152,7 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         // sections are what makes switching lossless, and a reset button that
         // quietly cleared them all would undo exactly that. Nothing is written
         // until OK, so Cancel takes it back.
-        let panel = panel.clone();
-        let voice_choice = voice_choice.clone();
-        let voice_count_label = voice_count_label.clone();
         let voices = voices.clone();
-        let volume_slider = volume_slider.clone();
-        let rate_slider = rate_slider.clone();
-        let pitch_slider = pitch_slider.clone();
-        let rate_label = rate_label.clone();
-        let pitch_label = pitch_label.clone();
         let volume_announcer = volume_announcer.clone();
         let rate_announcer = rate_announcer.clone();
         let pitch_announcer = pitch_announcer.clone();
@@ -1243,11 +1213,9 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     }
 
     {
-        let dialog = dialog.clone();
         ok.on_click(move |_| dialog.end_modal(ID_OK));
     }
     {
-        let dialog = dialog.clone();
         cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
 
@@ -1866,13 +1834,13 @@ impl TtsProviderControls {
 
     fn panels(&self) -> [Panel; 7] {
         [
-            self.none_panel.clone(),
-            self.eleven_panel.clone(),
-            self.openai_panel.clone(),
-            self.azure_panel.clone(),
-            self.google_panel.clone(),
-            self.polly_panel.clone(),
-            self.gtts_panel.clone(),
+            self.none_panel,
+            self.eleven_panel,
+            self.openai_panel,
+            self.azure_panel,
+            self.google_panel,
+            self.polly_panel,
+            self.gtts_panel,
         ]
     }
 
@@ -2093,8 +2061,8 @@ impl TtsProviderControls {
 }
 
 fn bind_optional_double(check: &CheckBox, input: &SpinCtrlDouble) {
-    let check = check.clone();
-    let input = input.clone();
+    let check = *check;
+    let input = *input;
     check
         .clone()
         .on_toggled(move |_| input.enable(check.get_value()));
@@ -2315,7 +2283,7 @@ fn wire_slider(
 ) -> Rc<SliderAnnouncer> {
     let announcer = Rc::new(super::slider_uia::install(slider));
     announcer.set_text(name, &format!("{}{suffix}", slider.value()));
-    let slider_for_keys = slider.clone();
+    let slider_for_keys = *slider;
     let announcer_for_keys = announcer.clone();
     slider.clone().on_key_down(move |event| {
         let Some((code, _)) = super::key_of(&event) else {
@@ -2370,7 +2338,7 @@ fn preview_voice(
         })
         .ok();
 
-    let parent = parent.clone();
+    let parent = *parent;
     let alive = alive.clone();
     super::run_when_ready(move || {
         if !alive.get() {
@@ -2400,7 +2368,7 @@ fn edit_sound_events(
     source_index: usize,
     current: SoundEventsSourceConfig,
 ) {
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let dialog = Dialog::builder(&frame, "Sound Events source")
@@ -2492,11 +2460,9 @@ fn edit_sound_events(
     dialog.set_sizer(dialog_sizer, true);
 
     {
-        let dialog = dialog.clone();
         ok.on_click(move |_| dialog.end_modal(ID_OK));
     }
     {
-        let dialog = dialog.clone();
         cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
 

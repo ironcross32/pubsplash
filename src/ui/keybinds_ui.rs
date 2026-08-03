@@ -80,9 +80,8 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     // Refills the list and selects `select`, or keeps the row index otherwise.
     // Every caller is a deliberate edit, which is the only time a list in this
     // app may move its own selection.
-    let refresh: Rc<dyn Fn(Option<&BindAction>)> = {
+    let refresh: super::list::Refresh<BindAction> = {
         let app = app.clone();
-        let list = list.clone();
         let rows = rows.clone();
         Rc::new(move |select: Option<&BindAction>| {
             let (actions, labels) = {
@@ -110,7 +109,6 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     // The action the user is standing on, or `None` on the placeholder row.
     let selected: Rc<dyn Fn() -> Option<BindAction>> = {
-        let list = list.clone();
         let rows = rows.clone();
         Rc::new(move || {
             let rows = rows.borrow();
@@ -120,7 +118,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     {
         let app = app.clone();
-        let dialog = dialog.clone();
+        let dialog = *dialog;
         let refresh = refresh.clone();
         add.on_click(move |_| {
             if let Some(action) = edit_dialog(&app, &dialog, None) {
@@ -130,7 +128,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     }
     {
         let app = app.clone();
-        let dialog = dialog.clone();
+        let dialog = *dialog;
         let refresh = refresh.clone();
         let selected = selected.clone();
         edit.on_click(move |_| {
@@ -175,7 +173,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     {
         let app = app.clone();
-        let dialog = dialog.clone();
+        let dialog = *dialog;
         let refresh = refresh.clone();
         reset.on_click(move |_| {
             let confirm = MessageDialog::builder(
@@ -317,11 +315,7 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
     // re-labels it. The accessible name is re-set every time because the control
     // has changed meaning — a screen reader would otherwise keep calling a list
     // of buses "Scene".
-    let sync_specifier: Rc<dyn Fn(Option<&str>)> = {
-        let panel = panel.clone();
-        let action_choice = action_choice.clone();
-        let specifier_label = specifier_label.clone();
-        let specifier_choice = specifier_choice.clone();
+    let sync_specifier: super::list::Refresh<str> = {
         let templates = templates.clone();
         let targets = targets.clone();
         Rc::new(move |select: Option<&str>| {
@@ -356,9 +350,7 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
     };
 
     // Refills the Action dropdown for a category, then re-syncs the specifier.
-    let sync_actions: Rc<dyn Fn(Option<&BindAction>)> = {
-        let category_choice = category_choice.clone();
-        let action_choice = action_choice.clone();
+    let sync_actions: super::list::Refresh<BindAction> = {
         let templates = templates.clone();
         let sync_specifier = sync_specifier.clone();
         Rc::new(move |select: Option<&BindAction>| {
@@ -438,7 +430,6 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
     }
     {
         let chord = chord.clone();
-        let shortcut_input = shortcut_input.clone();
         shortcut_input.clone().on_kill_focus(move |event| {
             super::keybinds::end_capture();
             // The chord is the truth; the field is only its display. Rewriting
@@ -453,7 +444,6 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
         });
     }
     {
-        let shortcut_input = shortcut_input.clone();
         let chord = chord.clone();
         let alive = alive.clone();
         super::run_when_ready(move || {
@@ -479,10 +469,7 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
     let result: Rc<RefCell<Option<BindAction>>> = Rc::new(RefCell::new(None));
     {
         let app = app.clone();
-        let dialog_for_ok = dialog.clone();
-        let action_choice = action_choice.clone();
-        let specifier_choice = specifier_choice.clone();
-        let global_check = global_check.clone();
+        let dialog_for_ok = dialog;
         let templates = templates.clone();
         let chord = chord.clone();
         let result = result.clone();
@@ -577,7 +564,7 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
         });
     }
     {
-        let dialog_for_cancel = dialog.clone();
+        let dialog_for_cancel = dialog;
         cancel_button.on_click(move |_| dialog_for_cancel.end_modal(ID_CANCEL));
     }
 

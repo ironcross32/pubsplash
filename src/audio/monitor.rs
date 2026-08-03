@@ -118,6 +118,7 @@ fn run(consumer: &mut Consumer<f32>, stop: &AtomicBool) -> Result<(), String> {
     log::debug!("Monitoring output is running");
 
     let mut bytes: VecDeque<u8> = VecDeque::new();
+    let mut guard = crate::audio::capture::StallGuard::default();
     while !stop.load(Ordering::Relaxed) {
         let frames = client
             .get_available_space_in_frames()
@@ -131,9 +132,13 @@ fn run(consumer: &mut Consumer<f32>, stop: &AtomicBool) -> Result<(), String> {
                 .write_to_device_from_deque(frames, &mut bytes, None)
                 .map_err(|e| format!("writing to the playback device: {e}"))?;
         }
-        // A timeout is normal when the device wants nothing yet; `stop` is only
-        // checked at the top of this loop, so the wait must stay short.
-        let _ = event.wait_for_event(200);
+        // A timeout is normal when the device wants nothing yet, so the result
+        // is not an error on its own. It used to be discarded outright, which
+        // also discarded the case where the wait fails instantly and this loop
+        // spins; `StallGuard` tells the two apart.
+        guard.wait("playback", || {
+            event.wait_for_event(crate::audio::capture::WAIT_MS).is_ok()
+        })?;
     }
     let _ = client.stop_stream();
     Ok(())
@@ -147,15 +152,15 @@ fn fill(bytes: &mut VecDeque<u8>, consumer: &mut Consumer<f32>, samples: usize) 
     // `mixer::pull_block` for why that adds up.
     let take = consumer.slots().min(samples);
     let mut filled = 0;
-    if take > 0 {
-        if let Ok(chunk) = consumer.read_chunk(take) {
-            let (first, second) = chunk.as_slices();
-            for &sample in first.iter().chain(second.iter()) {
-                bytes.extend(sample.to_le_bytes());
-            }
-            filled = first.len() + second.len();
-            chunk.commit_all();
+    if take > 0
+        && let Ok(chunk) = consumer.read_chunk(take)
+    {
+        let (first, second) = chunk.as_slices();
+        for &sample in first.iter().chain(second.iter()) {
+            bytes.extend(sample.to_le_bytes());
         }
+        filled = first.len() + second.len();
+        chunk.commit_all();
     }
     for _ in filled..samples {
         bytes.extend(0f32.to_le_bytes());

@@ -395,6 +395,179 @@ pub fn find_process(name: &str) -> Option<u32> {
         .map(|app| app.pid)
 }
 
+/// The process table, reused across refreshes so exe paths are read once per
+/// process rather than once per poll.
+static SYSTEM: OnceLock<Mutex<sysinfo::System>> = OnceLock::new();
+
+/// Locks a `static` cache, recovering from poisoning.
+///
+/// Bailing out on a poisoned lock would be the worst possible answer here: every
+/// later call would report that nothing is running, so the app picker would come
+/// up empty and every Application source would relabel itself "(not running)"
+/// for the rest of the session — with nothing said about why. The data behind
+/// these locks is a cache, so carrying on with it is safe; losing the ability to
+/// see any process is not.
+pub fn lock_recovering<'a, T>(mutex: &'a Mutex<T>, what: &str) -> std::sync::MutexGuard<'a, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("{what} lock was poisoned by an earlier panic; recovering");
+            mutex.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn lock_system() -> std::sync::MutexGuard<'static, sysinfo::System> {
+    lock_recovering(
+        SYSTEM.get_or_init(|| Mutex::new(sysinfo::System::new())),
+        "the process table",
+    )
+}
+
+/// The pid last chosen for each configured Application name, keyed exactly as
+/// [`resolve_apps`] keys its result. See rule 1 of [`choose_pid`]: a source's
+/// pid moving on its own respawns every capture thread in the app, so once a
+/// tree has been picked it is kept until it exits.
+static LAST_CHOICE: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
+
+fn lock_pins() -> std::sync::MutexGuard<'static, HashMap<String, u32>> {
+    lock_recovering(
+        LAST_CHOICE.get_or_init(|| Mutex::new(HashMap::new())),
+        "the resolved-process cache",
+    )
+}
+
+/// Cache of version-resource lookups, keyed by executable path. Parsing the
+/// resource is comparatively expensive and the answer never changes for a
+/// given file, but this runs on the UI pump every couple of seconds.
+static DESCRIPTIONS: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
+
+/// The name users recognize for an executable, from its version resource.
+/// `None` when the file has no version resource, which is common for console
+/// tools and portable builds.
+///
+/// Neither of the two candidate fields wins outright: `nvda.exe` describes
+/// itself as "NVDA application (has UIAccess)" but has product "NVDA", while
+/// `explorer.exe` is the other way round ("Windows Explorer" against the
+/// product "Microsoft® Windows® Operating System"). This name is spoken on
+/// every visit to the strip, so take whichever is shorter.
+pub(crate) fn friendly_name(path: &Path) -> Option<String> {
+    let cache = DESCRIPTIONS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = lock_recovering(cache, "the executable description cache").get(path) {
+        return cached.clone();
+    }
+    let name = read_version_strings(path, &["FileDescription", "ProductName"])
+        .into_iter()
+        .flatten()
+        .min_by_key(|s| s.chars().count());
+    lock_recovering(cache, "the executable description cache")
+        .insert(path.to_path_buf(), name.clone());
+    name
+}
+
+/// The first NUL-terminated string in a raw version-resource value, trimmed;
+/// `None` when it is blank.
+///
+/// The length `VerQueryValueW` reports is the size of the *value*, not of the
+/// string inside it, and some executables pad theirs with whatever follows in
+/// the resource: Spotify's `ProductName` comes back as `Spotify\0` plus a few
+/// stray bytes. Keeping those bytes produces a `String` with an interior NUL,
+/// which is not merely ugly — every name here reaches a wx control, and
+/// `ListBox::append` panics on a string it cannot turn into a `CString`. That
+/// panic is then swallowed by wxdragon's event-handler `catch_unwind`, so the
+/// only visible effect is a list that stops halfway and a dialog that saves
+/// nothing. Cut at the first NUL.
+fn first_string(raw: &str) -> Option<String> {
+    let text = raw.split('\0').next().unwrap_or("").trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// Reads the named `\StringFileInfo\` entries from a file's version resource,
+/// in the order requested. Entries that are missing or blank come back `None`.
+fn read_version_strings(path: &Path, fields: &[&str]) -> Vec<Option<String>> {
+    read_version_strings_inner(path, fields).unwrap_or_else(|| vec![None; fields.len()])
+}
+
+fn read_version_strings_inner(path: &Path, fields: &[&str]) -> Option<Vec<Option<String>>> {
+    use windows::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+    };
+    use windows_core::PCWSTR;
+
+    /// The `\VarFileInfo\Translation` entry: which language/codepage the
+    /// string table under `\StringFileInfo\` is filed under.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct LangCodepage {
+        language: u16,
+        codepage: u16,
+    }
+
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `wide` is a NUL-terminated path that outlives every call below,
+    // and `block` is sized by the API itself before it is filled.
+    unsafe {
+        let size = GetFileVersionInfoSizeW(PCWSTR(wide.as_ptr()), None);
+        if size == 0 {
+            return None;
+        }
+        let mut block = vec![0u8; size as usize];
+        GetFileVersionInfoW(
+            PCWSTR(wide.as_ptr()),
+            None,
+            size,
+            block.as_mut_ptr() as *mut std::ffi::c_void,
+        )
+        .ok()?;
+
+        let mut translations: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut len: u32 = 0;
+        let key: Vec<u16> = "\\VarFileInfo\\Translation\0".encode_utf16().collect();
+        if !VerQueryValueW(
+            block.as_ptr() as *const std::ffi::c_void,
+            PCWSTR(key.as_ptr()),
+            &mut translations,
+            &mut len,
+        )
+        .as_bool()
+            || len < std::mem::size_of::<LangCodepage>() as u32
+        {
+            return None;
+        }
+        let translation = *(translations as *const LangCodepage);
+
+        let read = |field: &str| -> Option<String> {
+            let sub_block: Vec<u16> = format!(
+                "\\StringFileInfo\\{:04x}{:04x}\\{field}\0",
+                translation.language, translation.codepage
+            )
+            .encode_utf16()
+            .collect();
+            let mut value: *mut std::ffi::c_void = std::ptr::null_mut();
+            let mut chars: u32 = 0;
+            if !VerQueryValueW(
+                block.as_ptr() as *const std::ffi::c_void,
+                PCWSTR(sub_block.as_ptr()),
+                &mut value,
+                &mut chars,
+            )
+            .as_bool()
+                || chars == 0
+            {
+                return None;
+            }
+            let text = std::slice::from_raw_parts(value as *const u16, chars as usize);
+            first_string(&String::from_utf16_lossy(text))
+        };
+        Some(fields.iter().map(|field| read(field)).collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -707,178 +880,5 @@ mod tests {
     #[test]
     fn a_process_that_is_not_running_is_absent() {
         assert!(resolve_apps(&["definitely-not-a-real-program".to_string()]).is_empty());
-    }
-}
-
-/// The process table, reused across refreshes so exe paths are read once per
-/// process rather than once per poll.
-static SYSTEM: OnceLock<Mutex<sysinfo::System>> = OnceLock::new();
-
-/// Locks a `static` cache, recovering from poisoning.
-///
-/// Bailing out on a poisoned lock would be the worst possible answer here: every
-/// later call would report that nothing is running, so the app picker would come
-/// up empty and every Application source would relabel itself "(not running)"
-/// for the rest of the session — with nothing said about why. The data behind
-/// these locks is a cache, so carrying on with it is safe; losing the ability to
-/// see any process is not.
-pub fn lock_recovering<'a, T>(mutex: &'a Mutex<T>, what: &str) -> std::sync::MutexGuard<'a, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            log::error!("{what} lock was poisoned by an earlier panic; recovering");
-            mutex.clear_poison();
-            poisoned.into_inner()
-        }
-    }
-}
-
-fn lock_system() -> std::sync::MutexGuard<'static, sysinfo::System> {
-    lock_recovering(
-        SYSTEM.get_or_init(|| Mutex::new(sysinfo::System::new())),
-        "the process table",
-    )
-}
-
-/// The pid last chosen for each configured Application name, keyed exactly as
-/// [`resolve_apps`] keys its result. See rule 1 of [`choose_pid`]: a source's
-/// pid moving on its own respawns every capture thread in the app, so once a
-/// tree has been picked it is kept until it exits.
-static LAST_CHOICE: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
-
-fn lock_pins() -> std::sync::MutexGuard<'static, HashMap<String, u32>> {
-    lock_recovering(
-        LAST_CHOICE.get_or_init(|| Mutex::new(HashMap::new())),
-        "the resolved-process cache",
-    )
-}
-
-/// Cache of version-resource lookups, keyed by executable path. Parsing the
-/// resource is comparatively expensive and the answer never changes for a
-/// given file, but this runs on the UI pump every couple of seconds.
-static DESCRIPTIONS: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
-
-/// The name users recognize for an executable, from its version resource.
-/// `None` when the file has no version resource, which is common for console
-/// tools and portable builds.
-///
-/// Neither of the two candidate fields wins outright: `nvda.exe` describes
-/// itself as "NVDA application (has UIAccess)" but has product "NVDA", while
-/// `explorer.exe` is the other way round ("Windows Explorer" against the
-/// product "Microsoft® Windows® Operating System"). This name is spoken on
-/// every visit to the strip, so take whichever is shorter.
-pub(crate) fn friendly_name(path: &Path) -> Option<String> {
-    let cache = DESCRIPTIONS.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(cached) = lock_recovering(cache, "the executable description cache").get(path) {
-        return cached.clone();
-    }
-    let name = read_version_strings(path, &["FileDescription", "ProductName"])
-        .into_iter()
-        .flatten()
-        .min_by_key(|s| s.chars().count());
-    lock_recovering(cache, "the executable description cache")
-        .insert(path.to_path_buf(), name.clone());
-    name
-}
-
-/// The first NUL-terminated string in a raw version-resource value, trimmed;
-/// `None` when it is blank.
-///
-/// The length `VerQueryValueW` reports is the size of the *value*, not of the
-/// string inside it, and some executables pad theirs with whatever follows in
-/// the resource: Spotify's `ProductName` comes back as `Spotify\0` plus a few
-/// stray bytes. Keeping those bytes produces a `String` with an interior NUL,
-/// which is not merely ugly — every name here reaches a wx control, and
-/// `ListBox::append` panics on a string it cannot turn into a `CString`. That
-/// panic is then swallowed by wxdragon's event-handler `catch_unwind`, so the
-/// only visible effect is a list that stops halfway and a dialog that saves
-/// nothing. Cut at the first NUL.
-fn first_string(raw: &str) -> Option<String> {
-    let text = raw.split('\0').next().unwrap_or("").trim();
-    (!text.is_empty()).then(|| text.to_string())
-}
-
-/// Reads the named `\StringFileInfo\` entries from a file's version resource,
-/// in the order requested. Entries that are missing or blank come back `None`.
-fn read_version_strings(path: &Path, fields: &[&str]) -> Vec<Option<String>> {
-    read_version_strings_inner(path, fields).unwrap_or_else(|| vec![None; fields.len()])
-}
-
-fn read_version_strings_inner(path: &Path, fields: &[&str]) -> Option<Vec<Option<String>>> {
-    use windows::Win32::Storage::FileSystem::{
-        GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
-    };
-    use windows_core::PCWSTR;
-
-    /// The `\VarFileInfo\Translation` entry: which language/codepage the
-    /// string table under `\StringFileInfo\` is filed under.
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct LangCodepage {
-        language: u16,
-        codepage: u16,
-    }
-
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    // SAFETY: `wide` is a NUL-terminated path that outlives every call below,
-    // and `block` is sized by the API itself before it is filled.
-    unsafe {
-        let size = GetFileVersionInfoSizeW(PCWSTR(wide.as_ptr()), None);
-        if size == 0 {
-            return None;
-        }
-        let mut block = vec![0u8; size as usize];
-        GetFileVersionInfoW(
-            PCWSTR(wide.as_ptr()),
-            None,
-            size,
-            block.as_mut_ptr() as *mut std::ffi::c_void,
-        )
-        .ok()?;
-
-        let mut translations: *mut std::ffi::c_void = std::ptr::null_mut();
-        let mut len: u32 = 0;
-        let key: Vec<u16> = "\\VarFileInfo\\Translation\0".encode_utf16().collect();
-        if !VerQueryValueW(
-            block.as_ptr() as *const std::ffi::c_void,
-            PCWSTR(key.as_ptr()),
-            &mut translations,
-            &mut len,
-        )
-        .as_bool()
-            || len < std::mem::size_of::<LangCodepage>() as u32
-        {
-            return None;
-        }
-        let translation = *(translations as *const LangCodepage);
-
-        let read = |field: &str| -> Option<String> {
-            let sub_block: Vec<u16> = format!(
-                "\\StringFileInfo\\{:04x}{:04x}\\{field}\0",
-                translation.language, translation.codepage
-            )
-            .encode_utf16()
-            .collect();
-            let mut value: *mut std::ffi::c_void = std::ptr::null_mut();
-            let mut chars: u32 = 0;
-            if !VerQueryValueW(
-                block.as_ptr() as *const std::ffi::c_void,
-                PCWSTR(sub_block.as_ptr()),
-                &mut value,
-                &mut chars,
-            )
-            .as_bool()
-                || chars == 0
-            {
-                return None;
-            }
-            let text = std::slice::from_raw_parts(value as *const u16, chars as usize);
-            first_string(&String::from_utf16_lossy(text))
-        };
-        Some(fields.iter().map(|field| read(field)).collect())
     }
 }

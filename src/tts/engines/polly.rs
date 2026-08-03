@@ -352,6 +352,58 @@ fn amz_datetime(unix_seconds: u64) -> String {
     format!("{year:04}{month:02}{day:02}T{hour:02}{minute:02}{second:02}Z")
 }
 
+/// Discovers every supported Polly engine and its compatible voices.
+///
+/// One query per engine, and a failing one is skipped rather than fatal: the
+/// newer engines are not offered in every region, and `DescribeVoices` answers
+/// for an engine the region does not have with an error. Letting that abort the
+/// walk would leave the user with *no* Polly voices or engines at all because
+/// their region has no generative tier. Only a run in which every engine failed
+/// — which is what bad credentials look like — is reported as a failure, so the
+/// Validate button still says so.
+pub fn discover(config: &SpeechConfig) -> Result<crate::tts::catalog::EngineCatalog, TtsError> {
+    use crate::tts::catalog::{CatalogModel, EngineCatalog};
+    let mut by_id = std::collections::BTreeMap::<String, Voice>::new();
+    let mut available: Vec<CatalogModel> = Vec::new();
+    let mut last_error = None;
+    for engine_id in ["standard", "neural", "long-form", "generative"] {
+        let mut speech = config.clone();
+        speech.aws_engine = engine_id.into();
+        let voices = match Polly::new(&speech).voices() {
+            Ok(voices) => voices,
+            Err(error) => {
+                log::warn!("Polly listed no {engine_id} voices: {error}");
+                last_error = Some(error);
+                continue;
+            }
+        };
+        available.push(CatalogModel::plain(engine_id));
+        for mut voice in voices {
+            if voice.supported_engines.is_empty() {
+                voice.supported_engines.push(engine_id.into());
+            }
+            by_id
+                .entry(voice.id.clone())
+                .and_modify(|known| {
+                    known
+                        .supported_engines
+                        .extend(voice.supported_engines.clone());
+                    known.supported_engines.sort();
+                    known.supported_engines.dedup();
+                })
+                .or_insert(voice);
+        }
+    }
+    if available.is_empty() {
+        return Err(last_error
+            .unwrap_or_else(|| TtsError::Other("Polly reported no synthesis engines.".into())));
+    }
+    Ok(EngineCatalog::from_voices(
+        available,
+        by_id.into_values().collect(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,9 +523,11 @@ mod tests {
 
     #[test]
     fn blank_region_and_engine_settings_fall_back_to_working_defaults() {
-        let mut config = SpeechConfig::default();
-        config.aws_region = "  ".into();
-        config.aws_engine = "".into();
+        let config = SpeechConfig {
+            aws_region: "  ".into(),
+            aws_engine: "".into(),
+            ..Default::default()
+        };
         let engine = Polly::new(&config);
         assert_eq!(engine.host(), "polly.us-east-1.amazonaws.com");
         assert_eq!(engine.engine, "neural");
@@ -514,8 +568,10 @@ mod tests {
 
     #[test]
     fn the_region_is_lowercased_for_the_endpoint_host() {
-        let mut config = SpeechConfig::default();
-        config.aws_region = "US-West-2".into();
+        let config = SpeechConfig {
+            aws_region: "US-West-2".into(),
+            ..Default::default()
+        };
         assert_eq!(Polly::new(&config).host(), "polly.us-west-2.amazonaws.com");
     }
 
@@ -539,61 +595,11 @@ mod tests {
         let error = Polly::new(&SpeechConfig::default()).voices().unwrap_err();
         assert!(error.to_string().contains("access key ID"), "{error}");
 
-        let mut config = SpeechConfig::default();
-        config.aws_access_key_id = "AKID".into();
+        let config = SpeechConfig {
+            aws_access_key_id: "AKID".into(),
+            ..Default::default()
+        };
         let error = Polly::new(&config).voices().unwrap_err();
         assert!(error.to_string().contains("secret access key"), "{error}");
     }
-}
-
-/// Discovers every supported Polly engine and its compatible voices.
-///
-/// One query per engine, and a failing one is skipped rather than fatal: the
-/// newer engines are not offered in every region, and `DescribeVoices` answers
-/// for an engine the region does not have with an error. Letting that abort the
-/// walk would leave the user with *no* Polly voices or engines at all because
-/// their region has no generative tier. Only a run in which every engine failed
-/// — which is what bad credentials look like — is reported as a failure, so the
-/// Validate button still says so.
-pub fn discover(config: &SpeechConfig) -> Result<crate::tts::catalog::EngineCatalog, TtsError> {
-    use crate::tts::catalog::{CatalogModel, EngineCatalog};
-    let mut by_id = std::collections::BTreeMap::<String, Voice>::new();
-    let mut available: Vec<CatalogModel> = Vec::new();
-    let mut last_error = None;
-    for engine_id in ["standard", "neural", "long-form", "generative"] {
-        let mut speech = config.clone();
-        speech.aws_engine = engine_id.into();
-        let voices = match Polly::new(&speech).voices() {
-            Ok(voices) => voices,
-            Err(error) => {
-                log::warn!("Polly listed no {engine_id} voices: {error}");
-                last_error = Some(error);
-                continue;
-            }
-        };
-        available.push(CatalogModel::plain(engine_id));
-        for mut voice in voices {
-            if voice.supported_engines.is_empty() {
-                voice.supported_engines.push(engine_id.into());
-            }
-            by_id
-                .entry(voice.id.clone())
-                .and_modify(|known| {
-                    known
-                        .supported_engines
-                        .extend(voice.supported_engines.clone());
-                    known.supported_engines.sort();
-                    known.supported_engines.dedup();
-                })
-                .or_insert(voice);
-        }
-    }
-    if available.is_empty() {
-        return Err(last_error
-            .unwrap_or_else(|| TtsError::Other("Polly reported no synthesis engines.".into())));
-    }
-    Ok(EngineCatalog::from_voices(
-        available,
-        by_id.into_values().collect(),
-    ))
 }

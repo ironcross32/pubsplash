@@ -6,12 +6,13 @@
 
 use crate::secret::Secret;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const MAIN_SITE_URL: &str = "https://audiopub.site/";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Config {
     pub connection: ConnectionConfig,
     pub audio: AudioConfig,
@@ -24,24 +25,6 @@ pub struct Config {
     pub speech: SpeechConfig,
     pub keybinds: crate::keybind::KeybindsConfig,
     pub mastodon: MastodonConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            connection: ConnectionConfig::default(),
-            audio: AudioConfig::default(),
-            scenes: ScenesConfig::default(),
-            logging: LoggingConfig::default(),
-            plugins: PluginsConfig::default(),
-            buses: BusesConfig::default(),
-            archiving: ArchivingConfig::default(),
-            sounds: SoundsConfig::default(),
-            speech: SpeechConfig::default(),
-            keybinds: crate::keybind::KeybindsConfig::default(),
-            mastodon: MastodonConfig::default(),
-        }
-    }
 }
 
 impl Config {
@@ -1040,7 +1023,7 @@ pub fn load() -> Config {
     load_from(&config_path())
 }
 
-pub fn load_from(path: &PathBuf) -> Config {
+pub fn load_from(path: &Path) -> Config {
     match crate::json_store::load::<Config>(path, "Config file") {
         crate::json_store::Load::Ok(mut config) => {
             config.connection.ensure_main_site();
@@ -1066,7 +1049,7 @@ pub fn save(config: &Config) {
     save_to(config, &config_path());
 }
 
-pub fn save_to(config: &Config, path: &PathBuf) {
+pub fn save_to(config: &Config, path: &Path) {
     crate::json_store::save(config, path, "config file");
 }
 

@@ -45,7 +45,7 @@ pub fn discover(folders: &[String], cancel: &AtomicBool) -> Discovery {
     }
     discovery
         .candidates
-        .sort_by(|a, b| a.display.to_lowercase().cmp(&b.display.to_lowercase()));
+        .sort_by_key(|a| a.display.to_lowercase());
     discovery
 }
 

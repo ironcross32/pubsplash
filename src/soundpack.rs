@@ -3,6 +3,13 @@
 // engines. This file is `#[path]`-included into the standalone soundpack
 // binaries, which have no `crate::audio`, so the module is pulled in by path
 // too; `convert.rs` depends on nothing but `hound` for exactly that reason.
+//
+// So in the main binary the file is compiled twice, here and as
+// `crate::audio::convert`. `duplicate_mod` wants one of them replaced by a
+// `use`, which there is no way to do: the soundpack binaries include this file
+// as their own root module and cannot name `crate::audio` at all, and with no
+// lib target there is nothing else to share it through.
+#[allow(clippy::duplicate_mod)]
 #[path = "audio/convert.rs"]
 mod convert;
 
@@ -143,6 +150,9 @@ struct AssetIndex {
     bytes: usize,
 }
 
+/// Decoded PCM for one pack, keyed by sound kind and variant index.
+type DecodedCache = HashMap<(SoundKind, usize), std::sync::Arc<Vec<f32>>>;
+
 pub struct LoadedPack {
     pub pack_id: Uuid,
     pub revision: u64,
@@ -154,7 +164,7 @@ pub struct LoadedPack {
     /// re-resampled its WAV — a burst of chat messages meant one full decode
     /// per message. The cache lives on the pack so that switching packs drops
     /// it along with the bytes it came from.
-    decoded: std::sync::Mutex<HashMap<(SoundKind, usize), std::sync::Arc<Vec<f32>>>>,
+    decoded: std::sync::Mutex<DecodedCache>,
 }
 
 impl LoadedPack {
@@ -186,9 +196,7 @@ impl LoadedPack {
         }
     }
 
-    fn lock_decoded(
-        &self,
-    ) -> std::sync::MutexGuard<'_, HashMap<(SoundKind, usize), std::sync::Arc<Vec<f32>>>> {
+    fn lock_decoded(&self) -> std::sync::MutexGuard<'_, DecodedCache> {
         match self.decoded.lock() {
             Ok(cache) => cache,
             // A decode that panicked must not disable every later cue.
@@ -513,10 +521,10 @@ pub fn project_variants(project: &Path, sound: SoundKind) -> Result<Vec<PathBuf>
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if let Some((kind, variant)) = parse_filename(name) {
-            if kind == sound {
-                numbered.insert(variant, path);
-            }
+        if let Some((kind, variant)) = parse_filename(name)
+            && kind == sound
+        {
+            numbered.insert(variant, path);
         }
     }
     Ok(numbered.into_values().collect())

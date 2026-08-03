@@ -171,27 +171,27 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
     }
     {
         let app = app.clone();
-        let list = bus_list.clone();
+        let list = bus_list;
         rename.on_click(move |_| rename_bus(&app, &list));
     }
     {
         let app = app.clone();
-        let list = bus_list.clone();
+        let list = bus_list;
         remove.on_click(move |_| remove_bus(&app, &list));
     }
     {
         let app = app.clone();
-        let list = bus_list.clone();
+        let list = bus_list;
         up.on_click(move |_| move_bus(&app, &list, true));
     }
     {
         let app = app.clone();
-        let list = bus_list.clone();
+        let list = bus_list;
         down.on_click(move |_| move_bus(&app, &list, false));
     }
     {
         let app = app.clone();
-        let list = bus_list.clone();
+        let list = bus_list;
         bus_list
             .clone()
             .on_key_down(move |event| match super::key_of(&event) {
@@ -209,23 +209,22 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
     }
     {
         let app = app.clone();
-        let list = fx_list.clone();
+        let list = fx_list;
         fx_remove.on_click(move |_| remove_plugin(&app, &list));
     }
     {
         let app = app.clone();
-        let list = fx_list.clone();
+        let list = fx_list;
         fx_up.on_click(move |_| move_plugin(&app, &list, true));
     }
     {
         let app = app.clone();
-        let list = fx_list.clone();
+        let list = fx_list;
         fx_down.on_click(move |_| move_plugin(&app, &list, false));
     }
     {
         let app = app.clone();
-        let list = fx_list.clone();
-        let fx_bypass = fx_bypass.clone();
+        let list = fx_list;
         fx_bypass
             .clone()
             .on_toggled(move |_| set_bypass(&app, &list, fx_bypass.get_value()));
@@ -239,12 +238,12 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
     }
     {
         let app = app.clone();
-        let list = fx_list.clone();
+        let list = fx_list;
         fx_edit.on_click(move |_| edit_parameters(&app, &list));
     }
     {
         let app = app.clone();
-        let list = fx_list.clone();
+        let list = fx_list;
         fx_open.on_click(move |_| open_interface(&app, &list));
     }
 
@@ -267,7 +266,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
     }
     {
         let app = app.clone();
-        let list = fx_list.clone();
+        let list = fx_list;
         fx_list
             .clone()
             .on_key_down(move |event| match super::key_of(&event) {
@@ -370,30 +369,30 @@ pub fn refresh_fx_list(app: &Rc<App>) {
 }
 
 fn add_bus(app: &Rc<App>) {
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let dialog = TextEntryDialog::builder(&frame, "Bus name:", "Add bus").build();
-    if dialog.show_modal() == ID_OK {
-        if let Some(name) = dialog.get_value() {
-            let result = app.config.borrow_mut().add_bus(&name);
-            match result {
-                ListEdit::Changed => {
-                    fx::on_bus_added(app);
-                    after_bus_edit(app);
-                    app.widgets(|w| {
-                        let count = w.bus_list.get_count();
-                        if count > 0 {
-                            w.bus_list.set_selection(count - 1, true);
-                        }
-                    });
-                    refresh_fx_list(app);
-                }
-                ListEdit::Unchanged if !name.trim().is_empty() => {
-                    show_error(&frame, "Add bus", "A bus with that name already exists.");
-                }
-                ListEdit::Unchanged => {}
+    if dialog.show_modal() == ID_OK
+        && let Some(name) = dialog.get_value()
+    {
+        let result = app.config.borrow_mut().add_bus(&name);
+        match result {
+            ListEdit::Changed => {
+                fx::on_bus_added(app);
+                after_bus_edit(app);
+                app.widgets(|w| {
+                    let count = w.bus_list.get_count();
+                    if count > 0 {
+                        w.bus_list.set_selection(count - 1, true);
+                    }
+                });
+                refresh_fx_list(app);
             }
+            ListEdit::Unchanged if !name.trim().is_empty() => {
+                show_error(&frame, "Add bus", "A bus with that name already exists.");
+            }
+            ListEdit::Unchanged => {}
         }
     }
     dialog.destroy();
@@ -403,7 +402,7 @@ fn rename_bus(app: &Rc<App>, list: &ListBox) {
     let ChainTarget::Bus(index) = target_for(list.get_selection().unwrap_or(0)) else {
         return;
     };
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let current = {
@@ -416,16 +415,16 @@ fn rename_bus(app: &Rc<App>, list: &ListBox) {
     let dialog = TextEntryDialog::builder(&frame, "New bus name:", "Rename bus")
         .with_default_value(&current)
         .build();
-    if dialog.show_modal() == ID_OK {
-        if let Some(name) = dialog.get_value() {
-            let result = app.config.borrow_mut().rename_bus(index, &name);
-            match result {
-                ListEdit::Changed => after_bus_edit(app),
-                ListEdit::Unchanged if !name.trim().is_empty() && name.trim() != current => {
-                    show_error(&frame, "Rename bus", "A bus with that name already exists.");
-                }
-                ListEdit::Unchanged => {}
+    if dialog.show_modal() == ID_OK
+        && let Some(name) = dialog.get_value()
+    {
+        let result = app.config.borrow_mut().rename_bus(index, &name);
+        match result {
+            ListEdit::Changed => after_bus_edit(app),
+            ListEdit::Unchanged if !name.trim().is_empty() && name.trim() != current => {
+                show_error(&frame, "Rename bus", "A bus with that name already exists.");
             }
+            ListEdit::Unchanged => {}
         }
     }
     dialog.destroy();
@@ -473,7 +472,7 @@ fn move_bus(app: &Rc<App>, list: &ListBox, towards_start: bool) {
 
 fn add_plugin(app: &Rc<App>) {
     let target = selected_target(app);
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let choices: Vec<(String, crate::config::PluginRef)> = {
@@ -601,7 +600,7 @@ fn edit_parameters(app: &Rc<App>, list: &ListBox) {
         return;
     };
     let Some(instance) = fx::instance_at(app, target, slot) else {
-        if let Some(frame) = app.widgets(|w| w.frame.clone()) {
+        if let Some(frame) = app.widgets(|w| w.frame) {
             show_info(
                 &frame,
                 "Edit parameters",
@@ -619,7 +618,7 @@ fn open_interface(app: &Rc<App>, list: &ListBox) {
         return;
     };
     let Some(instance) = fx::instance_at(app, target, slot) else {
-        if let Some(frame) = app.widgets(|w| w.frame.clone()) {
+        if let Some(frame) = app.widgets(|w| w.frame) {
             show_info(
                 &frame,
                 "Open interface",
@@ -650,7 +649,7 @@ fn target_name(app: &Rc<App>, target: ChainTarget) -> String {
 
 fn save_chain_to_library(app: &Rc<App>) {
     let target = selected_target(app);
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     // Capture current plugin state before saving.
@@ -668,20 +667,20 @@ fn save_chain_to_library(app: &Rc<App>) {
     let dialog = TextEntryDialog::builder(&frame, "Name for this chain:", "Save chain")
         .with_default_value(&default_name)
         .build();
-    if dialog.show_modal() == ID_OK {
-        if let Some(name) = dialog.get_value() {
-            let name = name.trim().to_string();
-            if !name.is_empty() {
-                let mut library = app.chain_library.borrow_mut();
-                let unique = crate::fx::unique_chain_name(&library.chains, &name);
-                library.chains.push(crate::fx::NamedChain {
-                    name: unique.clone(),
-                    slots,
-                });
-                crate::fx::save_library(&library);
-                drop(library);
-                show_info(&frame, "Save chain", &format!("Saved chain \"{unique}\"."));
-            }
+    if dialog.show_modal() == ID_OK
+        && let Some(name) = dialog.get_value()
+    {
+        let name = name.trim().to_string();
+        if !name.is_empty() {
+            let mut library = app.chain_library.borrow_mut();
+            let unique = crate::fx::unique_chain_name(&library.chains, &name);
+            library.chains.push(crate::fx::NamedChain {
+                name: unique.clone(),
+                slots,
+            });
+            crate::fx::save_library(&library);
+            drop(library);
+            show_info(&frame, "Save chain", &format!("Saved chain \"{unique}\"."));
         }
     }
     dialog.destroy();
@@ -689,7 +688,7 @@ fn save_chain_to_library(app: &Rc<App>) {
 
 fn load_chain_from_library(app: &Rc<App>) {
     let target = selected_target(app);
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let names: Vec<String> = app
@@ -757,16 +756,13 @@ fn pick_chain(app: &Rc<App>, frame: &Frame, names: &[String]) -> Option<usize> {
 
     // ID_OK carries "load the selection"; a delete re-runs the picker.
     {
-        let dialog = dialog.clone();
         load.on_click(move |_| dialog.end_modal(ID_OK));
     }
     {
-        let dialog = dialog.clone();
         cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
     {
         let app = app.clone();
-        let list = list.clone();
         delete.on_click(move |_| {
             let count = app.chain_library.borrow().chains.len();
             if let Some(index) = super::list::selection(&list, count) {
@@ -804,7 +800,7 @@ fn pick_chain(app: &Rc<App>, frame: &Frame, names: &[String]) -> Option<usize> {
 
 fn import_chain_file(app: &Rc<App>) {
     let target = selected_target(app);
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let dialog = FileDialog::builder(&frame)
@@ -848,7 +844,7 @@ fn import_chain_file(app: &Rc<App>) {
 
 fn export_chain_file(app: &Rc<App>) {
     let target = selected_target(app);
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     fx::snapshot_chain(app, target);
@@ -868,16 +864,16 @@ fn export_chain_file(app: &Rc<App>) {
         .with_wildcard("Pubsplash FX chain (*.pubfx)|*.pubfx")
         .with_style(FileDialogStyle::Save | FileDialogStyle::OverwritePrompt)
         .build();
-    if dialog.show_modal() == ID_OK {
-        if let Some(mut path) = dialog.get_path() {
-            if !path.to_lowercase().ends_with(".pubfx") {
-                path.push_str(".pubfx");
-            }
-            let chain = crate::fx::NamedChain { name, slots };
-            match crate::fx::export_chain(&chain, std::path::Path::new(&path)) {
-                Ok(()) => show_info(&frame, "Export chain", "Chain exported."),
-                Err(e) => show_error(&frame, "Export chain", &e),
-            }
+    if dialog.show_modal() == ID_OK
+        && let Some(mut path) = dialog.get_path()
+    {
+        if !path.to_lowercase().ends_with(".pubfx") {
+            path.push_str(".pubfx");
+        }
+        let chain = crate::fx::NamedChain { name, slots };
+        match crate::fx::export_chain(&chain, std::path::Path::new(&path)) {
+            Ok(()) => show_info(&frame, "Export chain", "Chain exported."),
+            Err(e) => show_error(&frame, "Export chain", &e),
         }
     }
 }
@@ -886,17 +882,15 @@ fn export_chain_file(app: &Rc<App>) {
 /// is installed. Missing plugins are reported; the user can apply with the
 /// available subset or cancel.
 fn apply_chain(app: &Rc<App>, target: ChainTarget, slots: Vec<crate::config::FxSlotConfig>) {
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let resolution = {
         let cache = app.plugins.borrow();
         crate::fx::resolve_chain(&slots, &cache)
     };
-    if !resolution.missing.is_empty() {
-        if !missing_plugin_dialog(&frame, &resolution) {
-            return;
-        }
+    if !resolution.missing.is_empty() && !missing_plugin_dialog(&frame, &resolution) {
+        return;
     }
     // Apply only the plugins that resolve on this machine.
     fx::replace_chain(app, target, resolution.valid);
@@ -954,11 +948,9 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
         buttons.add(&apply, 0, SizerFlag::All, 4);
         buttons.add(&cancel, 0, SizerFlag::All, 4);
         {
-            let dialog = dialog.clone();
             apply.on_click(move |_| dialog.end_modal(ID_OK));
         }
         {
-            let dialog = dialog.clone();
             cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
         }
     } else {
@@ -971,7 +963,6 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
         // default item as well, it answers Enter too.
         let ok = super::dismiss_button(&panel, "&OK");
         buttons.add(&ok, 0, SizerFlag::All, 4);
-        let dialog = dialog.clone();
         ok.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
     sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight, 0);

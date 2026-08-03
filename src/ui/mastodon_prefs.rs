@@ -189,9 +189,6 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     // an account. Called after linking and unlinking, never on a timer.
     let refresh_account: Rc<dyn Fn()> = {
         let app = app.clone();
-        let status = status.clone();
-        let server_input = server_input.clone();
-        let unlink = unlink.clone();
         Rc::new(move || {
             let config = app.config.borrow();
             let linked = config.mastodon.is_linked();
@@ -221,9 +218,8 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     // The list is rebuilt only on a deliberate edit. `select` names the row to
     // land on afterwards, so adding a template leaves focus on the one just
     // added rather than wherever the old indices happened to point.
-    let refresh_templates: Rc<dyn Fn(Option<&Template>)> = {
+    let refresh_templates: super::list::Refresh<Template> = {
         let app = app.clone();
-        let templates_list = templates_list.clone();
         Rc::new(move |select: Option<&Template>| {
             let templates = app.config.borrow().mastodon.templates.clone();
             let labels: Vec<String> = templates.iter().map(|t| t.list_label()).collect();
@@ -241,7 +237,6 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     {
         let app = app.clone();
-        let start_check = start_check.clone();
         start_check.clone().on_toggled(move |_| {
             app.config.borrow_mut().mastodon.post_on_start = start_check.get_value();
             app.save_config();
@@ -249,8 +244,6 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     }
     {
         let app = app.clone();
-        let periodic_check = periodic_check.clone();
-        let interval_choice = interval_choice.clone();
         periodic_check.clone().on_toggled(move |_| {
             let on = periodic_check.get_value();
             app.config.borrow_mut().mastodon.periodic = on;
@@ -260,7 +253,6 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     }
     {
         let app = app.clone();
-        let interval_choice = interval_choice.clone();
         interval_choice.clone().on_selection_changed(move |_| {
             let Some(index) = interval_choice.get_selection() else {
                 return;
@@ -279,8 +271,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     {
         let app = app.clone();
-        let dialog = dialog.clone();
-        let server_input = server_input.clone();
+        let dialog = *dialog;
         let refresh_account = refresh_account.clone();
         authorize.on_click(move |_| {
             let typed = server_input.get_value();
@@ -312,13 +303,18 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
                     "Authorize",
                     &format!("Pubsplash is linked to {}.", link.account),
                 );
+            } else {
+                // Whatever went wrong, the address is the thing the user would
+                // change; leave the caret where they can retype it. The same
+                // courtesy the rejection above already gets.
+                server_input.set_focus();
             }
         });
     }
 
     {
         let app = app.clone();
-        let dialog = dialog.clone();
+        let dialog = *dialog;
         let refresh_account = refresh_account.clone();
         unlink.on_click(move |_| {
             let (instance, client_id, secret, token, account) = {
@@ -361,7 +357,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     {
         let app = app.clone();
-        let dialog = dialog.clone();
+        let dialog = *dialog;
         let refresh_templates = refresh_templates.clone();
         add.on_click(move |_| {
             let Some(template) = super::mastodon_templates::edit(&dialog, None) else {
@@ -376,8 +372,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     {
         let app = app.clone();
-        let dialog = dialog.clone();
-        let templates_list = templates_list.clone();
+        let dialog = *dialog;
         let refresh_templates = refresh_templates.clone();
         edit.on_click(move |_| {
             let existing = app.config.borrow().mastodon.templates.clone();
@@ -400,7 +395,6 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     let do_remove = {
         let app = app.clone();
-        let templates_list = templates_list.clone();
         let refresh_templates = refresh_templates.clone();
         Rc::new(move || {
             let mut templates = app.config.borrow().mastodon.templates.clone();

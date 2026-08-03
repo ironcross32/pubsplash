@@ -191,10 +191,10 @@ unsafe fn synth_to_pcm(
         let voice: ISpVoice = CoCreateInstance(&SpVoice, None, CLSCTX_ALL)?;
         if let Some(token) = token {
             let _ = voice.SetVoice(token);
-        } else if !request.voice.is_empty() {
-            if let Some(token) = find_voice_token(&request.voice) {
-                let _ = voice.SetVoice(&token);
-            }
+        } else if !request.voice.is_empty()
+            && let Some(token) = find_voice_token(&request.voice)
+        {
+            let _ = voice.SetVoice(&token);
         }
         let _ = voice.SetRate(request.rate.clamp(-10, 10));
         let _ = voice.SetVolume(request.volume.clamp(0, 100) as u16);
@@ -251,6 +251,36 @@ unsafe fn synth_to_pcm(
     }
 }
 
+/// Finds a voice token whose description matches `name` (case-insensitive).
+/// Returns `None` for the empty string (meaning: keep the default voice).
+unsafe fn find_voice_token(name: &str) -> Option<ISpObjectToken> {
+    if name.is_empty() {
+        return None;
+    }
+    unsafe {
+        let category: ISpObjectTokenCategory =
+            CoCreateInstance(&SpObjectTokenCategory, None, CLSCTX_ALL).ok()?;
+        let id = wide(SPCAT_VOICES);
+        category.SetId(PCWSTR(id.as_ptr()), false).ok()?;
+        let tokens = category.EnumTokens(PCWSTR::null(), PCWSTR::null()).ok()?;
+        loop {
+            let mut token: Option<ISpObjectToken> = None;
+            if tokens.Next(1, &mut token, None).is_err() {
+                return None;
+            }
+            let token = token?;
+            // The token's default string value is the voice description.
+            if let Ok(description) = token.GetStringValue(PCWSTR::null()) {
+                let text = description.to_string().unwrap_or_default();
+                CoTaskMemFree(Some(description.as_ptr() as *const _));
+                if text.eq_ignore_ascii_case(name) {
+                    return Some(token);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,35 +321,5 @@ mod tests {
             !voices.is_empty(),
             "expected at least one installed SAPI voice"
         );
-    }
-}
-
-/// Finds a voice token whose description matches `name` (case-insensitive).
-/// Returns `None` for the empty string (meaning: keep the default voice).
-unsafe fn find_voice_token(name: &str) -> Option<ISpObjectToken> {
-    if name.is_empty() {
-        return None;
-    }
-    unsafe {
-        let category: ISpObjectTokenCategory =
-            CoCreateInstance(&SpObjectTokenCategory, None, CLSCTX_ALL).ok()?;
-        let id = wide(SPCAT_VOICES);
-        category.SetId(PCWSTR(id.as_ptr()), false).ok()?;
-        let tokens = category.EnumTokens(PCWSTR::null(), PCWSTR::null()).ok()?;
-        loop {
-            let mut token: Option<ISpObjectToken> = None;
-            if tokens.Next(1, &mut token, None).is_err() {
-                return None;
-            }
-            let token = token?;
-            // The token's default string value is the voice description.
-            if let Ok(description) = token.GetStringValue(PCWSTR::null()) {
-                let text = description.to_string().unwrap_or_default();
-                CoTaskMemFree(Some(description.as_ptr() as *const _));
-                if text.eq_ignore_ascii_case(name) {
-                    return Some(token);
-                }
-            }
-        }
     }
 }

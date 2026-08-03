@@ -392,18 +392,6 @@ impl Targets {
         }
     }
 
-    /// Whether the scene, source or bus an action names still exists. Always
-    /// true for actions that name nothing.
-    pub fn has(&self, action: &BindAction) -> bool {
-        match action.specifier() {
-            None => true,
-            Some(name) => self
-                .for_specifier(action.specifier_kind())
-                .iter()
-                .any(|n| n == name),
-        }
-    }
-
     pub fn for_specifier(&self, kind: Specifier) -> &[String] {
         match kind {
             Specifier::None => &[],

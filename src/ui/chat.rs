@@ -88,12 +88,12 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl, Button) {
     // View popup (button or double-click).
     {
         let app = app.clone();
-        let list = chat_list.clone();
+        let list = chat_list;
         view_button.on_click(move |_| view_selected(&app, &list));
     }
     {
         let app = app.clone();
-        let list = chat_list.clone();
+        let list = chat_list;
         chat_list
             .clone()
             .on_item_double_clicked(move |_| view_selected(&app, &list));
@@ -102,7 +102,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl, Button) {
     // Sending: Enter in the box or the Send button.
     {
         let app = app.clone();
-        let input = chat_input.clone();
+        let input = chat_input;
         chat_input.clone().on_text_enter(move |event| {
             send_message(&app, &input);
             // A single-line EDIT beeps when a `\r` WM_CHAR reaches its window
@@ -117,13 +117,13 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl, Button) {
     }
     {
         let app = app.clone();
-        let input = chat_input.clone();
+        let input = chat_input;
         send_button.on_click(move |_| send_message(&app, &input));
     }
 
     // Escape clears the input box.
     {
-        let input = chat_input.clone();
+        let input = chat_input;
         chat_input.clone().on_key_down(move |event| {
             if super::key_of(&event).map(|(code, _)| code) == Some(WXK_ESCAPE) {
                 input.set_value("");
@@ -135,7 +135,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl, Button) {
 
     {
         let app = app.clone();
-        let button = reconnect_button.clone();
+        let button = reconnect_button;
         reconnect_button
             .clone()
             .on_click(move |_| reconnect_chat(&app, &button));
@@ -191,7 +191,7 @@ fn view_selected(app: &Rc<App>, list: &ListBox) {
         return;
     };
 
-    let Some(frame) = app.widgets(|w| w.frame.clone()) else {
+    let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let dialog = Dialog::builder(&frame, &format!("Message from {user}"))
@@ -210,7 +210,6 @@ fn view_selected(app: &Rc<App>, list: &ListBox) {
     // handling, so Enter there still moves the caret rather than closing.
     let close = super::dismiss_button(&panel, "Close");
     {
-        let dialog = dialog.clone();
         close.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
     let panel_sizer = BoxSizer::builder(Orientation::Vertical).build();

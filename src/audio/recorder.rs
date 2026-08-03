@@ -18,6 +18,18 @@ use std::path::{Path, PathBuf};
 /// bound.
 const QUEUE_BLOCKS: usize = 256;
 
+/// What [`RecorderHandle::write`] did with a block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Written {
+    /// Handed to the writer thread.
+    Queued,
+    /// The queue was full, so this block is not in the file. Backpressure, not
+    /// a failure: the recording continues with a gap.
+    Dropped,
+    /// The writer thread is gone. Terminal — nothing further can be written.
+    WriterGone,
+}
+
 /// The engine's side of a recording: a bounded queue into a writer thread.
 ///
 /// [`Recorder::write`] is a synchronous `write_all`, and once the 8 KB buffer
@@ -53,11 +65,23 @@ impl RecorderHandle {
     /// Queues encoded bytes, dropping them if the writer has fallen a couple of
     /// seconds behind. Blocking here would stall the mix, which is the thing
     /// this type exists to prevent.
-    pub fn write(&self, bytes: Vec<u8>) {
-        if let Some(blocks) = &self.blocks {
-            if blocks.try_send(bytes).is_err() {
+    ///
+    /// The two failures are not the same and the caller has to tell them apart:
+    /// a full queue is a slow disk and the recording recovers from it, while a
+    /// disconnected queue means the writer thread is gone and nothing will ever
+    /// be written again. Reporting both as "dropped" is what let a dead
+    /// recording keep its healthy-looking UI.
+    pub fn write(&self, bytes: Vec<u8>) -> Written {
+        let Some(blocks) = &self.blocks else {
+            return Written::WriterGone;
+        };
+        match blocks.try_send(bytes) {
+            Ok(()) => Written::Queued,
+            Err(crossbeam_channel::TrySendError::Full(_)) => {
                 log::error!("Recording is falling behind; dropping audio from the file");
+                Written::Dropped
             }
+            Err(crossbeam_channel::TrySendError::Disconnected(_)) => Written::WriterGone,
         }
     }
 
@@ -169,6 +193,34 @@ fn part_path(base: &Path, n: u32) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_that_cannot_be_created_is_reported_not_swallowed() {
+        // A directory standing where the file should go: `File::create` fails,
+        // and the engine needs that as an error rather than a silent no-op.
+        let dir = std::env::temp_dir().join(format!("pubsplash_rec_bad_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("show.mp3")).unwrap();
+        assert!(RecorderHandle::start(&dir.join("show.mp3")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_dead_writer_is_not_reported_as_mere_backpressure() {
+        let dir = std::env::temp_dir().join(format!("pubsplash_rec_gone_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut handle = RecorderHandle::start(&dir.join("show.mp3")).unwrap();
+
+        assert_eq!(handle.write(b"audio".to_vec()), Written::Queued);
+
+        // Closing the queue is what the writer thread's exit looks like from
+        // here. `Dropped` would tell the engine to carry on into a file nothing
+        // is writing to.
+        handle.blocks = None;
+        assert_eq!(handle.write(b"audio".to_vec()), Written::WriterGone);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn part_path_inserts_suffix_before_extension() {

@@ -109,33 +109,34 @@ pub fn inspect(path: &Path) -> Result<PeInfo, String> {
     };
 
     let mut exports = Vec::new();
-    if export_rva != 0 && export_size != 0 {
-        if let Some(dir_offset) = rva_to_offset(export_rva) {
-            let mut dir = [0u8; 40];
-            read_at(&mut file, dir_offset, &mut dir)?;
-            let num_names = u32::from_le_bytes(dir[24..28].try_into().unwrap()).min(MAX_EXPORTS);
-            let names_rva = u32::from_le_bytes(dir[32..36].try_into().unwrap());
-            if let Some(names_offset) = rva_to_offset(names_rva) {
-                let mut name_rvas = vec![0u8; num_names as usize * 4];
-                read_at(&mut file, names_offset, &mut name_rvas)?;
-                for rva_bytes in name_rvas.chunks_exact(4) {
-                    let name_rva = u32::from_le_bytes(rva_bytes.try_into().unwrap());
-                    let Some(name_offset) = rva_to_offset(name_rva) else {
-                        continue;
-                    };
-                    // Export names of interest are short; 64 bytes is plenty.
-                    let mut name_buf = [0u8; 64];
-                    if file.seek(SeekFrom::Start(name_offset)).is_err() {
-                        continue;
-                    }
-                    let read = file.read(&mut name_buf).unwrap_or(0);
-                    let end = name_buf[..read]
-                        .iter()
-                        .position(|&b| b == 0)
-                        .unwrap_or(read);
-                    if let Ok(name) = std::str::from_utf8(&name_buf[..end]) {
-                        exports.push(name.to_string());
-                    }
+    if export_rva != 0
+        && export_size != 0
+        && let Some(dir_offset) = rva_to_offset(export_rva)
+    {
+        let mut dir = [0u8; 40];
+        read_at(&mut file, dir_offset, &mut dir)?;
+        let num_names = u32::from_le_bytes(dir[24..28].try_into().unwrap()).min(MAX_EXPORTS);
+        let names_rva = u32::from_le_bytes(dir[32..36].try_into().unwrap());
+        if let Some(names_offset) = rva_to_offset(names_rva) {
+            let mut name_rvas = vec![0u8; num_names as usize * 4];
+            read_at(&mut file, names_offset, &mut name_rvas)?;
+            for rva_bytes in name_rvas.chunks_exact(4) {
+                let name_rva = u32::from_le_bytes(rva_bytes.try_into().unwrap());
+                let Some(name_offset) = rva_to_offset(name_rva) else {
+                    continue;
+                };
+                // Export names of interest are short; 64 bytes is plenty.
+                let mut name_buf = [0u8; 64];
+                if file.seek(SeekFrom::Start(name_offset)).is_err() {
+                    continue;
+                }
+                let read = file.read(&mut name_buf).unwrap_or(0);
+                let end = name_buf[..read]
+                    .iter()
+                    .position(|&b| b == 0)
+                    .unwrap_or(read);
+                if let Ok(name) = std::str::from_utf8(&name_buf[..end]) {
+                    exports.push(name.to_string());
                 }
             }
         }

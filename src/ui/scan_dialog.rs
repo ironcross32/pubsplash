@@ -119,7 +119,6 @@ impl ScanDialog {
 
         {
             let skip = skip.clone();
-            let status = status.clone();
             skip_button.on_click(move |event| {
                 skip.store(true, Ordering::Relaxed);
                 status.set_value("Skipping this plugin...");
@@ -130,7 +129,6 @@ impl ScanDialog {
         }
         {
             let cancel = cancel.clone();
-            let status = status.clone();
             cancel_button.on_click(move |event| {
                 cancel.store(true, Ordering::Relaxed);
                 // A helper that is part-way through a plugin has to finish or

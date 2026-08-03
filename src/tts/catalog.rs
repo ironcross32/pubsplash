@@ -344,10 +344,8 @@ pub fn commit_engine(engine: &str, mut entry: EngineCatalog) -> bool {
             true
         }
     };
-    if changed {
-        if let Ok(state) = state().read() {
-            save_to(&state.catalog, &path());
-        }
+    if changed && let Ok(state) = state().read() {
+        save_to(&state.catalog, &path());
     }
     changed
 }
@@ -612,8 +610,10 @@ mod tests {
 
     #[test]
     fn startup_refresh_requires_complete_credentials() {
-        let mut speech = SpeechConfig::default();
-        speech.aws_access_key_id = "id".into();
+        let mut speech = SpeechConfig {
+            aws_access_key_id: "id".into(),
+            ..Default::default()
+        };
         assert!(!startup_engines(&speech).contains(&super::super::engines::AWS));
         speech.aws_secret_access_key = crate::secret::Secret::new("secret");
         assert!(startup_engines(&speech).contains(&super::super::engines::AWS));

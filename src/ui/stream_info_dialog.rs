@@ -181,7 +181,7 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
     // Tabbing into a text field selects its contents so the pre-filled
     // defaults can be overwritten by just typing.
     for input in [&title_input, &description_input] {
-        let input_for_focus = input.clone();
+        let input_for_focus = *input;
         input.on_set_focus(move |event| {
             input_for_focus.select_all();
             event.skip(true);
@@ -190,14 +190,7 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
 
     {
         let app = app.clone();
-        let dialog_for_ok = dialog.clone();
-        let title_input = title_input.clone();
-        let description_input = description_input.clone();
-        let archive_check = archive_check.clone();
-        let record_check = record_check.clone();
-        let announce_start = announce_start.clone();
-        let announce_periodic = announce_periodic.clone();
-        let quality_choice = quality_choice.clone();
+        let dialog_for_ok = dialog;
         ok_button.on_click(move |_| {
             let mut title = title_input.get_value().trim().to_string();
             if title.is_empty() {
@@ -226,7 +219,7 @@ pub fn show(app: &Rc<App>, parent: &Frame) -> bool {
         });
     }
     {
-        let dialog_for_cancel = dialog.clone();
+        let dialog_for_cancel = dialog;
         cancel_button.on_click(move |_| {
             dialog_for_cancel.end_modal(ID_CANCEL);
         });

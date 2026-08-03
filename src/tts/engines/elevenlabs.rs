@@ -306,8 +306,120 @@ fn parse_voices(body: &serde_json::Value) -> Vec<Voice> {
                 .collect()
         })
         .unwrap_or_default();
-    voices.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    voices.sort_by_key(|a| a.label.to_lowercase());
     voices
+}
+
+/// Every voice on the account, following [`VOICES_URL`]'s paging to the end.
+///
+/// Shared by [`ElevenLabs::voices`] and [`discover`] so the two cannot disagree
+/// about how many voices the account has — they did, when only one of them
+/// paged.
+async fn fetch_voices(key: &str) -> Result<Vec<Voice>, TtsError> {
+    let mut voices = Vec::new();
+    let mut page_token = String::new();
+    loop {
+        let mut request = client()
+            .get(VOICES_URL)
+            .header("xi-api-key", key)
+            .query(&[("page_size", "100")]);
+        if !page_token.is_empty() {
+            request = request.query(&[("next_page_token", page_token.as_str())]);
+        }
+        let body = body_json(SERVICE, request.send().await?).await?;
+        voices.extend(parse_voices(&body));
+        let has_more = body
+            .get("has_more")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        page_token = body
+            .get("next_page_token")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !has_more || page_token.is_empty() {
+            break;
+        }
+    }
+    Ok(voices)
+}
+
+/// Authenticates the key and discovers TTS-capable models and all voices.
+pub fn discover(config: &SpeechConfig) -> Result<crate::tts::catalog::EngineCatalog, TtsError> {
+    use crate::tts::catalog::{CatalogModel, EngineCatalog};
+    let engine = ElevenLabs::new(config);
+    let key = require(&engine.api_key, "The ElevenLabs API key")?;
+    let body: serde_json::Value = block_on(async {
+        let response = client()
+            .get(format!("{API_BASE}/models"))
+            .header("xi-api-key", key)
+            .send()
+            .await?;
+        body_json(SERVICE, response).await
+    })?;
+    let mut models: Vec<_> = body
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|model| {
+            model
+                .get("can_do_text_to_speech")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        })
+        .filter_map(|model| {
+            let id = model.get("model_id")?.as_str()?;
+            let label = model.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+            Some(CatalogModel {
+                id: id.into(),
+                label: label.into(),
+            })
+        })
+        .collect();
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    models.dedup_by(|a, b| a.id == b.id);
+    let voices = block_on(fetch_voices(key))?;
+    Ok(EngineCatalog::from_voices(models, voices))
+}
+
+/// Reads the account's character allowance.
+///
+/// ElevenLabs is the only engine Pubsplash talks to that publishes a balance
+/// against the credentials the app already holds — the rest keep theirs behind
+/// a cloud-billing API with its own scope. Bills one credit per character, so
+/// `character_count`/`character_limit` are directly comparable with the
+/// per-session character tally in [`crate::tts::usage`].
+pub fn subscription(config: &SpeechConfig) -> Result<crate::tts::usage::Balance, TtsError> {
+    let engine = ElevenLabs::new(config);
+    let key = require(&engine.api_key, "The ElevenLabs API key")?;
+    let body: serde_json::Value = block_on(async {
+        let response = client()
+            .get(format!("{API_BASE}/user/subscription"))
+            .header("xi-api-key", key)
+            .send()
+            .await?;
+        body_json(SERVICE, response).await
+    })?;
+    Ok(parse_subscription(&body))
+}
+
+/// A missing field is reported as zero rather than as an error: the response
+/// shape has grown fields over time, and a balance that reads "0 of 0" is
+/// obviously wrong to a user in a way a failed refresh is not.
+fn parse_subscription(body: &serde_json::Value) -> crate::tts::usage::Balance {
+    let number = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+    crate::tts::usage::Balance {
+        used: number("character_count"),
+        limit: number("character_limit"),
+        tier: body
+            .get("tier")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        resets_unix: body
+            .get("next_character_count_reset_unix")
+            .and_then(|v| v.as_i64()),
+    }
 }
 
 #[cfg(test)]
@@ -446,15 +558,19 @@ mod tests {
                 ..Default::default()
             }))
         );
-        let mut config = SpeechConfig::default();
-        config.elevenlabs_model = "eleven_v3".into();
+        let config = SpeechConfig {
+            elevenlabs_model: "eleven_v3".into(),
+            ..Default::default()
+        };
         assert!(!ElevenLabs::new(&config).streaming_enabled(&request_at_rate(0)));
     }
 
     #[test]
     fn a_blank_configured_model_falls_back_to_the_default() {
-        let mut config = SpeechConfig::default();
-        config.elevenlabs_model = "  ".into();
+        let config = SpeechConfig {
+            elevenlabs_model: "  ".into(),
+            ..Default::default()
+        };
         assert_eq!(ElevenLabs::new(&config).model, MODELS[0]);
     }
 
@@ -531,117 +647,5 @@ mod tests {
         let mut request = request_at_rate(0);
         request.voice = "abc123".into();
         assert_eq!(engine.usage_voice(&request).as_deref(), Some("abc123"));
-    }
-}
-
-/// Every voice on the account, following [`VOICES_URL`]'s paging to the end.
-///
-/// Shared by [`ElevenLabs::voices`] and [`discover`] so the two cannot disagree
-/// about how many voices the account has — they did, when only one of them
-/// paged.
-async fn fetch_voices(key: &str) -> Result<Vec<Voice>, TtsError> {
-    let mut voices = Vec::new();
-    let mut page_token = String::new();
-    loop {
-        let mut request = client()
-            .get(VOICES_URL)
-            .header("xi-api-key", key)
-            .query(&[("page_size", "100")]);
-        if !page_token.is_empty() {
-            request = request.query(&[("next_page_token", page_token.as_str())]);
-        }
-        let body = body_json(SERVICE, request.send().await?).await?;
-        voices.extend(parse_voices(&body));
-        let has_more = body
-            .get("has_more")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false);
-        page_token = body
-            .get("next_page_token")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_string();
-        if !has_more || page_token.is_empty() {
-            break;
-        }
-    }
-    Ok(voices)
-}
-
-/// Authenticates the key and discovers TTS-capable models and all voices.
-pub fn discover(config: &SpeechConfig) -> Result<crate::tts::catalog::EngineCatalog, TtsError> {
-    use crate::tts::catalog::{CatalogModel, EngineCatalog};
-    let engine = ElevenLabs::new(config);
-    let key = require(&engine.api_key, "The ElevenLabs API key")?;
-    let body: serde_json::Value = block_on(async {
-        let response = client()
-            .get(format!("{API_BASE}/models"))
-            .header("xi-api-key", key)
-            .send()
-            .await?;
-        body_json(SERVICE, response).await
-    })?;
-    let mut models: Vec<_> = body
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|model| {
-            model
-                .get("can_do_text_to_speech")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-        })
-        .filter_map(|model| {
-            let id = model.get("model_id")?.as_str()?;
-            let label = model.get("name").and_then(|v| v.as_str()).unwrap_or(id);
-            Some(CatalogModel {
-                id: id.into(),
-                label: label.into(),
-            })
-        })
-        .collect();
-    models.sort_by(|a, b| a.id.cmp(&b.id));
-    models.dedup_by(|a, b| a.id == b.id);
-    let voices = block_on(fetch_voices(key))?;
-    Ok(EngineCatalog::from_voices(models, voices))
-}
-
-/// Reads the account's character allowance.
-///
-/// ElevenLabs is the only engine Pubsplash talks to that publishes a balance
-/// against the credentials the app already holds — the rest keep theirs behind
-/// a cloud-billing API with its own scope. Bills one credit per character, so
-/// `character_count`/`character_limit` are directly comparable with the
-/// per-session character tally in [`crate::tts::usage`].
-pub fn subscription(config: &SpeechConfig) -> Result<crate::tts::usage::Balance, TtsError> {
-    let engine = ElevenLabs::new(config);
-    let key = require(&engine.api_key, "The ElevenLabs API key")?;
-    let body: serde_json::Value = block_on(async {
-        let response = client()
-            .get(format!("{API_BASE}/user/subscription"))
-            .header("xi-api-key", key)
-            .send()
-            .await?;
-        body_json(SERVICE, response).await
-    })?;
-    Ok(parse_subscription(&body))
-}
-
-/// A missing field is reported as zero rather than as an error: the response
-/// shape has grown fields over time, and a balance that reads "0 of 0" is
-/// obviously wrong to a user in a way a failed refresh is not.
-fn parse_subscription(body: &serde_json::Value) -> crate::tts::usage::Balance {
-    let number = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-    crate::tts::usage::Balance {
-        used: number("character_count"),
-        limit: number("character_limit"),
-        tier: body
-            .get("tier")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        resets_unix: body
-            .get("next_character_count_reset_unix")
-            .and_then(|v| v.as_i64()),
     }
 }
