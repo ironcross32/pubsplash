@@ -325,6 +325,18 @@ file = "src/ui/preferences.rs"
 message = "Type the path where you'd like your local recordings to be saved to, or use the browse button to pick a folder using a standard Windows folder picker."
 
 [[control]]
+id = "dialog.preferences.general.checkNow"
+label = "Check for updates now button"
+file = "src/ui/preferences.rs"
+message = "Asks GitHub straight away whether a newer version of Pubsplash exists, without waiting for the next time you start the app. Unlike the automatic check, this one always answers: if you already have the newest version, it says so. If there is a newer one, Pubsplash asks whether you'd like it before downloading anything."
+
+[[control]]
+id = "dialog.preferences.general.checkOnStart"
+label = "Check for updates on startup checkbox"
+file = "src/ui/preferences.rs"
+message = "When this box is checked, Pubsplash asks GitHub once each time it starts whether a newer version exists. If there isn't one, or GitHub can't be reached, nothing is said at all. If there is, Pubsplash asks whether you'd like to download and install it; nothing is downloaded or replaced unless you say yes. The check is skipped entirely while you are streaming or recording."
+
+[[control]]
 id = "dialog.preferences.keybinds.add"
 label = "Add binding button"
 file = "src/ui/keybinds_ui.rs"
@@ -353,6 +365,24 @@ id = "dialog.preferences.keybinds.reset"
 label = "Reset keybinds to defaults button"
 file = "src/ui/keybinds_ui.rs"
 message = "Throws away every shortcut you have made and puts back the two Pubsplash ships with, F9 for streaming and F10 for recording. You are asked to confirm first."
+
+[[control]]
+id = "dialog.preferences.logging.compress"
+label = "Compress logs button"
+file = "src/ui/logging_ui.rs"
+message = "Packages the log files and any crash reports into a single ZIP file, and asks you where to save it with a standard Windows save box. This is the file to attach when you report a problem. Pubsplash stops logging for the moment it takes, so that the log of the session you are in right now is closed off and goes into the archive complete rather than with its last few lines missing; logging carries straight on afterwards. Nothing else is included: no passwords, no API keys, and none of your settings."
+
+[[control]]
+id = "dialog.preferences.logging.level"
+label = "Log level choice"
+file = "src/ui/logging_ui.rs"
+message = "How much detail Pubsplash writes to its log file. Info, the setting it ships with, records the things that matter: what connected, what failed, what you started and stopped. Debug and trace add a great deal more, and are worth turning on when you are chasing a problem and have been asked for a log; trace in particular writes constantly while audio is running, so put it back to info afterwards. Error and warn record less than info, and off writes nothing at all. The change takes effect at once, and is remembered. If a PUBSPLASH_LOG environment variable is set, it fixes the level for the run and this box is disabled."
+
+[[control]]
+id = "dialog.preferences.logging.openFolder"
+label = "Open logs folder button"
+file = "src/ui/logging_ui.rs"
+message = "Opens the folder the log files are written to in Windows Explorer. The newest one is called pubsplash_rCURRENT.log and is the one being written to right now; the numbered ones beside it are older. If you are collecting a log to send to somebody, the Compress logs button is the easier way, since it gathers all of them and the crash reports in one go."
 
 [[control]]
 id = "dialog.preferences.mastodon.addTemplate"
@@ -839,6 +869,24 @@ id = "dialog.ttsSource.volume"
 label = "TTS voice volume slider"
 file = "src/ui/scenes.rs"
 message = "Use arrows, page up, page down, home and end to set the volume of this voice."
+
+[[control]]
+id = "dialog.update.cancel"
+label = "Cancel the update download button"
+file = "src/ui/update_dialog.rs"
+message = "Stops the download and closes this window. Nothing on your computer has been changed at this point, so cancelling is always safe; the part that was downloaded is thrown away. You can start the update again later from the General tab of Preferences."
+
+[[control]]
+id = "dialog.update.progress"
+label = "Update download progress bar"
+file = "src/ui/update_dialog.rs"
+message = "How much of the update has been downloaded so far, as a percentage. It reaches one hundred percent when the download is complete and Pubsplash starts checking it."
+
+[[control]]
+id = "dialog.update.status"
+label = "Update download status text"
+file = "src/ui/update_dialog.rs"
+message = "How far the download has got, in megabytes. This is a read-only box you can tab to and read whenever you like; it does not read itself out as it changes, so it won't talk over you while you work."
 
 [[control]]
 id = "tab.api.refreshButton"

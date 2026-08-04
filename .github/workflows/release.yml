@@ -104,9 +104,26 @@ jobs:
           cp target/release/pubsplash.exe bundle/
           cp target/release/pubsplash-scan.exe bundle/
           cp target/release/pubsplash-soundpack.exe bundle/
+          cp target/release/pubsplash-update.exe bundle/
           cp target/release/soundpack.exe bundle/
           cp readme.html bundle/
           cp changelog.html bundle/
+          # How Pubsplash knows it is the portable build and must replace its
+          # own folder rather than run the installer. The installer's $INSTDIR
+          # has an uninstall.exe and no marker; this has the marker and no
+          # uninstaller. See src/update/install_kind.rs, which reads this file's
+          # presence only -- the text is for whoever opens it.
+          cat > bundle/portable.txt <<'EOF'
+          This is the portable build of Pubsplash. Everything it needs is in this
+          folder; nothing is installed and nothing is written to the registry.
+
+          Move the whole folder wherever you like and run pubsplash.exe. Your
+          settings, logs and crash dumps live in %LOCALAPPDATA%\pubsplash, not
+          here, so they survive an update.
+
+          Do not delete this file: Pubsplash reads it to tell a portable copy
+          from an installed one when it updates itself.
+          EOF
 
       - name: Zip bundle
         shell: pwsh
@@ -126,10 +143,65 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path target/release/*.pdb -DestinationPath "pubsplash-${{ github.ref_name }}-debug-symbols.zip"
 
+      # Everything the updater and the README's download links reach for lives at
+      # `releases/latest/download/<name>`, which only works if the name has no
+      # version in it. So each artifact is *copied*, not renamed: the versioned
+      # name stays for humans and for telling one downloaded file from another,
+      # and the stable copy beside it is what the fixed URLs resolve to. A few
+      # megabytes of release storage per tag buys a link that never has to be
+      # edited again.
+      #
+      # The debug-symbols ZIP deliberately gets no stable name: nothing should be
+      # able to fetch it by guessing, and it is matched to a release by its tag.
+      - name: Copy artifacts to stable names
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp target/release/*-setup.exe pubsplash-setup.exe
+          cp "pubsplash-${GITHUB_REF_NAME}.zip" pubsplash-portable.zip
+
+      # The manifest Pubsplash reads to decide whether an update exists. Written
+      # here rather than read from the GitHub API because api.github.com is rate
+      # limited per IP -- which a shared or NAT'd network exhausts through no
+      # fault of the user -- and because the API cannot carry a checksum. The
+      # SHA-256s are what make a truncated or tampered download detectable before
+      # anything is run; see src/update/http.rs, which verifies size then hash.
+      #
+      # `version` has no `v`: it is compared against CARGO_PKG_VERSION. Manual
+      # runs have no tag, so they get the manifest version from Cargo.toml and
+      # the notes URL from the branch -- enough to eyeball the file, and never
+      # published.
+      - name: Write latest.json
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -match '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+            $version = $tag.Substring(1)
+          } else {
+            $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          }
+          function Describe($path) {
+            $item = Get-Item $path
+            return [ordered]@{
+              name   = $item.Name
+              sha256 = (Get-FileHash $path -Algorithm SHA256).Hash.ToLower()
+              size   = $item.Length
+            }
+          }
+          $manifest = [ordered]@{
+            version   = $version
+            notes_url = "https://github.com/${{ github.repository }}/releases/tag/$tag"
+            installer = Describe "pubsplash-setup.exe"
+            portable  = Describe "pubsplash-portable.zip"
+          }
+          $manifest | ConvertTo-Json -Depth 4 | Out-File latest.json -Encoding utf8
+          Get-Content latest.json
+
       # Manual runs stop here: the build is downloadable from the run's summary
       # page for 90 days, and nothing is published. The `pubsplash-*.zip` glob
-      # here and in the release step covers the debug-symbols ZIP as well as the
-      # portable one; both are named from the tag.
+      # here and in the release step covers the debug-symbols ZIP and the two
+      # portable ones. latest.json is included so a manual run can be checked --
+      # download it and confirm its hashes match the assets beside it.
       - name: Upload artifacts
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
@@ -138,6 +210,8 @@ jobs:
           path: |
             target/release/*-setup.exe
             pubsplash-*.zip
+            pubsplash-setup.exe
+            latest.json
 
       # Guarded on the ref rather than the event so this can only ever publish
       # from a tag, however the workflow was started.
@@ -148,4 +222,6 @@ jobs:
           files: |
             target/release/*-setup.exe
             pubsplash-*.zip
+            pubsplash-setup.exe
+            latest.json
           generate_release_notes: true

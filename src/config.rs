@@ -25,6 +25,7 @@ pub struct Config {
     pub speech: SpeechConfig,
     pub keybinds: crate::keybind::KeybindsConfig,
     pub mastodon: MastodonConfig,
+    pub updates: UpdatesConfig,
 }
 
 impl Config {
@@ -399,6 +400,24 @@ impl StreamFormat {
         match self {
             StreamFormat::Mp3 => "MP3",
             StreamFormat::Aac => "AAC",
+        }
+    }
+}
+
+/// Automatic-update preferences, shown on the General tab.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct UpdatesConfig {
+    /// When set, Pubsplash asks GitHub for the latest release once at startup
+    /// and offers the update if there is one. Defaults to on; a check that finds
+    /// nothing, or cannot reach GitHub at all, says nothing.
+    pub check_on_start: bool,
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self {
+            check_on_start: true,
         }
     }
 }

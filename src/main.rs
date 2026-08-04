@@ -16,28 +16,32 @@ mod source_name;
 mod state;
 mod tts;
 mod ui;
+mod update;
 mod vst;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 fn main() {
-    // Logging must come up before config so config recovery can log.
-    // Held (not leaked) for the lifetime of the app: log writes are buffered
-    // and flushed on a background thread so the audio engine never blocks on
-    // one, and dropping the handle at the end of `main` is what flushes the
-    // tail of the file.
-    let mut log_handle = logging::init("info");
+    // Logging must come up before config so config recovery can log. The handle
+    // lives in a process-global inside `logging` for the lifetime of the app,
+    // since the Preferences window reaches it too; `logging::shutdown` at the
+    // end of `main` is what flushes the tail of the file, because log writes
+    // are buffered and written on a background thread so the audio engine never
+    // blocks on one.
+    logging::init("info");
     let config = config::load();
-    if let Some(handle) = log_handle.as_mut() {
-        handle.set_level(&config.logging.level);
-    }
+    logging::set_level(&config.logging.level);
     logging::install_panic_hook();
     // The panic hook only catches Rust panics. Hosted plugins fault in C++,
     // which kills the process without unwinding, so it takes a Win32 exception
     // filter to leave any trace at all of who did it.
     crash::install();
     log::info!("Pubsplash {} starting", env!("CARGO_PKG_VERSION"));
+    // Clears the staging area, and with it the helper copy from a previous
+    // update -- a running process cannot delete its own image, so that one
+    // always outlives the update it applied.
+    update::cleanup_leftovers();
 
     let plugin_cache = vst::load_cache();
     log::info!("Plugin cache: {} plugins known", plugin_cache.plugins.len());
@@ -78,6 +82,7 @@ fn main() {
         let (apps_tx, apps_rx) = crossbeam_channel::unbounded();
         let (usage_tx, usage_rx) = crossbeam_channel::unbounded();
         let (mastodon_tx, mastodon_rx) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
         let (tts_catalog_tx, tts_catalog_rx) = crossbeam_channel::unbounded();
         tts::catalog::start_refresh(config.speech.clone(), tts_catalog_tx);
         ui::run_when_ready(move || {
@@ -120,6 +125,9 @@ fn main() {
             usage_rx,
             mastodon_tx,
             mastodon_rx,
+            update_tx,
+            update_rx,
+            update_state: RefCell::new(Default::default()),
             pump_timer: RefCell::new(None),
             fast_timer: RefCell::new(None),
             shutdown_cue: RefCell::new(None),
@@ -128,8 +136,5 @@ fn main() {
     });
 
     log::info!("Pubsplash exiting");
-    if let Some(handle) = &log_handle {
-        handle.flush();
-    }
-    drop(log_handle);
+    logging::shutdown();
 }

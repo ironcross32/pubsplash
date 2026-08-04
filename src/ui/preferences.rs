@@ -1,6 +1,7 @@
-//! Preferences dialog. Tabbed: "Archiving", "Mastodon" (whose body lives in
-//! `ui/mastodon_prefs.rs`), "Speech", "Sound packs", "VST plugins", and
-//! "Keybinds" (whose body lives in `ui/keybinds_ui.rs`).
+//! Preferences dialog. Tabbed: "General", "Archiving", "Mastodon" (whose body
+//! lives in `ui/mastodon_prefs.rs`), "Speech", "Sound packs", "VST plugins",
+//! "Keybinds" (whose body lives in `ui/keybinds_ui.rs`), and
+//! "Logging & debugging" (`ui/logging_ui.rs`).
 //! The VST tab manages the plugin folder list and starts scans; scan progress
 //! arrives on the pump (see `pump_scan_events` in `ui/mod.rs`). Every tab saves
 //! as the user changes a control, so the dialog only needs a Close button.
@@ -16,12 +17,24 @@ const NO_PLUGIN_FOLDERS: &str = "No plugin folders";
 pub fn show(app: &Rc<App>, frame: &Frame) {
     let dialog = Dialog::builder(frame, "Preferences")
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .with_size(560, 480)
+        // Wide enough for every tab label to fit on one row. At 560 the eighth
+        // tab pushed the row over and wx grew a pair of scroll arrows, which
+        // hides whichever tabs are off the end until you press them.
+        .with_size(700, 480)
         .build();
 
+    // An update check answers on the pump, not in the click handler, so the
+    // window its message boxes belong to is registered for as long as this
+    // dialog lives. Cleared below, before `destroy()`.
+    super::update::set_notice_parent(app, Some(dialog));
+
     let notebook = Notebook::builder(&dialog).build();
+    // First, and the selected page: exactly one `add_page` may pass `true`.
+    let general_panel = Panel::builder(&notebook).build();
+    notebook.add_page(&general_panel, "General", true, None);
+    build_general_tab(app, &general_panel);
     let archiving_panel = Panel::builder(&notebook).build();
-    notebook.add_page(&archiving_panel, "Archiving", true, None);
+    notebook.add_page(&archiving_panel, "Archiving", false, None);
     build_archiving_tab(app, &dialog, &archiving_panel);
     let mastodon_panel = Panel::builder(&notebook).build();
     notebook.add_page(&mastodon_panel, "Mastodon", false, None);
@@ -39,6 +52,12 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     let keybinds_panel = Panel::builder(&notebook).build();
     notebook.add_page(&keybinds_panel, "Keybinds", false, None);
     super::keybinds_ui::build_tab(app, &dialog, &keybinds_panel);
+    let logging_panel = Panel::builder(&notebook).build();
+    // Doubled deliberately: wx runs a notebook tab's label through the same
+    // mnemonic parsing as a button's, so a single `&` is swallowed and
+    // underlines the `d`. The tab read "Logging  debugging" until this.
+    notebook.add_page(&logging_panel, "Logging && debugging", false, None);
+    super::logging_ui::build_tab(app, &dialog, &logging_panel);
 
     // Dismiss-only, so `dismiss_button` puts both Escape and Enter on it.
     let close_button = super::dismiss_button(&dialog, "C&lose");
@@ -65,7 +84,75 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     // under the borrow first.
     let scan = app.scan.borrow_mut().take();
     drop(scan);
+    // Same rule for the update check, which can still be in flight: from here on
+    // its notices go back to the main frame, because this window is about to
+    // stop existing.
+    super::update::set_notice_parent(app, None);
     dialog.destroy();
+}
+
+/// The General tab: settings that are about the app itself rather than about a
+/// stream. Automatic updates is the only group so far.
+///
+/// No `dialog` argument: nothing here opens a child dialog of its own. The
+/// update prompt and its progress window are opened by the pump, long after the
+/// click handler has returned — a check started here outlives this dialog, since
+/// the user can press Close while it is still in flight, and an answer parented
+/// on a destroyed window would go nowhere. That is why the parent for those
+/// notices is registered once in [`show`] and cleared there rather than being
+/// handed over at the press: while this dialog is up its message boxes belong to
+/// it, so dismissing one puts focus back on the button that was pressed; after
+/// it closes they fall back to the main frame.
+///
+/// Mnemonics are dialog-wide (`::IsDialogMessage` searches the whole
+/// Preferences dialog, not the current page), so ALT+S and ALT+U here are picked
+/// to dodge every letter the other six tabs claim.
+fn build_general_tab(app: &Rc<App>, panel: &Panel) {
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+
+    let (updates_group, updates_box) = super::group_box(panel, "Automatic updates");
+
+    let check_on_start = CheckBox::builder(&updates_box)
+        .with_label("Check for updates when Pubsplash &starts")
+        .build();
+    super::set_accessible_name(&check_on_start, "Check for updates when Pubsplash starts");
+    super::help::tag(
+        &check_on_start,
+        "dialog.preferences.general.checkOnStart",
+        "Check for updates on startup checkbox",
+    );
+    check_on_start.set_value(app.config.borrow().updates.check_on_start);
+    updates_group.add(&check_on_start, 0, SizerFlag::All, 4);
+    {
+        let app = app.clone();
+        check_on_start.clone().on_toggled(move |_| {
+            app.config.borrow_mut().updates.check_on_start = check_on_start.get_value();
+            app.save_config();
+        });
+    }
+
+    // The manual check reports every outcome, including "you are up to date" —
+    // it answers a press, and a button that can silently do nothing reads as
+    // broken.
+    let check_now = Button::builder(&updates_box)
+        .with_label("Check for &updates now")
+        .build();
+    super::set_accessible_name(&check_now, "Check for updates now");
+    super::help::tag(
+        &check_now,
+        "dialog.preferences.general.checkNow",
+        "Check for updates now button",
+    );
+    updates_group.add(&check_now, 0, SizerFlag::All, 4);
+    {
+        let app = app.clone();
+        check_now.on_click(move |_| {
+            super::update::start_check(&app, crate::update::Trigger::Manual);
+        });
+    }
+
+    sizer.add_sizer(&updates_group, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    panel.set_sizer(sizer, true);
 }
 
 fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {

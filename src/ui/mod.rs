@@ -16,6 +16,7 @@ mod home;
 mod keybinds;
 mod keybinds_ui;
 mod list;
+mod logging_ui;
 mod mastodon_post;
 mod mastodon_prefs;
 mod mastodon_templates;
@@ -27,6 +28,8 @@ mod scenes;
 mod sends;
 mod slider_uia;
 mod stream_info_dialog;
+mod update;
+mod update_dialog;
 
 use crate::audio::{
     AudioEngine, EngineCommand, FeedKind, RoutingUpdate, SourceSpec, capture::CaptureKind,
@@ -736,6 +739,15 @@ pub struct App {
     /// live broadcast.
     pub mastodon_tx: crossbeam_channel::Sender<crate::mastodon::net::PostResult>,
     pub mastodon_rx: crossbeam_channel::Receiver<crate::mastodon::net::PostResult>,
+    /// Progress and outcomes from the update workers (`src/update/`). Drained by
+    /// the pump; see [`update`] for why an update prompt is allowed to be a
+    /// modal when a connection notice is not.
+    pub update_tx: crossbeam_channel::Sender<crate::update::UpdateEvent>,
+    pub update_rx: crossbeam_channel::Receiver<crate::update::UpdateEvent>,
+    /// The update in flight, if any: its dialog and the flag that cancels it.
+    /// Also the guard that keeps a second check from starting while one is
+    /// already running.
+    pub update_state: RefCell<update::UpdateState>,
     /// The 100 ms pump timer. Owned here (not leaked) so `on_close` can stop it
     /// before the frame is destroyed: a running timer whose owner frame has been
     /// torn down keeps firing `WM_TIMER` into the freed frame handler and
@@ -2099,6 +2111,14 @@ pub fn build(app: Rc<App>) {
         }
     }
 
+    // One shot, never a timer: a repeating check would spend the user's
+    // connection on their behalf all session for an answer that changes at most
+    // once a release. A check that finds nothing, or cannot reach GitHub at all,
+    // says nothing — see `update::drain_results`.
+    if app.config.borrow().updates.check_on_start {
+        update::start_check(&app, crate::update::Trigger::Startup);
+    }
+
     frame.show(true);
     frame.centre();
 }
@@ -2816,6 +2836,10 @@ fn pump_events(app: &Rc<App>) {
     // Mastodon post outcomes go to the log rather than a modal: a modal here
     // would interrupt a live broadcast, and these are for the record.
     mastodon_post::drain_results(app);
+    // Update progress and outcomes. These *are* allowed a modal — the whole
+    // feature is a question, and `update::drain_results` stands down entirely
+    // while a stream or a recording is running. See the header there.
+    update::drain_results(app);
 
     // F1 help: one relaxed atomic unless F1 was actually pressed, and the hook
     // rings the idle doorbell when it was. F6 pane cycling arrives the same way.

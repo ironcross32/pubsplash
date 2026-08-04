@@ -40,6 +40,21 @@ pub struct UpdateState {
     /// second borrow would be a panic. Same rule `pump_scan_events` follows for
     /// `app.scan`.
     pub dialog: Option<Rc<super::update_dialog::UpdateDialog>>,
+    /// The dialog an interactive check was started from, while it is still open.
+    ///
+    /// Every message box below is parented on this when it is set, and that is
+    /// not cosmetic: a box owned by the main frame, shown while the modal
+    /// Preferences dialog is up, is dismissed back onto a window the modal has
+    /// *disabled*. wx restores a top-level window's last-focused child when that
+    /// window is activated, so owning the box correctly is what puts the caret
+    /// back on the button the user pressed; own it wrongly and Windows hands
+    /// focus to whatever it can find, which is how a check with nothing on the
+    /// other end left the keyboard stranded outside the Preferences dialog.
+    ///
+    /// Cleared by `preferences::show` before it destroys the dialog — a check
+    /// outlives the window that started it, and a handle to a destroyed window
+    /// must never be parented on.
+    pub parent: Option<Dialog>,
 }
 
 impl UpdateState {
@@ -47,6 +62,45 @@ impl UpdateState {
     fn dialog(&self) -> Option<Rc<super::update_dialog::UpdateDialog>> {
         self.dialog.clone()
     }
+}
+
+/// One of the two windows an update notice can be parented on.
+enum Owner {
+    Dialog(Dialog),
+    Frame(Frame),
+}
+
+impl Owner {
+    fn as_widget(&self) -> &dyn WxWidget {
+        match self {
+            Owner::Dialog(dialog) => dialog,
+            Owner::Frame(frame) => frame,
+        }
+    }
+}
+
+/// The window this update's notices belong to: the dialog that started the
+/// check if it is still open, otherwise the main frame.
+///
+/// Returns an owned handle, so the caller holds neither an `update_state` nor a
+/// `widgets` borrow while a modal runs its nested event loop.
+fn notice_owner(app: &Rc<App>) -> Option<Owner> {
+    let parent = app.update_state.borrow().parent;
+    if let Some(dialog) = parent {
+        return Some(Owner::Dialog(dialog));
+    }
+    app.widgets(|w| Owner::Frame(w.frame))
+}
+
+/// Records the dialog an interactive check is being started from, so the answer
+/// comes back to the window the user is sitting in.
+///
+/// Called by `preferences::show` for the whole time the dialog is open, rather
+/// than at the moment of the press: the answer arrives on the pump, long after
+/// the click handler has returned, so there is nothing to hand it at that point.
+/// The same call with `None` is what clears it before the dialog is destroyed.
+pub fn set_notice_parent(app: &Rc<App>, parent: Option<Dialog>) {
+    app.update_state.borrow_mut().parent = parent;
 }
 
 /// Starts a check, unless one is already running.
@@ -95,15 +149,13 @@ pub fn drain_results(app: &Rc<App>) {
         match event {
             UpdateEvent::UpToDate { trigger } => {
                 app.update_state.borrow_mut().busy = false;
-                if trigger.reports_quiet_outcomes() {
+                if trigger.reports_quiet_outcomes() && let Some(owner) = notice_owner(app) {
                     let version = crate::update::version::current();
-                    app.widgets(|w| {
-                        show_info(
-                            &w.frame,
-                            "Check for updates",
-                            &format!("Pubsplash {version} is the latest version."),
-                        )
-                    });
+                    show_info(
+                        owner.as_widget(),
+                        "Check for updates",
+                        &format!("Pubsplash {version} is the latest version."),
+                    );
                 }
             }
 
@@ -112,8 +164,8 @@ pub fn drain_results(app: &Rc<App>) {
                 // A startup check that cannot reach GitHub says nothing at all.
                 // The user did not ask, and an error box on every launch behind
                 // a captive portal or a firewall would be its own bug.
-                if trigger.reports_quiet_outcomes() {
-                    app.widgets(|w| show_error(&w.frame, "Check for updates", &message));
+                if trigger.reports_quiet_outcomes() && let Some(owner) = notice_owner(app) {
+                    show_error(owner.as_widget(), "Check for updates", &message);
                 }
             }
 
@@ -146,8 +198,8 @@ pub fn drain_results(app: &Rc<App>) {
                 // message box opens over where it was, and its `Drop` destroys
                 // the window.
                 finish_download(app);
-                if !cancelled {
-                    app.widgets(|w| show_error(&w.frame, "Update", &message));
+                if !cancelled && let Some(owner) = notice_owner(app) {
+                    show_error(owner.as_widget(), "Update", &message);
                 }
             }
 
@@ -183,7 +235,10 @@ fn finish_download(app: &Rc<App>) {
 
 /// Asks whether to take the update, and starts the download if so.
 fn offer(app: &Rc<App>, trigger: Trigger, manifest: crate::update::manifest::Manifest, kind: install_kind::InstallKind) {
-    let Some(frame) = app.widgets(|w| w.frame) else {
+    // The prompt belongs to whatever the user is looking at; the progress dialog
+    // that may follow it is deliberately still the frame's, because a download
+    // outlives the Preferences dialog and must not be destroyed with it.
+    let (Some(owner), Some(frame)) = (notice_owner(app), app.widgets(|w| w.frame)) else {
         return;
     };
     let current = crate::update::version::current();
@@ -199,7 +254,7 @@ fn offer(app: &Rc<App>, trigger: Trigger, manifest: crate::update::manifest::Man
             );
         }
         let ask = MessageDialog::builder(
-            &frame,
+            owner.as_widget(),
             &format!(
                 "Pubsplash {} is available; you are running {current}. This copy was not \
                  installed in a way Pubsplash can update on its own. Open the download page?",
@@ -230,7 +285,7 @@ fn offer(app: &Rc<App>, trigger: Trigger, manifest: crate::update::manifest::Man
         install_kind::InstallKind::Unknown => unreachable!("handled above"),
     };
     let ask = MessageDialog::builder(
-        &frame,
+        owner.as_widget(),
         &format!(
             "Pubsplash {} is available; you are running {current}. {what_happens} \
              Download and install it now?",
@@ -249,7 +304,7 @@ fn offer(app: &Rc<App>, trigger: Trigger, manifest: crate::update::manifest::Man
 
     let Some(install) = install_kind::detect() else {
         show_error(
-            &frame,
+            owner.as_widget(),
             "Update",
             "Could not work out where Pubsplash is installed, so nothing was changed.",
         );
@@ -282,13 +337,13 @@ fn offer(app: &Rc<App>, trigger: Trigger, manifest: crate::update::manifest::Man
 /// the shutdown cue plays. The helper waits for this process to actually go
 /// away before it touches anything.
 fn apply(app: &Rc<App>, plan: ApplyPlan) {
-    let Some(frame) = app.widgets(|w| w.frame) else {
+    let (Some(owner), Some(frame)) = (notice_owner(app), app.widgets(|w| w.frame)) else {
         return;
     };
     let helper = match stage_helper() {
         Ok(helper) => helper,
         Err(message) => {
-            show_error(&frame, "Update", &message);
+            show_error(owner.as_widget(), "Update", &message);
             return;
         }
     };
@@ -326,7 +381,7 @@ fn apply(app: &Rc<App>, plan: ApplyPlan) {
 
     if let Err(e) = command.spawn() {
         show_error(
-            &frame,
+            owner.as_widget(),
             "Update",
             &format!(
                 "Could not start the updater ({}): {e}. Nothing has been changed.",

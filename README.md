@@ -31,6 +31,38 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - Windows 10 or 11
 - An Audiopub account trusted to stream, or Icecast source credentials for a plain TCP Icecast server
 
+## Download
+
+These two links always point at the newest release, so they never go stale:
+
+- [**Installer**](https://github.com/ironcross32/pubsplash/releases/latest/download/pubsplash-setup.exe) — the usual choice. Asks whether to install for just you or for everyone on the machine, and adds Pubsplash to the Start menu.
+- [**Portable ZIP**](https://github.com/ironcross32/pubsplash/releases/latest/download/pubsplash-portable.zip) — unzip it anywhere and run `pubsplash.exe`. Nothing is installed and nothing is written to the registry. Handy for a USB stick or a machine you cannot install software on.
+
+Either way your settings, logs and recordings live in `%LOCALAPPDATA%\pubsplash`, not next to the program, so they survive an update or a move.
+
+Both kinds keep themselves up to date — see [Automatic updates](#automatic-updates). Every release is also on the [releases page](https://github.com/ironcross32/pubsplash/releases) under its version number, along with debug symbols.
+
+Pubsplash is not code-signed, so Windows SmartScreen will warn you the first time you run it. Choose **More info** and then **Run anyway**.
+
+## Automatic updates
+
+Pubsplash checks GitHub for a newer version once each time it starts. This is controlled by **Check for updates when Pubsplash starts** (`ALT+S`) on the **General** tab of **File > Preferences** (`CTRL+,`), which is on to begin with.
+
+The check is quiet by design: if you already have the newest version, or GitHub cannot be reached, nothing is said at all. You only hear from it when there is something to tell you. When there is a newer version, Pubsplash says which version is available and which one you are running, and asks whether you want it — **nothing is downloaded, and nothing on your computer is touched, unless you answer yes**.
+
+**Check for updates now** (`ALT+U`) on the same tab asks immediately. Unlike the automatic check it always answers, including telling you that you are already up to date.
+
+Saying yes opens a progress window with a percentage, a running megabyte count and a **Cancel download** button. Nothing on your computer has been changed while the download is running, so cancelling is always safe. Once the download finishes, Pubsplash checks it against the size and checksum published with the release; a download that was cut short or arrived damaged is thrown away with an explanation rather than installed.
+
+What happens next depends on how you got Pubsplash, which it works out for itself:
+
+- **Installed:** Pubsplash closes and the new installer runs. If you installed for everyone on the machine, Windows will ask for permission first.
+- **Portable:** Pubsplash closes, replaces its own files, and starts itself again. Files of your own kept in the same folder are left alone.
+
+If anything goes wrong partway through a portable update, it is undone and your existing version is left exactly as it was, with a message naming the file that caused the problem. You are never left with a half-updated folder.
+
+Two things Pubsplash will not do. It will **never ask about an update while you are streaming or recording** — it notes it in the log and asks the next time you start it. And a copy running from a source build is never overwritten in place; it offers to open the download page instead.
+
 ## Getting started
 
 1. Launch Pubsplash.
@@ -64,6 +96,7 @@ The **Stream overview** at the top of the Home tab is a list you can arrow throu
 | `CTRL+M` | Toggle monitoring for the focused mixer strip |
 | `ALT+P` / `ALT+R` | Preview the voice / reset the selected engine to defaults (Text-to-Speech source dialog) |
 | `ALT+I` / `ALT+K` | Import / remove a sound pack (Preferences, Sound packs tab) |
+| `ALT+O` / `ALT+P` | Open the logs folder / compress the logs (Preferences, Logging & debugging tab) |
 | `CTRL+Up` / `CTRL+Down` | Move the focused scene, source, bus, or plugin |
 | `Delete` | Remove the focused scene, source, bus, send, or plugin |
 | `CTRL+Tab` / `CTRL+Shift+Tab` | Next / previous parameter (plugin parameter dialog) |
@@ -283,9 +316,15 @@ Pubsplash stores its configuration data in `C:\Users\<Your-user-name>\AppData\Lo
 
 ## Logging
 
-Logs are written to `%LOCALAPPDATA%\pubsplash\logs\`. The log level can be changed in the app, or forced with an environment variable such as `PUBSPLASH_LOG_TRACE=1` (which overrides the in-app setting). Levels: `off`, `error`, `warn`, `info`, `debug`, `trace`.
+Logs are written to `%LOCALAPPDATA%\pubsplash\logs\`. The current one is `pubsplash_rCURRENT.log`; it rolls over at 5 MB and the last five are kept.
 
-Pubsplash runs VST plugins inside its own process, so a badly behaved plugin can bring the whole app down without any warning it could otherwise print. If that happens, the last lines of the log name the plugin file that faulted, and a crash dump is written to `%LOCALAPPDATA%\pubsplash\crashes\`. Both are worth attaching to a bug report; the dump is only useful in a debugger and can be deleted freely.
+Everything to do with logging is on the **Logging & debugging** tab of **File > Preferences** (`CTRL+,`), which is the last tab:
+
+- **How much detail to record** sets the log level. Levels, from least to most: `off`, `error`, `warn`, `info`, `debug`, `trace`. It ships on `info`; `debug` and `trace` are for when you are chasing a problem, and `trace` writes constantly while audio is running, so put it back afterwards. The change takes effect immediately and is remembered. Setting an environment variable such as `PUBSPLASH_LOG_TRACE=1` forces the level for that run and overrides the setting — the picker is disabled and says so when one is set.
+- **Open logs folder** (`ALT+O`) opens the folder above in Explorer.
+- **Compress logs** (`ALT+P`) is the one to use when reporting a problem. It packages every log file and every crash dump into a single ZIP and asks where to save it. Logging is stopped for the moment that takes, so the session you are in right now is closed off and goes into the archive complete rather than with its last lines still unwritten; it resumes as soon as the archive is written. The ZIP holds nothing else — no settings, no passwords, no API keys.
+
+Pubsplash runs VST plugins inside its own process, so a badly behaved plugin can bring the whole app down without any warning it could otherwise print. If that happens, the last lines of the log name the plugin file that faulted, and a crash dump is written to `%LOCALAPPDATA%\pubsplash\crashes\`. Both are worth attaching to a bug report, and **Compress logs** collects both for you; the dump is only useful in a debugger and can be deleted freely.
 
 ## Building from source
 

@@ -8,6 +8,32 @@
 
 ### Changes
 
+## 0.1.5
+
+### Additions
+
+- **Pubsplash can now update itself.** Preferences has a new **General** tab, first in the list, with an **Automatic updates** group. "Check for updates when Pubsplash starts" is on by default: once each launch, Pubsplash asks GitHub whether there is a newer version. If there isn't one, or GitHub cannot be reached at all, it says nothing — you will only ever hear from it when there is something to tell you. If there is a newer version, it says which version is available and which one you are running, and asks whether you would like it. Nothing is downloaded and nothing on your computer is touched unless you answer yes. **Check for updates now** on the same tab asks straight away, and unlike the automatic check it always answers, including "you already have the latest version". Whatever the answer is, dismissing it puts you back on the Preferences dialog you asked from, on the button you pressed.
+
+- The download shows a progress window with a percentage and a running megabyte count, and a **Cancel download** button that stops it at any point — nothing has been changed on your computer until the download has finished and been checked, so cancelling is always safe. The status line is a read-only box you can tab to and read whenever you like; it does not read itself out as it changes, so it will not talk over you.
+
+- Every download is checked against the size and checksum published with the release before it is used. A download that was cut short, or that arrived damaged, is thrown away with an explanation rather than installed.
+
+- Pubsplash works out for itself whether it was installed or unzipped, and updates the right way for each. An installed copy downloads the new installer, closes, and runs it. A portable copy downloads the new ZIP, closes, replaces its own files and starts itself again. Files of your own kept beside a portable copy are left alone. If anything goes wrong partway through, the update is undone and your existing version is left exactly as it was, with a message saying which file was the problem — you are never left with a half-updated folder. A copy running from a source build is never overwritten in place; Pubsplash offers to open the download page instead.
+
+- **Update checks never interrupt a broadcast.** While you are streaming or recording, Pubsplash will not ask about an update at all; it notes it in the log and asks the next time you start it.
+
+- **A Logging & debugging tab in Preferences**, last in the list, which is where the log level finally lives. **How much detail to record** offers off, error, warn, info, debug and trace; it ships on info, the change takes effect immediately, and it is remembered between runs. Setting an environment variable such as `PUBSPLASH_LOG_TRACE=1` still overrides it for that run, and now the picker is disabled and tells you why rather than quietly ignoring you.
+
+- On the same tab, **Open logs folder** (`ALT+O`) opens the folder the logs are written to, and **Compress logs** (`ALT+P`) packages every log file and every crash dump into one ZIP and asks where to save it — the file to attach when reporting a problem. Pubsplash stops logging for the moment that takes, so the log of the session you are in right now is closed off and goes into the archive complete rather than with its last lines still unwritten; logging carries straight on afterwards, with no restart and nothing interrupted if you are on the air. The archive holds the logs and the crash dumps and nothing else: no settings, no passwords, no API keys.
+
+- Downloads and installers can now be linked to permanently. `https://github.com/ironcross32/pubsplash/releases/latest/download/pubsplash-setup.exe` and `.../pubsplash-portable.zip` always point at the newest release, so a bookmark or a link you have given somebody never goes stale. The versioned file names are still published alongside them.
+
+### Fixes
+
+### Changes
+
+- Maintainers: `tools/release-changelog.ps1 -Version <x.y.z>` now bumps the version in `Cargo.toml` (and refreshes `Cargo.lock`) at the same time it rolls the changelog, so the two can no longer drift apart. `-Version` also accepts `+`, `++`, or `+++` to bump the patch, minor, or major number of the current version.
+
 ## 0.1.4
 
 ### Additions

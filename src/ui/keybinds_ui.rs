@@ -33,9 +33,9 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     // Mnemonics are dialog-wide, not per tab: `::IsDialogMessage` searches the
-    // whole Preferences dialog, so these avoid the letters the other four tabs
-    // already claim (a, b, i, k, l, m, n, r) — which is why Add binding is
-    // ALT+G and not the obvious ALT+A or ALT+B.
+    // whole Preferences dialog, so these avoid the letters the other tabs
+    // already claim (a, b, i, k, l, m, n, r, s, u, v) — which is why Add binding
+    // is ALT+G and not the obvious ALT+A or ALT+B.
     let add = Button::builder(panel).with_label("Add bindin&g...").build();
     let edit = Button::builder(panel)
         .with_label("&Edit binding...")
