@@ -9,6 +9,7 @@ pub mod cue;
 pub mod device;
 pub mod encoder;
 pub mod fx_chain;
+pub mod health;
 pub mod mixer;
 pub mod monitor;
 pub mod recorder;
@@ -304,7 +305,6 @@ impl ExternalFeeds {
 }
 
 struct ActiveSource {
-    #[allow(dead_code)]
     name: String,
     strip: ChannelStrip,
     consumer: rtrb::Consumer<f32>,
@@ -316,6 +316,12 @@ struct ActiveSource {
     monitor: bool,
     /// See [`SourceSpec::local`].
     local: bool,
+    /// What the capture thread has seen, if this source has one.
+    stats: Arc<health::CaptureStats>,
+    /// What the mixer has seen of this source's ring since the last report.
+    window: health::Window,
+    /// The counter reading the current window is measured from.
+    baseline: health::Counters,
 }
 
 /// A live send: the level is a `ChannelStrip` so level changes ramp
@@ -467,6 +473,10 @@ fn engine_loop(
 
     let block_period = Duration::from_millis(10);
     let mut next_tick = Instant::now() + block_period;
+    // See `report_capture_health`. Anchored here rather than at the first block
+    // so a source added an hour into a session still waits a full window before
+    // its first line, and that line therefore covers a full window.
+    let mut last_health = Instant::now();
     let mut mix_block = vec![0f32; BLOCK_SAMPLES];
     let mut monitor_block = vec![0f32; BLOCK_SAMPLES];
     let mut send_scratch = vec![0f32; BLOCK_SAMPLES];
@@ -537,7 +547,10 @@ fn engine_loop(
                     // waiting to hear that its retired plugins are unreferenced.
                     let touched_fx = new_buses.is_some() || new_master_chain.is_some();
                     if let Some(specs) = new_sources {
-                        stop_sources(&mut sources);
+                        stop_sources(&mut sources, last_health.elapsed());
+                        // The replacement sources deserve a full window before
+                        // their first line, and their rings start empty.
+                        last_health = Instant::now();
                         feeds.clear();
                         epoch = epoch.wrapping_add(1);
                         // The new threads start from a clean slate, so anything
@@ -548,6 +561,10 @@ fn engine_loop(
                         for spec in specs {
                             let (producer, consumer) = RingBuffer::new(RING_CAPACITY);
                             let stop = Arc::new(AtomicBool::new(false));
+                            let stats = Arc::new(match spec.feed {
+                                FeedKind::Capture(_) => health::CaptureStats::new(),
+                                FeedKind::External => health::CaptureStats::external(),
+                            });
                             match spec.feed {
                                 FeedKind::Capture(kind) => {
                                     capture::spawn(
@@ -557,6 +574,7 @@ fn engine_loop(
                                         producer,
                                         stop.clone(),
                                         capture_tx.clone(),
+                                        stats.clone(),
                                     );
                                 }
                                 FeedKind::External => {
@@ -573,6 +591,9 @@ fn engine_loop(
                                 sends: active_sends(spec.sends),
                                 monitor: spec.monitor,
                                 local: spec.local,
+                                stats,
+                                window: health::Window::default(),
+                                baseline: health::Counters::default(),
                             });
                         }
                     }
@@ -715,7 +736,7 @@ fn engine_loop(
                 }
                 Ok(EngineCommand::Shutdown) => {
                     finalize_recording(&mut rec_encoder, &mut recorder);
-                    stop_sources(&mut sources);
+                    stop_sources(&mut sources, last_health.elapsed());
                     park_chains(&mut buses, &mut master_chain, &retired);
                     while let Ok(command) = commands.try_recv() {
                         if let EngineCommand::SetRouting(update) = command {
@@ -882,6 +903,10 @@ fn engine_loop(
 
         // Keep a steady 10 ms cadence, absorbing scheduling jitter.
         let now = Instant::now();
+        if now.duration_since(last_health) >= HEALTH_INTERVAL {
+            report_capture_health(&mut sources, now.duration_since(last_health));
+            last_health = now;
+        }
         if next_tick > now {
             std::thread::sleep(next_tick - now);
         } else if now - next_tick > Duration::from_secs(1) {
@@ -917,7 +942,19 @@ fn mix_one_block(
         bus.buffer.fill(0.0);
     }
     for source in sources.iter_mut() {
-        mixer::pull_block(&mut source.consumer, &mut source.scratch);
+        // Ring occupancy is read here, before the pull, because this is the only
+        // place it can be: the level *after* a pull is always near zero, and it
+        // is the level before that says how far behind this source has fallen.
+        // Integer arithmetic only — the formatting happens elsewhere, once every
+        // thirty seconds.
+        let fill = source.consumer.slots();
+        source.window.fill_now = fill;
+        source.window.peak = source.window.peak.max(fill);
+        source.window.blocks += 1;
+        let filled = mixer::pull_block(&mut source.consumer, &mut source.scratch);
+        if filled < source.scratch.len() {
+            source.window.starved_blocks += 1;
+        }
         source.strip.process(&mut source.scratch);
         // One tap for both reasons a strip can be heard locally. The implicit
         // one is dropped when the strip is already arriving through the master
@@ -970,10 +1007,58 @@ fn park_chains(buses: &mut Vec<ActiveBus>, master_chain: &mut FxChain, retired: 
     let _ = retired.send(std::mem::replace(master_chain, FxChain::empty()));
 }
 
-fn stop_sources(sources: &mut Vec<ActiveSource>) {
+/// How often each capture source's health is written to the log.
+///
+/// Thirty seconds is chosen against the failure it exists to catch: a ring that
+/// fills over half an hour, which needs enough readings across that span to show
+/// a trend, and a timestamp close enough to the moment the user says "it started
+/// crackling" to be matched against it. Idle sources are skipped entirely, so a
+/// scene of silent loopback sources costs nothing.
+const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Writes one line per source that did anything this window, and starts the next
+/// window.
+///
+/// This is why the log can answer a crackling-microphone report at all. The
+/// whole source→mixer path used to be silent: dropped samples, starved blocks
+/// and the device's own error flags all went unrecorded, so a user's log said
+/// nothing about the one thing that had gone wrong. See `audio::health`.
+fn report_capture_health(sources: &mut [ActiveSource], elapsed: Duration) {
+    for source in sources.iter_mut() {
+        // External feeds have no device behind them, so there is no capture to
+        // report on — their samples come from elsewhere in this process.
+        if source.stats.is_external() {
+            source.window.roll();
+            continue;
+        }
+        let counters = source.stats.snapshot();
+        let report = health::Report {
+            name: &source.name,
+            capacity_samples: RING_CAPACITY,
+            window: source.window,
+            elapsed,
+            delta: counters.since(&source.baseline),
+        };
+        if !report.idle() {
+            log::info!("{}", report.line());
+        }
+        source.baseline = counters;
+        source.window.roll();
+    }
+}
+
+/// Stops every capture thread and drops the sources. `since` is how long the
+/// current health window has been open, so the last line reports a real trend
+/// rather than one scaled against a window length that never happened.
+fn stop_sources(sources: &mut Vec<ActiveSource>, since: Duration) {
     for source in sources.iter() {
         source.stop.store(true, Ordering::Relaxed);
     }
+    // A last line before the rings go away. This is exactly the moment a user
+    // works around a misbehaving source by removing and re-adding it, so it is
+    // the one reading that says what state the ring was in when they gave up on
+    // it — and the replacement ring starts empty, which erases the evidence.
+    report_capture_health(sources, since);
     sources.clear();
 }
 
@@ -1022,6 +1107,9 @@ mod routing_tests {
             sends: active_sends(sends),
             monitor: false,
             local: false,
+            stats: Arc::new(health::CaptureStats::new()),
+            window: health::Window::default(),
+            baseline: health::Counters::default(),
         }
     }
 

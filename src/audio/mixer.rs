@@ -13,14 +13,17 @@ pub const BLOCK_SAMPLES: usize = BLOCK_FRAMES * CHANNELS;
 pub const FADE_SECONDS: f32 = 0.05;
 
 /// Pulls up to `dest.len()` samples out of `ring`, zero-filling whatever the
-/// ring could not supply.
+/// ring could not supply. Returns how many real samples were copied, so the
+/// caller can tell a full block from a padded one — a source that is padded
+/// block after block is one whose audio is not keeping up, and the padding is
+/// what makes that inaudible until it is too late to catch.
 ///
 /// One bulk read rather than a `pop()` per sample. Popping individually costs
 /// an atomic index store per sample — 96,000 a second per source per
 /// direction — so a six-source scene was spending over a million ring
 /// operations a second on plumbing, which is headroom the FX chains compete
 /// for on the same thread.
-pub fn pull_block(ring: &mut rtrb::Consumer<f32>, dest: &mut [f32]) {
+pub fn pull_block(ring: &mut rtrb::Consumer<f32>, dest: &mut [f32]) -> usize {
     let take = ring.slots().min(dest.len());
     let mut filled = 0;
     if take > 0
@@ -35,6 +38,7 @@ pub fn pull_block(ring: &mut rtrb::Consumer<f32>, dest: &mut [f32]) {
         chunk.commit_all();
     }
     dest[filled..].fill(0.0);
+    filled
 }
 
 /// Absolute ceiling for a strip's volume. 100 is unity gain; anything above it
@@ -154,7 +158,7 @@ mod tests {
             producer.push(i as f32).unwrap();
         }
         let mut dest = vec![9.0f32; 16];
-        pull_block(&mut consumer, &mut dest);
+        assert_eq!(pull_block(&mut consumer, &mut dest), 10, "ten real samples");
         assert_eq!(&dest[..10], &[0., 1., 2., 3., 4., 5., 6., 7., 8., 9.]);
         assert!(dest[10..].iter().all(|&s| s == 0.0), "tail is silence");
         assert_eq!(consumer.slots(), 0, "exactly what was read is consumed");
@@ -174,7 +178,7 @@ mod tests {
             producer.push(i as f32).unwrap();
         }
         let mut dest = vec![9.0f32; 6];
-        pull_block(&mut consumer, &mut dest);
+        assert_eq!(pull_block(&mut consumer, &mut dest), 6, "a full block");
         assert_eq!(dest, vec![6., 7., 8., 9., 10., 11.]);
         assert_eq!(consumer.slots(), 0);
     }
@@ -183,7 +187,7 @@ mod tests {
     fn an_empty_ring_yields_silence() {
         let (_producer, mut consumer) = rtrb::RingBuffer::<f32>::new(8);
         let mut dest = vec![9.0f32; 4];
-        pull_block(&mut consumer, &mut dest);
+        assert_eq!(pull_block(&mut consumer, &mut dest), 0, "nothing was real");
         assert_eq!(dest, vec![0.0; 4]);
     }
 

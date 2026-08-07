@@ -3,11 +3,12 @@
 //! mixer drains.
 
 use crate::audio::device;
+use crate::audio::health::{CaptureStats, DeviceTimeline};
 use crate::audio::mixer::{CHANNELS, SAMPLE_RATE};
 use rtrb::Producer;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use wasapi::{AudioClient, Direction, SampleType, StreamMode, WaveFormat};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +133,7 @@ pub fn spawn(
     mut producer: Producer<f32>,
     stop: Arc<AtomicBool>,
     on_state: crossbeam_channel::Sender<CaptureReport>,
+    stats: Arc<CaptureStats>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name(format!("capture-{name}"))
@@ -161,7 +163,7 @@ pub fn spawn(
                     }
                     report(CaptureState::Running);
                 };
-                let outcome = run(&kind, &mut producer, &stop, started);
+                let outcome = run(&kind, &mut producer, &stop, &stats, started);
                 // A run that got as far as producing audio starts the backoff
                 // over, so a device lost mid-session is retried as promptly as
                 // one that was late to appear at launch — and its next failure
@@ -199,6 +201,7 @@ fn run(
     kind: &CaptureKind,
     producer: &mut Producer<f32>,
     stop: &AtomicBool,
+    stats: &CaptureStats,
     started: impl FnOnce(),
 ) -> Result<(), String> {
     let format = WaveFormat::new(
@@ -232,6 +235,25 @@ fn run(
         autoconvert: true,
         buffer_duration_hns: 0,
     };
+    // What the device itself runs at, before `autoconvert` puts a resampler in
+    // the way to give us the 48 kHz stereo float we asked for. Worth a line
+    // because that resampler is a suspect whenever a source sounds wrong and
+    // nothing else in the log moves — and it is invisible from anywhere else.
+    match client.get_mixformat() {
+        Ok(mix) => {
+            let (rate, channels) = (mix.get_samplespersec(), mix.get_nchannels());
+            if rate == SAMPLE_RATE && channels as usize == CHANNELS {
+                log::debug!("Capture device is {rate} Hz, {channels} channels (no conversion)");
+            } else {
+                log::info!(
+                    "Capture device is {rate} Hz, {channels} channels; Windows is converting it \
+                     to {SAMPLE_RATE} Hz, {CHANNELS} channels"
+                );
+            }
+        }
+        // Not knowing the device format costs us a diagnostic, not the capture.
+        Err(e) => log::debug!("Could not read the capture device's format: {e}"),
+    }
     client
         .initialize_client(&format, &Direction::Capture, &mode)
         .map_err(|e| format!("initializing the capture stream: {e}"))?;
@@ -248,9 +270,17 @@ fn run(
         .start_stream()
         .map_err(|e| format!("starting the capture stream: {e}"))?;
     started();
+    // A reopen is a new device session, and carrying the previous one's drops
+    // into it would blame this device for the last one's trouble.
+    stats.reset();
 
     let mut byte_queue: std::collections::VecDeque<u8> = std::collections::VecDeque::new();
     let mut guard = StallGuard::default();
+    let mut timeline = DeviceTimeline::new();
+    // The first packet after a start carries `DATA_DISCONTINUITY` as a matter of
+    // course — there is a gap between the device starting and us reading it, and
+    // Windows says so. Counting it would put a 1 in every log line.
+    let mut first_packet = true;
     while !stop.load(Ordering::Relaxed) {
         let new_frames = capture
             .get_next_packet_size()
@@ -258,10 +288,33 @@ fn run(
             .unwrap_or(0);
         if new_frames > 0 {
             byte_queue.reserve(new_frames as usize * blockalign);
-            capture
+            let before = byte_queue.len();
+            let info = capture
                 .read_from_device_to_deque(&mut byte_queue)
                 .map_err(|e| format!("reading from the device: {e}"))?;
-            push_f32(&mut byte_queue, producer);
+            // `AUDCLNT_BUFFERFLAGS_SILENT` means the contents of that buffer are
+            // undefined, not that they are zeros — the crate copies them out
+            // regardless, so without this whatever was in that memory would be
+            // mixed and broadcast as audio.
+            if info.flags.silent {
+                stats.note_silent_packet();
+                silence_appended(&mut byte_queue, before);
+            }
+            if info.flags.data_discontinuity && !first_packet {
+                stats.note_discontinuity();
+            }
+            first_packet = false;
+            let frames = ((byte_queue.len() - before) / blockalign) as u64;
+            stats.add_frames(frames);
+            let gap = timeline.observe(info.index, frames, Instant::now());
+            if gap > 0 {
+                stats.add_gap_frames(gap);
+            }
+            stats.set_index_usable(timeline.index_usable());
+            if let Some(rate) = timeline.rate_millihz() {
+                stats.set_rate_millihz(rate);
+            }
+            stats.add_dropped_samples(push_f32(&mut byte_queue, producer) as u64);
         }
         // Timeouts are normal here — loopback with nothing playing times out
         // every turn — so a failed wait is not itself an error. `StallGuard`
@@ -273,12 +326,30 @@ fn run(
     Ok(())
 }
 
+/// Replaces everything appended to `bytes` from `before` onward with zeros.
+///
+/// Split out so the [`wasapi::BufferFlags::silent`] handling can be tested
+/// without a sound card: the crate copies the device buffer into the deque
+/// before we ever see the flag, so the fix is to overwrite what it just wrote
+/// rather than to skip the read.
+fn silence_appended(bytes: &mut std::collections::VecDeque<u8>, before: usize) {
+    for byte in bytes.iter_mut().skip(before) {
+        *byte = 0;
+    }
+}
+
 /// Moves whole f32 samples from the byte queue into the ring, dropping
 /// samples when the ring is full (mixer stalled or source unattached).
-fn push_f32(bytes: &mut std::collections::VecDeque<u8>, producer: &mut Producer<f32>) {
+///
+/// Returns how many samples were discarded. That number is the difference
+/// between a source that is working and one that is crackling, so it is counted
+/// rather than thrown away: a full ring means the mixer is not draining this
+/// source as fast as the device fills it, and every sample dropped here is a
+/// step discontinuity in the middle of a waveform.
+fn push_f32(bytes: &mut std::collections::VecDeque<u8>, producer: &mut Producer<f32>) -> usize {
     let available = bytes.len() / 4;
     if available == 0 {
-        return;
+        return 0;
     }
     // Written in one chunk rather than a `push` per sample: at 48 kHz stereo
     // that was 96,000 atomic index stores a second per source, plus four
@@ -302,12 +373,15 @@ fn push_f32(bytes: &mut std::collections::VecDeque<u8>, producer: &mut Producer<
         unsafe { chunk.commit_all() };
     }
     // Full ring: discard the remainder. Capture must never block.
-    bytes.drain(..(available - take) * 4);
+    let dropped = available - take;
+    bytes.drain(..dropped * 4);
+    dropped
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
 
     /// The first retry has to be quick — the bug this exists for is a USB
     /// interface a few hundred milliseconds late to enumerate at launch — and
@@ -394,6 +468,7 @@ mod tests {
             producer,
             stop.clone(),
             tx,
+            Arc::new(CaptureStats::new()),
         );
 
         let report = rx
@@ -425,6 +500,76 @@ mod tests {
         }
         assert!(handle.is_finished(), "retiring the source did not stop it");
         handle.join().expect("capture thread panicked");
+    }
+
+    /// A full ring must report what it threw away. Silence here is what made a
+    /// crackling microphone impossible to diagnose from a log file.
+    #[test]
+    fn a_full_ring_reports_the_samples_it_discarded() {
+        let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(4);
+        let mut bytes: std::collections::VecDeque<u8> =
+            (0..10).flat_map(|n| (n as f32).to_le_bytes()).collect();
+
+        // Four fit; the other six go over the side and are counted.
+        assert_eq!(push_f32(&mut bytes, &mut producer), 6);
+        assert!(bytes.is_empty(), "the queue is drained either way");
+        assert_eq!(consumer.slots(), 4);
+
+        // A ring with room for everything drops nothing.
+        while consumer.pop().is_ok() {}
+        let mut bytes: std::collections::VecDeque<u8> =
+            (0..3).flat_map(|n| (n as f32).to_le_bytes()).collect();
+        assert_eq!(push_f32(&mut bytes, &mut producer), 0);
+    }
+
+    #[test]
+    fn an_empty_queue_drops_nothing() {
+        let (mut producer, _consumer) = rtrb::RingBuffer::<f32>::new(4);
+        let mut bytes = std::collections::VecDeque::new();
+        assert_eq!(push_f32(&mut bytes, &mut producer), 0);
+    }
+
+    /// WASAPI's SILENT flag means the buffer contents are *undefined*, not that
+    /// they are zeros, and the crate copies them into the queue before we get to
+    /// see the flag. Without this the garbage would be mixed and broadcast.
+    #[test]
+    fn a_silent_packet_is_zeroed_without_disturbing_what_came_before() {
+        let mut bytes: std::collections::VecDeque<u8> = VecDeque::from(vec![1, 2, 3, 4]);
+        let before = bytes.len();
+        bytes.extend([0xDE, 0xAD, 0xBE, 0xEF]);
+        silence_appended(&mut bytes, before);
+        assert_eq!(
+            bytes.iter().copied().collect::<Vec<u8>>(),
+            vec![1, 2, 3, 4, 0, 0, 0, 0],
+            "only the new bytes are silenced"
+        );
+    }
+
+    /// The deque wraps once it has been pushed and popped enough, so the
+    /// silencing must go through the iterator rather than a contiguous slice.
+    #[test]
+    fn silencing_works_on_a_wrapped_deque() {
+        let mut bytes: VecDeque<u8> = VecDeque::with_capacity(8);
+        for byte in 0..8u8 {
+            bytes.push_back(byte);
+        }
+        for _ in 0..6 {
+            bytes.pop_front();
+        }
+        let before = bytes.len();
+        bytes.extend([9, 9, 9, 9, 9, 9]);
+        silence_appended(&mut bytes, before);
+        assert_eq!(
+            bytes.iter().copied().collect::<Vec<u8>>(),
+            vec![6, 7, 0, 0, 0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn silencing_an_empty_append_changes_nothing() {
+        let mut bytes: VecDeque<u8> = VecDeque::from(vec![1, 2, 3]);
+        silence_appended(&mut bytes, 3);
+        assert_eq!(bytes.iter().copied().collect::<Vec<u8>>(), vec![1, 2, 3]);
     }
 
     #[test]

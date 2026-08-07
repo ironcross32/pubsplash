@@ -4,7 +4,15 @@
 
 ### Additions
 
+- Every capture source now writes a health line to the log every thirty seconds: queued audio waiting to be mixed, samples discarded, blocks the mixer padded with silence, audio Windows reported dropping, and the device's measured sample rate. Sources that are sitting silent write nothing.
+
+- A final health line is written whenever a source is removed or replaced.
+
+- The log now notes when a capture device is not running at 48 kHz stereo and Windows is converting it.
+
 ### Fixes
+
+- Buffers Windows marks as silent are now treated as silence. Their contents are undefined, and Pubsplash was mixing and broadcasting whatever was in that memory as a burst of noise.
 
 ### Changes
 
