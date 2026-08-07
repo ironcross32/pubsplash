@@ -4,6 +4,14 @@
 
 ### Additions
 
+### Fixes
+
+### Changes
+
+## 0.1.6
+
+### Additions
+
 - Every capture source now writes a health line to the log every thirty seconds: queued audio waiting to be mixed, samples discarded, blocks the mixer padded with silence, audio Windows reported dropping, and the device's measured sample rate. Sources that are sitting silent write nothing.
 
 - A final health line is written whenever a source is removed or replaced.
