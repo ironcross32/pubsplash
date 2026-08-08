@@ -8,6 +8,8 @@
 
 ### Changes
 
+- Only one copy of Pubsplash can run at a time. Starting a second one now explains that Pubsplash is already running and closes, instead of quietly opening a copy that fights the first for the microphone, the settings file and the stream itself. This holds across installations: an installed copy and a portable copy on the same computer count as the same app. Other people signed in to the same computer are unaffected and can each run their own.
+
 ## 0.1.6
 
 ### Additions

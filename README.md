@@ -40,6 +40,8 @@ These two links always point at the newest release, so they never go stale:
 
 Either way your settings, logs and recordings live in `%LOCALAPPDATA%\pubsplash`, not next to the program, so they survive an update or a move.
 
+Because that folder is shared, only one copy of Pubsplash runs at a time. Starting a second one — including a portable copy while the installed one is open, or the other way round — says so and closes rather than opening a copy that would fight the first for your microphone, your settings and your stream. Other people signed in to the same computer are unaffected, and can each run their own.
+
 Both kinds keep themselves up to date — see [Automatic updates](#automatic-updates). Every release is also on the [releases page](https://github.com/ironcross32/pubsplash/releases) under its version number, along with debug symbols.
 
 Pubsplash is not code-signed, so Windows SmartScreen will warn you the first time you run it. Choose **More info** and then **Run anyway**.
