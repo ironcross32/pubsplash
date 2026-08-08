@@ -10,6 +10,8 @@ use crate::audio::device;
 use crate::audio::mixer::{CHANNELS, SAMPLE_RATE};
 use crate::soundpack::SoundKind;
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use wasapi::{Direction, SampleType, StreamMode, WaveFormat};
 
@@ -29,6 +31,64 @@ pub fn play_samples_async(samples: std::sync::Arc<Vec<f32>>) {
         .ok();
 }
 
+/// A cue playing on its own thread that the caller can stop and poll.
+///
+/// Cloning it is cloning the reference: every clone refers to the same
+/// playback. The sound-pack preview dialog needs both halves — a Play/Stop
+/// button has to interrupt a cue on demand, and it has to know when one ended
+/// on its own so it can go back to reading "Play".
+#[derive(Clone)]
+pub struct CuePlayback {
+    stop: Arc<AtomicBool>,
+    playing: Arc<AtomicBool>,
+}
+
+impl CuePlayback {
+    /// Asks the playback thread to stop. It exits at the top of its next
+    /// block, so this returns long before the device is closed.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.playing.load(Ordering::Relaxed)
+    }
+
+    /// Whether both handles refer to the same playback. Identity, not equality:
+    /// a caller that started a second cue needs to know whether the one that
+    /// just ended is still the one it is tracking.
+    pub fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.playing, &other.playing)
+    }
+}
+
+/// Like [`play_samples_async`], but hands back a handle to the playback.
+///
+/// `playing` is cleared on every exit from the thread, the error path
+/// included, so a device that will not open still returns a Play/Stop button
+/// to "Play" rather than leaving it stuck on "Stop".
+pub fn play_samples_handle(samples: Arc<Vec<f32>>) -> CuePlayback {
+    let handle = CuePlayback {
+        stop: Arc::new(AtomicBool::new(false)),
+        playing: Arc::new(AtomicBool::new(true)),
+    };
+    let thread_handle = handle.clone();
+    let spawned = std::thread::Builder::new()
+        .name("ui-sound-cue".into())
+        .spawn(move || {
+            if let Err(e) = play_samples_until(&samples, &thread_handle.stop) {
+                log::warn!("Could not play sound cue: {e}");
+            }
+            thread_handle.playing.store(false, Ordering::Relaxed);
+        });
+    if spawned.is_err() {
+        // Nothing will ever clear the flag, so clear it here; the caller polls
+        // `is_playing` and would otherwise wait forever.
+        handle.playing.store(false, Ordering::Relaxed);
+    }
+    handle
+}
+
 pub fn play_sound_kind_blocking(kind: SoundKind) -> Result<(), String> {
     let pack = crate::soundpack::active()
         .ok_or_else(|| "the built-in sound pack could not be loaded".to_string())?;
@@ -41,7 +101,19 @@ pub fn play_sound_kind_blocking(kind: SoundKind) -> Result<(), String> {
 }
 
 fn play_samples(samples: &[f32]) -> Result<(), String> {
-    if samples.is_empty() {
+    play_samples_until(samples, &AtomicBool::new(false))
+}
+
+/// The same, but stoppable: `stop` is read at the top of every render block.
+///
+/// A stop deliberately skips the `DRAIN_AFTER_CUE` wait. That wait exists so a
+/// cue that reached its end is not cut off by the device closing under it, and
+/// a stop is the user asking for exactly that cut-off.
+fn play_samples_until(samples: &[f32], stop: &AtomicBool) -> Result<(), String> {
+    // Checked before the device is opened, not only in the loop: a playback
+    // stopped this early should cost nothing, which is also what makes the
+    // behaviour testable without an audio device.
+    if samples.is_empty() || stop.load(Ordering::Relaxed) {
         return Ok(());
     }
 
@@ -83,6 +155,9 @@ fn play_samples(samples: &[f32]) -> Result<(), String> {
     let mut finished_writing_at: Option<Instant> = None;
 
     loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
         if finished_writing_at.is_some_and(|finished| finished.elapsed() >= DRAIN_AFTER_CUE) {
             break;
         }
@@ -142,5 +217,15 @@ mod tests {
             .collect();
         assert_eq!(out, vec![1.0, -1.0, 0.0, 0.0]);
         assert_eq!(offset, 2);
+    }
+
+    /// An already-stopped playback must return before it touches WASAPI, which
+    /// is both the point of the early check and the only reason this test can
+    /// run on a machine with no audio device.
+    #[test]
+    fn an_already_stopped_playback_opens_no_device() {
+        let stop = AtomicBool::new(true);
+
+        assert!(play_samples_until(&[0.5, 0.5, -0.5, -0.5], &stop).is_ok());
     }
 }

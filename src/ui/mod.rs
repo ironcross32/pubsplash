@@ -27,6 +27,7 @@ mod scan_dialog;
 mod scenes;
 mod sends;
 mod slider_uia;
+mod sound_preview;
 mod stream_info_dialog;
 mod update;
 mod update_dialog;
@@ -52,6 +53,7 @@ use wxdragon::prelude::*;
 // wxWidgets key codes (not exported by wxdragon).
 pub const WXK_TAB: i32 = 9;
 pub const WXK_ESCAPE: i32 = 27;
+pub const WXK_SPACE: i32 = 32;
 pub const WXK_DELETE: i32 = 127;
 pub const WXK_PAGEUP: i32 = 366;
 pub const WXK_PAGEDOWN: i32 = 367;

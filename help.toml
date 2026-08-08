@@ -475,6 +475,12 @@ file = "src/ui/preferences.rs"
 message = "When checked, Pubsplash plays a short sound as it launches, so you know it is loading. Only you hear this sound; it is never sent to the stream."
 
 [[control]]
+id = "dialog.preferences.sounds.previewPack"
+label = "Preview sound pack button"
+file = "src/ui/preferences.rs"
+message = "Opens a window listing every sound event Pubsplash has, so you can hear what the chosen pack plays for each one. Only you hear these; a preview never reaches the stream or a recording. This button has no ALT shortcut, because every letter of the word is already spoken for elsewhere in Preferences."
+
+[[control]]
 id = "dialog.preferences.sounds.removePack"
 label = "Remove sound pack button"
 file = "src/ui/preferences.rs"
@@ -671,6 +677,18 @@ id = "dialog.soundEventsSource.toStream"
 label = "Send these sounds to the stream checkbox"
 file = "src/ui/scenes.rs"
 message = "This only controls whether your listeners hear these cues; you always hear them yourself either way. Checked by default, so the cues are mixed into the stream along with playing on your own speakers. Uncheck it to keep them to yourself: they then never reach the stream or a recording. Note that the copy you hear bypasses the mixer, so this source's volume slider only affects what your listeners hear, though muting the source silences the cues everywhere."
+
+[[control]]
+id = "dialog.soundPreview.list"
+label = "Sound event list"
+file = "src/ui/sound_preview.rs"
+message = "Every sound event Pubsplash has: the startup and shut-down cues, and the five a Sound Events source can react to. Arrow to one and press SPACE to hear what the chosen pack plays for it. SPACE on the event that is already playing stops it; SPACE after arrowing to a different one cuts the first sound off and plays the new one straight away, so you can compare two events without waiting. A pack need not have a sound for every event; if it has none for the one you picked, Pubsplash says so rather than going quiet."
+
+[[control]]
+id = "dialog.soundPreview.play"
+label = "Play or stop button"
+file = "src/ui/sound_preview.rs"
+message = "Plays the sound for the event chosen in the list. It reads Stop instead whenever pressing it would stop something, which is while the sound playing is the one the list is sitting on; it goes back to reading Play by itself once that sound ends, and also the moment you arrow to a different event, since a press would then cut the first sound off and play the new one. SPACE in the list above does the same thing without leaving it."
 
 [[control]]
 id = "dialog.streamInfo.archive"

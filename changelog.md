@@ -4,6 +4,8 @@
 
 ### Additions
 
+- **Preview sounds** on the Sound packs tab of Preferences opens a window listing every sound event Pubsplash has, and plays the chosen pack's sound for whichever one you select. Press SPACE on an event in the list, or use the Play button beside it. SPACE on the event already playing stops it; SPACE after arrowing to a different one cuts that sound off and plays the new one straight away, so comparing two events never means waiting one out. The button reads Stop only while pressing it would stop something. If the pack has no sound for the event you picked, Pubsplash says so instead of going quiet. Previews play only on your own output device, never to the stream or a recording.
+
 ### Fixes
 
 ### Changes

@@ -829,6 +829,12 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
     let import_pack = Button::builder(&pack_box)
         .with_label("&Import pack...")
         .build();
+    // No mnemonic, deliberately: ALT+P is the Logging tab's "Com&press
+    // logs..." and ALT+V is the Speech tab's "&Validate", and mnemonics are
+    // dialog-wide here because `::IsDialogMessage` searches every page.
+    let preview_pack = Button::builder(&pack_box)
+        .with_label("Preview sounds...")
+        .build();
     // ALT+K, not ALT+M: the VST tab's "Re&move folder" already claims that
     // mnemonic in this dialog.
     let remove_pack = Button::builder(&pack_box)
@@ -840,11 +846,17 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
         "Import sound pack button",
     );
     super::help::tag(
+        &preview_pack,
+        "dialog.preferences.sounds.previewPack",
+        "Preview sound pack button",
+    );
+    super::help::tag(
         &remove_pack,
         "dialog.preferences.sounds.removePack",
         "Remove sound pack button",
     );
     pack_buttons.add(&import_pack, 0, SizerFlag::All, 4);
+    pack_buttons.add(&preview_pack, 0, SizerFlag::All, 4);
     pack_buttons.add(&remove_pack, 0, SizerFlag::All, 4);
     pack_group.add_sizer(&pack_buttons, 0, SizerFlag::Expand, 0);
 
@@ -1065,6 +1077,17 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
                 }
                 Err(e) => show_error(&dialog, "Import pack", &e),
             }
+        });
+    }
+
+    {
+        let dialog = *dialog;
+        let apply_pack = apply_pack.clone();
+        preview_pack.on_click(move |_| {
+            // The picker debounces by `SETTLE_MS`, so without this flush the
+            // preview would play the pack the user just arrowed off.
+            apply_pack();
+            super::sound_preview::show(&dialog);
         });
     }
 
