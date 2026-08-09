@@ -305,7 +305,7 @@ pub fn edit_parameters(
     );
 
     let unnamed_check = CheckBox::builder(&panel)
-        .with_label("Show &unnamed parameters")
+        .with_label("Show unnamed parameters")
         .build();
     super::set_accessible_name(&unnamed_check, "Show unnamed parameters");
     super::help::tag(
@@ -319,7 +319,7 @@ pub fn edit_parameters(
     // close on Escape, but only on the controls they are attached to; this covers
     // the rest of the dialog. Enter in `value_text` is unaffected — that control
     // has `ProcessEnter` and keeps the key to commit the typed value.
-    let close = super::dismiss_button(&panel, "&Close");
+    let close = super::dismiss_button(&panel, "Close");
 
     sizer.add(&filter_label, 0, SizerFlag::All, 4);
     sizer.add(&filter_box, 0, SizerFlag::Expand | SizerFlag::All, 4);

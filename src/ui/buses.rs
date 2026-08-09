@@ -34,11 +34,11 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
         "Buses list (row 0 is the master output)",
     );
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let add = Button::builder(panel).with_label("&Add bus").build();
-    let rename = Button::builder(panel).with_label("&Rename bus").build();
-    let remove = Button::builder(panel).with_label("Re&move bus").build();
-    let up = Button::builder(panel).with_label("Move &up").build();
-    let down = Button::builder(panel).with_label("Move &down").build();
+    let add = Button::builder(panel).with_label("Add bus").build();
+    let rename = Button::builder(panel).with_label("Rename bus").build();
+    let remove = Button::builder(panel).with_label("Remove bus").build();
+    let up = Button::builder(panel).with_label("Move up").build();
+    let down = Button::builder(panel).with_label("Move down").build();
     super::help::tag(&add, "tab.buses.busAdd", "Add bus button");
     super::help::tag(&rename, "tab.buses.busRename", "Rename bus button");
     super::help::tag(&remove, "tab.buses.busRemove", "Remove bus button");
@@ -64,18 +64,18 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
         "Effects chain on the selected bus",
     );
     let fx_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let fx_add = Button::builder(panel).with_label("Add &plugin").build();
-    let fx_remove = Button::builder(panel).with_label("Remove plugi&n").build();
-    let fx_up = Button::builder(panel).with_label("Move plugin u&p").build();
+    let fx_add = Button::builder(panel).with_label("Add plugin").build();
+    let fx_remove = Button::builder(panel).with_label("Remove plugin").build();
+    let fx_up = Button::builder(panel).with_label("Move plugin up").build();
     let fx_down = Button::builder(panel)
-        .with_label("Move plugin do&wn")
+        .with_label("Move plugin down")
         .build();
-    let fx_bypass = CheckBox::builder(panel).with_label("&Bypass").build();
+    let fx_bypass = CheckBox::builder(panel).with_label("Bypass").build();
     super::set_accessible_name(&fx_bypass, "Bypass selected plugin");
     let fx_edit = Button::builder(panel)
-        .with_label("&Edit parameters")
+        .with_label("Edit parameters")
         .build();
-    let fx_open = Button::builder(panel).with_label("Open &interface").build();
+    let fx_open = Button::builder(panel).with_label("Open interface").build();
     super::help::tag(&fx_add, "tab.buses.fxAdd", "Add plugin to chain button");
     super::help::tag(
         &fx_remove,
@@ -118,13 +118,13 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
 
     // Chain library row.
     let lib_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let save_chain = Button::builder(panel).with_label("&Save chain...").build();
-    let load_chain = Button::builder(panel).with_label("&Load chain...").build();
+    let save_chain = Button::builder(panel).with_label("Save chain...").build();
+    let load_chain = Button::builder(panel).with_label("Load chain...").build();
     let import_chain = Button::builder(panel)
-        .with_label("&Import chain...")
+        .with_label("Import chain...")
         .build();
     let export_chain = Button::builder(panel)
-        .with_label("E&xport chain...")
+        .with_label("Export chain...")
         .build();
     super::help::tag(
         &save_chain,
@@ -730,12 +730,12 @@ fn pick_chain(app: &Rc<App>, frame: &Frame, names: &[String]) -> Option<usize> {
         list.set_selection(0, true);
     }
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let load = super::ok_button(&panel, "&Load");
-    let delete = Button::builder(&panel).with_label("&Delete").build();
+    let load = super::ok_button(&panel, "Load");
+    let delete = Button::builder(&panel).with_label("Delete").build();
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
     let cancel = Button::builder(&panel)
         .with_id(ID_CANCEL)
-        .with_label("&Cancel")
+        .with_label("Cancel")
         .build();
     super::help::tag(&load, "dialog.loadChain.load", "Load selected chain button");
     super::help::tag(
@@ -930,7 +930,7 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
         let apply = super::ok_button(
             &panel,
             &format!(
-                "&Apply with {} available plugin{}",
+                "Apply with {} available plugin{}",
                 resolution.valid.len(),
                 if resolution.valid.len() == 1 { "" } else { "s" }
             ),
@@ -938,7 +938,7 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
         // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
         let cancel = Button::builder(&panel)
             .with_id(ID_CANCEL)
-            .with_label("&Cancel")
+            .with_label("Cancel")
             .build();
         super::help::tag(
             &apply,
@@ -961,7 +961,7 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
         // Dismiss-only, so it carries `ID_CANCEL` despite the label: that id is
         // what wx maps Escape to, and it matches the `end_modal` below. Being the
         // default item as well, it answers Enter too.
-        let ok = super::dismiss_button(&panel, "&OK");
+        let ok = super::dismiss_button(&panel, "OK");
         buttons.add(&ok, 0, SizerFlag::All, 4);
         ok.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }

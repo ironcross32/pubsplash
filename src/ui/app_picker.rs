@@ -46,7 +46,7 @@ pub fn pick_application(frame: &Frame, current: &str) -> Pick {
     super::native_acc::install(&list, "Running applications");
     super::help::tag(&list, "dialog.appPicker.list", "Running applications list");
     let sound_only = CheckBox::builder(&panel)
-        .with_label("Only show apps that have &played sound")
+        .with_label("Only show apps that have played sound")
         .build();
     sound_only.set_value(true);
     super::set_accessible_name(&sound_only, "Only show apps that have played sound");
@@ -59,14 +59,14 @@ pub fn pick_application(frame: &Frame, current: &str) -> Pick {
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     // `ui::ok_button` carries the id-plus-`set_default()` rule Enter depends on;
     // see its doc comment for why either half alone is silently useless.
-    let select = super::ok_button(&panel, "&Select");
-    let refresh = Button::builder(&panel).with_label("&Refresh").build();
+    let select = super::ok_button(&panel, "Select");
+    let refresh = Button::builder(&panel).with_label("Refresh").build();
     let type_name = Button::builder(&panel)
-        .with_label("&Type a name...")
+        .with_label("Type a name...")
         .build();
     let cancel = Button::builder(&panel)
         .with_id(ID_CANCEL)
-        .with_label("&Cancel")
+        .with_label("Cancel")
         .build();
     super::help::tag(
         &select,

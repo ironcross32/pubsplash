@@ -4,12 +4,16 @@
 //! Standalone Sound Pack Manager.
 #[path = "../soundpack.rs"]
 mod soundpack;
+// Previewing a file the author just picked. `soundpack.rs` pulls in its own
+// copy of `convert.rs` the same way; both files exist to be shareable with a
+// binary that cannot name this crate.
+#[path = "../audio/render.rs"]
+mod render;
 
 use std::{
     cell::RefCell,
     collections::HashMap,
     path::{Path, PathBuf},
-    process::Command,
     rc::Rc,
 };
 use wxdragon::prelude::*;
@@ -19,6 +23,9 @@ struct ManagerState {
     project: Option<PathBuf>,
     source_paths: HashMap<soundpack::SoundKind, String>,
     updating_source_path: bool,
+    /// Whether WAV sources are re-encoded to Opus when the project is saved.
+    /// Off by default, so saving does what it always did unless asked.
+    encode_opus: bool,
 }
 
 #[derive(Clone)]
@@ -41,15 +48,37 @@ fn main() {
         let outer = BoxSizer::builder(Orientation::Vertical).build();
 
         let toolbar = BoxSizer::builder(Orientation::Horizontal).build();
-        let new_project = Button::builder(&root).with_label("&New...").build();
-        let open_project = Button::builder(&root).with_label("&Open...").build();
-        let save = Button::builder(&root).with_label("&Save").build();
-        let compile = Button::builder(&root).with_label("&Compile...").build();
+        let new_project = Button::builder(&root).with_label("New...").build();
+        let open_project = Button::builder(&root).with_label("Open...").build();
+        let save = Button::builder(&root).with_label("Save").build();
+        let compile = Button::builder(&root).with_label("Compile...").build();
+        // A checkbox rather than a bitrate field: 96 kbps is transparent for
+        // the short sounds a pack is made of, and a number here would be one
+        // more thing to get wrong.
+        let encode_opus = CheckBox::builder(&root)
+            .with_label(&format!(
+                "Encode sounds as Opus ({} kbps)",
+                soundpack::DEFAULT_OPUS_KBPS
+            ))
+            .build();
         toolbar.add(&new_project, 0, SizerFlag::All, 4);
         toolbar.add(&open_project, 0, SizerFlag::All, 4);
         toolbar.add(&save, 0, SizerFlag::All, 4);
         toolbar.add(&compile, 0, SizerFlag::All, 4);
+        toolbar.add(
+            &encode_opus,
+            0,
+            SizerFlag::All | SizerFlag::AlignCenterVertical,
+            4,
+        );
         outer.add_sizer(&toolbar, 0, SizerFlag::All, 2);
+
+        {
+            let state = Rc::clone(&state);
+            encode_opus.clone().on_toggled(move |_| {
+                state.borrow_mut().encode_opus = encode_opus.is_checked();
+            });
+        }
 
         let project_label = StaticText::builder(&root)
             .with_label("No sound pack project is open")
@@ -126,15 +155,17 @@ fn build_tab(
     }
 
     let right = BoxSizer::builder(Orientation::Vertical).build();
-    let source_label = StaticText::builder(&panel).with_label("Source WAV").build();
+    let source_label = StaticText::builder(&panel)
+        .with_label("Source file (WAV or Opus)")
+        .build();
     let source_row = BoxSizer::builder(Orientation::Horizontal).build();
     let source_path = TextCtrl::builder(&panel).build();
-    let browse = Button::builder(&panel).with_label("&Browse...").build();
+    let browse = Button::builder(&panel).with_label("Browse...").build();
     source_row.add(&source_path, 1, SizerFlag::Expand | SizerFlag::All, 4);
     source_row.add(&browse, 0, SizerFlag::All, 4);
 
     let action_row = BoxSizer::builder(Orientation::Horizontal).build();
-    let test = Button::builder(&panel).with_label("&Test").build();
+    let test = Button::builder(&panel).with_label("Test").build();
     action_row.add(&test, 0, SizerFlag::All, 4);
 
     right.add(&source_label, 0, SizerFlag::All, 4);
@@ -152,8 +183,10 @@ fn build_tab(
         let source_path = controls.source_path;
         controls.browse.clone().on_click(move |_| {
             let dialog = FileDialog::builder(&panel)
-                .with_message("Select a WAV file")
-                .with_wildcard("WAV files (*.wav)|*.wav")
+                .with_message("Select a sound file")
+                .with_wildcard(
+                    "Sound files (*.wav;*.opus)|*.wav;*.opus|WAV files (*.wav)|*.wav|Opus files (*.opus)|*.opus",
+                )
                 .with_style(FileDialogStyle::Open)
                 .build();
             if dialog.show_modal() == ID_OK
@@ -274,7 +307,12 @@ fn wire_project_buttons(
                 return;
             };
             let assignments = collect_assignments(&state, &project);
-            match soundpack::save_single_variants(&project, &assignments) {
+            let storage = if state.borrow().encode_opus {
+                soundpack::Storage::Opus(soundpack::DEFAULT_OPUS_KBPS)
+            } else {
+                soundpack::Storage::AsIs
+            };
+            match soundpack::save_single_variants(&project, &assignments, storage) {
                 Ok(count) => {
                     state.borrow_mut().source_paths.clear();
                     refresh_all(
@@ -369,7 +407,7 @@ fn wire_tab_slice(
             let typed = controls.source_path.get_value();
             let trimmed = typed.trim();
             if trimmed.is_empty() {
-                show_error(&frame, "Choose or type a WAV path to test.");
+                show_error(&frame, "Choose or type the path of a sound file to test.");
                 return;
             }
             if let Err(err) = test_play(Path::new(trimmed)) {
@@ -395,7 +433,7 @@ fn show_new_project_dialog(frame: &Frame) -> Option<(String, PathBuf)> {
         .build();
     let folder_row = BoxSizer::builder(Orientation::Horizontal).build();
     let folder = TextCtrl::builder(&panel).build();
-    let browse = Button::builder(&panel).with_label("&Browse...").build();
+    let browse = Button::builder(&panel).with_label("Browse...").build();
     folder_row.add(&folder, 1, SizerFlag::Expand | SizerFlag::All, 4);
     folder_row.add(&browse, 0, SizerFlag::All, 4);
 
@@ -589,18 +627,28 @@ fn selected_sound(list: &ListBox, kinds: &[soundpack::SoundKind]) -> Option<soun
     kinds.get(index).copied()
 }
 
+/// Previews the file at `path` through the default playback device.
+///
+/// Decoding happens here, on the UI thread, so a file that is not playable is
+/// reported as an error the author sees rather than as silence; only the
+/// playback itself is handed to a thread, since it runs for as long as the
+/// sound does. Cues are short, and the decode is the same one the pack loader
+/// will do.
 fn test_play(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Err(format!("{} does not exist", path.display()));
     }
-    let escaped = path.display().to_string().replace('\'', "''");
-    let script = format!(
-        "$player = New-Object System.Media.SoundPlayer '{}'; $player.PlaySync()",
-        escaped
-    );
-    Command::new("powershell.exe")
-        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
-        .spawn()
+    let samples = soundpack::decode_file(path)?;
+    std::thread::Builder::new()
+        .name("preview".into())
+        .spawn(move || {
+            if let Err(e) = render::play_samples(&samples) {
+                // No window to report to from here; the author hears the
+                // silence, and a dialog raised off the UI thread would be worse
+                // than the silence is.
+                eprintln!("Could not play the preview: {e}");
+            }
+        })
         .map_err(|e| e.to_string())?;
     Ok(())
 }

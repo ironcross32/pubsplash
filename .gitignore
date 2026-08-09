@@ -3,3 +3,6 @@
 # installer and the portable ZIP; not repo content.
 /readme.html
 /changelog.html
+
+# Agent scratch: proposed README edits, per agents.md. Not repo content.
+/proposed_doc.md

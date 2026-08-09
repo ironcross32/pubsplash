@@ -51,7 +51,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, Button, Button, ListBox,
     super::native_acc::install(&scene_list, "Scenes");
     super::help::tag(&scene_list, "tab.home.sceneList", "Scenes list");
     let switch_button = Button::builder(panel)
-        .with_label("S&witch to scene")
+        .with_label("Switch to scene")
         .build();
     super::help::tag(
         &switch_button,
@@ -65,7 +65,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, Button, Button, ListBox,
     // Stream toggle, then the standalone record toggle (Tab order: stream
     // first, record second).
     let stream_button = Button::builder(panel)
-        .with_label("&Start streaming")
+        .with_label("Start streaming")
         .build();
     super::help::tag(
         &stream_button,
@@ -74,7 +74,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, Button, Button, ListBox,
     );
     sizer.add(&stream_button, 0, SizerFlag::All, 8);
     let record_button = Button::builder(panel)
-        .with_label("Start &recording")
+        .with_label("Start recording")
         .build();
     super::help::tag(
         &record_button,
@@ -878,7 +878,7 @@ fn add_strip(
                 )
                 .append_check_item(
                     ID_MIXER_MONITOR,
-                    "&Monitor this strip",
+                    "Monitor this strip",
                     "Play this strip through your speakers or headphones",
                 )
                 .build();

@@ -19,7 +19,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl, Button) {
     super::list::fill(&chat_list, &[], NO_CHATS);
     super::native_acc::install(&chat_list, "Messages");
     super::help::tag(&chat_list, "tab.chat.messageList", "Chat message list");
-    let view_button = Button::builder(panel).with_label("&View message").build();
+    let view_button = Button::builder(panel).with_label("View message").build();
     super::help::tag(
         &view_button,
         "tab.chat.viewButton",
@@ -34,7 +34,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl, Button) {
         .build();
     super::set_accessible_name(&chat_input, "Send a message");
     super::help::tag(&chat_input, "tab.chat.input", "Chat message input box");
-    let send_button = Button::builder(panel).with_label("Se&nd").build();
+    let send_button = Button::builder(panel).with_label("Send").build();
     super::help::tag(
         &send_button,
         "tab.chat.sendButton",
@@ -42,10 +42,8 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl, Button) {
     );
 
     // Created last so the common path (list, view, input, send) keeps the tab
-    // order it had. ALT+O, because mnemonics are searched frame-wide and the
-    // obvious letters are all spoken for: C is "Stop re&cording" and R is
-    // "Start &recording" on the Home tab, H and T and F are the menu bar.
-    let reconnect_button = Button::builder(panel).with_label("Rec&onnect chat").build();
+    // order it had.
+    let reconnect_button = Button::builder(panel).with_label("Reconnect chat").build();
     super::help::tag(
         &reconnect_button,
         "tab.chat.reconnectButton",

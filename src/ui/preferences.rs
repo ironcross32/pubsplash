@@ -55,12 +55,13 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     let logging_panel = Panel::builder(&notebook).build();
     // Doubled deliberately: wx runs a notebook tab's label through the same
     // mnemonic parsing as a button's, so a single `&` is swallowed and
-    // underlines the `d`. The tab read "Logging  debugging" until this.
+    // underlines the `d`. The tab read "Logging  debugging" until this. This is
+    // an escape for a literal ampersand, not a mnemonic — the app has none.
     notebook.add_page(&logging_panel, "Logging && debugging", false, None);
     super::logging_ui::build_tab(app, &dialog, &logging_panel);
 
     // Dismiss-only, so `dismiss_button` puts both Escape and Enter on it.
-    let close_button = super::dismiss_button(&dialog, "C&lose");
+    let close_button = super::dismiss_button(&dialog, "Close");
     {
         close_button.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
@@ -103,17 +104,13 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
 /// handed over at the press: while this dialog is up its message boxes belong to
 /// it, so dismissing one puts focus back on the button that was pressed; after
 /// it closes they fall back to the main frame.
-///
-/// Mnemonics are dialog-wide (`::IsDialogMessage` searches the whole
-/// Preferences dialog, not the current page), so ALT+S and ALT+U here are picked
-/// to dodge every letter the other six tabs claim.
 fn build_general_tab(app: &Rc<App>, panel: &Panel) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     let (updates_group, updates_box) = super::group_box(panel, "Automatic updates");
 
     let check_on_start = CheckBox::builder(&updates_box)
-        .with_label("Check for updates when Pubsplash &starts")
+        .with_label("Check for updates when Pubsplash starts")
         .build();
     super::set_accessible_name(&check_on_start, "Check for updates when Pubsplash starts");
     super::help::tag(
@@ -135,7 +132,7 @@ fn build_general_tab(app: &Rc<App>, panel: &Panel) {
     // it answers a press, and a button that can silently do nothing reads as
     // broken.
     let check_now = Button::builder(&updates_box)
-        .with_label("Check for &updates now")
+        .with_label("Check for updates now")
         .build();
     super::set_accessible_name(&check_now, "Check for updates now");
     super::help::tag(
@@ -227,7 +224,7 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     }
 
     let browse = Button::builder(&recording_box)
-        .with_label("&Browse...")
+        .with_label("Browse...")
         .build();
     super::help::tag(
         &browse,
@@ -624,7 +621,7 @@ fn validation_button(
     alive: &Rc<std::cell::Cell<bool>>,
     apply_draft: impl Fn(&mut crate::config::SpeechConfig) + 'static,
 ) {
-    let button = Button::builder(page).with_label("&Validate").build();
+    let button = Button::builder(page).with_label("Validate").build();
     super::set_accessible_name(&button, "Validate credentials");
     let status = StaticText::builder(page)
         .with_label("Credentials not yet validated.")
@@ -671,7 +668,7 @@ fn validation_button(
                     return false;
                 };
                 button.enable(true);
-                button.set_label("&Validate");
+                button.set_label("Validate");
                 super::set_accessible_name(&button, "Validate credentials");
                 match result {
                     Ok((draft, catalog)) => {
@@ -827,18 +824,13 @@ fn build_sounds_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) -> SoundsTab 
 
     let pack_buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let import_pack = Button::builder(&pack_box)
-        .with_label("&Import pack...")
+        .with_label("Import pack...")
         .build();
-    // No mnemonic, deliberately: ALT+P is the Logging tab's "Com&press
-    // logs..." and ALT+V is the Speech tab's "&Validate", and mnemonics are
-    // dialog-wide here because `::IsDialogMessage` searches every page.
     let preview_pack = Button::builder(&pack_box)
         .with_label("Preview sounds...")
         .build();
-    // ALT+K, not ALT+M: the VST tab's "Re&move folder" already claims that
-    // mnemonic in this dialog.
     let remove_pack = Button::builder(&pack_box)
-        .with_label("Remove pac&k")
+        .with_label("Remove pack")
         .build();
     super::help::tag(
         &import_pack,
@@ -1193,8 +1185,8 @@ fn build_vst_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     );
 
     let folder_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let add_folder = Button::builder(panel).with_label("&Add folder...").build();
-    let remove_folder = Button::builder(panel).with_label("Re&move folder").build();
+    let add_folder = Button::builder(panel).with_label("Add folder...").build();
+    let remove_folder = Button::builder(panel).with_label("Remove folder").build();
     super::help::tag(
         &add_folder,
         "dialog.preferences.vst.addFolder",
@@ -1210,10 +1202,10 @@ fn build_vst_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     let scan_buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let scan_new = Button::builder(panel)
-        .with_label("Scan for &new plugins")
+        .with_label("Scan for new plugins")
         .build();
     let rescan_all = Button::builder(panel)
-        .with_label("&Rescan all plugins")
+        .with_label("Rescan all plugins")
         .build();
     super::help::tag(
         &scan_new,

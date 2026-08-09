@@ -90,7 +90,7 @@ impl ScanDialog {
         // Skip is the default item, so ENTER skips the plugin the scan is stuck
         // on — the thing you want to be able to do quickly. ESCAPE reaches
         // Cancel through its `ID_CANCEL`, as everywhere else in the app.
-        let skip_button = super::ok_button(&panel, "&Skip this plugin");
+        let skip_button = super::ok_button(&panel, "Skip this plugin");
         super::help::tag(
             &skip_button,
             "dialog.scan.skip",
@@ -98,7 +98,7 @@ impl ScanDialog {
         );
         let cancel_button = Button::builder(&panel)
             .with_id(ID_CANCEL)
-            .with_label("&Cancel scan")
+            .with_label("Cancel scan")
             .build();
         super::help::tag(
             &cancel_button,

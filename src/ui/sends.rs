@@ -60,7 +60,7 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     let master_check = CheckBox::builder(&panel)
-        .with_label("Send directly to &master")
+        .with_label("Send directly to master")
         .build();
     super::set_accessible_name(&master_check, "Send directly to master");
     super::help::tag(
@@ -80,8 +80,8 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     );
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let add = Button::builder(&panel).with_label("&Add send").build();
-    let remove = Button::builder(&panel).with_label("&Remove send").build();
+    let add = Button::builder(&panel).with_label("Add send").build();
+    let remove = Button::builder(&panel).with_label("Remove send").build();
     super::help::tag(&add, "dialog.sends.add", "Add a send to a bus button");
     super::help::tag(
         &remove,
@@ -209,8 +209,8 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
         }
     };
 
-    // Slider edits the selected send's level (mouse drags and the mnemonic path;
-    // the keys are handled below).
+    // Slider edits the selected send's level (mouse drags; the keys are handled
+    // below).
     {
         let apply_level = apply_level.clone();
         level_slider

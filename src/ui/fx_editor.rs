@@ -157,8 +157,8 @@ pub fn open_editor(
 
     // Toolbar (Tab-reachable, always an escape from the plugin's own UI).
     let toolbar = BoxSizer::builder(Orientation::Horizontal).build();
-    let params = Button::builder(&panel).with_label("&Parameters...").build();
-    let bypass = CheckBox::builder(&panel).with_label("&Bypass").build();
+    let params = Button::builder(&panel).with_label("Parameters...").build();
+    let bypass = CheckBox::builder(&panel).with_label("Bypass").build();
     bypass.set_value(
         fx::with_slots(app, target, |slots| {
             slots.get(slot).map(|s| s.bypass).unwrap_or(false)
@@ -167,9 +167,9 @@ pub fn open_editor(
     );
     super::set_accessible_name(&bypass, "Bypass this plugin");
     let focus_plugin = Button::builder(&panel)
-        .with_label("Plugin &interface")
+        .with_label("Plugin interface")
         .build();
-    let close = Button::builder(&panel).with_label("&Close").build();
+    let close = Button::builder(&panel).with_label("Close").build();
     super::help::tag(
         &params,
         "dialog.fxEditor.parameters",

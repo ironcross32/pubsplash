@@ -28,10 +28,10 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
     super::native_acc::install(&scenes_list, "Scenes");
     super::help::tag(&scenes_list, "tab.scenes.sceneList", "Scenes list");
     let scenes_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let scene_up = Button::builder(panel).with_label("Move &up").build();
-    let scene_down = Button::builder(panel).with_label("Move &down").build();
-    let scene_add = Button::builder(panel).with_label("Add &scene").build();
-    let scene_rename = Button::builder(panel).with_label("&Rename scene").build();
+    let scene_up = Button::builder(panel).with_label("Move up").build();
+    let scene_down = Button::builder(panel).with_label("Move down").build();
+    let scene_add = Button::builder(panel).with_label("Add scene").build();
+    let scene_rename = Button::builder(panel).with_label("Rename scene").build();
     super::help::tag(&scene_up, "tab.scenes.sceneUp", "Move scene up button");
     super::help::tag(
         &scene_down,
@@ -64,12 +64,12 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
         "Sources list for the selected scene",
     );
     let sources_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let source_add = Button::builder(panel).with_label("&Add source").build();
-    let source_edit = Button::builder(panel).with_label("&Edit").build();
-    let source_sends = Button::builder(panel).with_label("Se&nds...").build();
-    let source_remove = Button::builder(panel).with_label("Re&move source").build();
-    let source_up = Button::builder(panel).with_label("Move u&p").build();
-    let source_down = Button::builder(panel).with_label("Move do&wn").build();
+    let source_add = Button::builder(panel).with_label("Add source").build();
+    let source_edit = Button::builder(panel).with_label("Edit").build();
+    let source_sends = Button::builder(panel).with_label("Sends...").build();
+    let source_remove = Button::builder(panel).with_label("Remove source").build();
+    let source_up = Button::builder(panel).with_label("Move up").build();
+    let source_down = Button::builder(panel).with_label("Move down").build();
     super::help::tag(&source_add, "tab.scenes.sourceAdd", "Add source button");
     super::help::tag(&source_edit, "tab.scenes.sourceEdit", "Edit source button");
     super::help::tag(
@@ -772,12 +772,12 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     );
     output_check.set_value(current.output_to_stream);
 
-    let preview = Button::builder(&panel).with_label("&Preview voice").build();
+    let preview = Button::builder(&panel).with_label("Preview voice").build();
     super::set_accessible_name(&preview, "Preview voice");
     super::help::tag(&preview, "dialog.ttsSource.preview", "Preview voice button");
 
     let reset = Button::builder(&panel)
-        .with_label("&Reset this engine to defaults")
+        .with_label("Reset this engine to defaults")
         .build();
     super::set_accessible_name(&reset, "Reset this engine to defaults");
     super::help::tag(

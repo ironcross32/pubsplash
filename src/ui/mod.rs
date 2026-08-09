@@ -267,8 +267,8 @@ pub struct Runtime {
 /// now unless it actually differs.
 ///
 /// The comparison is against this cache and not a `get_label()` round-trip on
-/// purpose: wx normalises the mnemonic ampersands, so a round-trip would never
-/// compare equal and the guard would silently never fire.
+/// purpose: wx normalises label text on the way in and out, so a round-trip is
+/// not guaranteed to compare equal and the guard could silently never fire.
 #[derive(Default)]
 pub struct ShownStreamUi {
     stream_label: String,
@@ -1466,8 +1466,8 @@ impl App {
         let run = self.run.borrow();
 
         let button_label = match &run.stream {
-            StreamState::Idle => "&Start streaming",
-            _ => "S&top streaming",
+            StreamState::Idle => "Start streaming",
+            _ => "Stop streaming",
         };
 
         let streaming_or_starting = !matches!(run.stream, StreamState::Idle);
@@ -1480,9 +1480,9 @@ impl App {
         // the engine says the file exists.
         let busy_recording = run.recording || run.recording_pending;
         let record_label = if busy_recording {
-            "Stop re&cording"
+            "Stop recording"
         } else {
-            "Start &recording"
+            "Start recording"
         };
         drop(run);
 
@@ -2198,59 +2198,59 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
     let file_menu = Menu::builder()
         .append_item(
             ID_MENU_CONFIGURE,
-            "Setup streaming &services...",
+            "Setup streaming services...",
             "Manage Audiopub and Icecast streaming services",
         )
         .append_item(
             ID_MENU_STREAM_INFO,
-            "&Set stream info...",
+            "Set stream info...",
             "Title, description, and archiving for the stream",
         )
         .append_item(
             ID_MENU_PREFERENCES,
-            "&Preferences...\tCtrl+,",
+            "Preferences...\tCtrl+,",
             "Application preferences",
         )
         .append_separator()
-        .append_item(ID_MENU_EXIT, "E&xit\tAlt+F4", "Exit Pubsplash")
+        .append_item(ID_MENU_EXIT, "Exit\tAlt+F4", "Exit Pubsplash")
         .build();
     let tools_menu = Menu::builder()
         .append_item(
             ID_MENU_SOUND_PACK_MANAGER,
-            "Sound Pack &Manager...",
+            "Sound Pack Manager...",
             "Create and compile Pubsplash sound packs",
         )
         .build();
     let goto_menu = Menu::builder()
         .append_item(
             ID_MENU_GOTO_STREAM,
-            "Go to &stream page",
+            "Go to stream page",
             "Open the current stream's page in your browser",
         )
         .append_item(
             ID_MENU_GOTO_DATA_DIR,
-            "Go to Pubsplash &data directory",
+            "Go to Pubsplash data directory",
             "Open the folder holding settings, logs, and crash dumps",
         )
         .build();
     let help_menu = Menu::builder()
-        .append_item(ID_MENU_ABOUT, "&About Pubsplash", "Version information")
+        .append_item(ID_MENU_ABOUT, "About Pubsplash", "Version information")
         .append_item(
             ID_MENU_README,
-            "Open &Readme",
+            "Open Readme",
             "Open the documentation in your browser",
         )
         .append_item(
             ID_MENU_CHANGELOG,
-            "View &Changelog",
+            "View Changelog",
             "Open the list of changes in your browser",
         )
         .build();
     let menu_bar = MenuBar::builder()
-        .append(file_menu, "&File")
-        .append(tools_menu, "&Tools")
-        .append(goto_menu, "&Go to")
-        .append(help_menu, "&Help")
+        .append(file_menu, "File")
+        .append(tools_menu, "Tools")
+        .append(goto_menu, "Go to")
+        .append(help_menu, "Help")
         .build();
     frame.set_menu_bar(menu_bar);
 
@@ -2576,7 +2576,7 @@ fn pump_events(app: &Rc<App>) {
                 // lives for the whole then-branch, which here opens a modal.
                 let connect_ui = app.connect_ui.borrow().clone();
                 if let Some(ui) = connect_ui {
-                    ui.connect_button.set_label("Dis&connect");
+                    ui.connect_button.set_label("Disconnect");
                     show_info(
                         &ui.dialog,
                         "Connected",
@@ -2612,7 +2612,7 @@ fn pump_events(app: &Rc<App>) {
                 stream_ui_dirty = true;
                 let connect_ui = app.connect_ui.borrow().clone();
                 if let Some(ui) = connect_ui {
-                    ui.connect_button.set_label("&Connect");
+                    ui.connect_button.set_label("Connect");
                     ui.connect_button.set_focus();
                 }
             }

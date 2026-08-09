@@ -1,0 +1,15 @@
+# Build environment for the vendored C libraries (libopus, and wxWidgets before
+# it). Both of these are needed by every build, which is why they live in the
+# repo rather than in anyone's shell profile.
+[env]
+# libopus's bundled CMakeLists.txt asks for a pre-3.5 CMake, and CMake 4.x
+# refuses to configure a project that does. This tells it to assume 3.5
+# policies rather than fail, which is what the upstream project itself does on
+# newer releases.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+# CMake's Visual Studio generator cannot find a C compiler under a Build Tools
+# (rather than full Visual Studio) install, and reports it as "No
+# CMAKE_C_COMPILER could be found". Ninja works because the `cmake` crate hands
+# it explicit cl.exe paths that the `cc` crate resolved. wxWidgets already
+# builds this way, and the release workflow already installs ninja.
+CMAKE_GENERATOR = "Ninja"

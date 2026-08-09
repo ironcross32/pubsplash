@@ -67,9 +67,20 @@ thiserror = "2"
 # Edge and Star speak WebSocket, not HTTP. `native-tls` rather than rustls so
 # this shares reqwest's schannel-backed TLS stack instead of linking a second one.
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
-# Only Google Translate and Star return compressed audio; every other speech API
-# is asked for PCM or WAV, which `hound` already reads.
-symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
+# Everything compressed that is not Opus: the MP3 Google Translate serves, the
+# arbitrary format a Star coagulator returns, and the FLAC/Vorbis a sound pack
+# author may hand us. `hound` still reads plain WAV, which is the common case.
+symphonia = { version = "0.5", default-features = false, features = [
+    "mp3",
+    "flac",
+    "vorbis",
+    "ogg",
+] }
+# Opus, which symphonia does not decode in any released version (0.6 included),
+# so it is libopus by way of the one well-established binding. `ogg` is the
+# container for it in both directions -- pure Rust, and only pages and packets.
+opus = "0.3"
+ogg = "0.9"
 # Edge's Sec-MS-GEC token, Polly's SigV4 signature, and the SHA-256 an update
 # download is verified against.
 sha2 = "0.10"
@@ -116,6 +127,16 @@ tokio = { version = "1", features = ["test-util"] }
 # `crash.rs` writes readable in our own frames rather than bare addresses. It
 # does not meaningfully grow the exe, and cargo-packager bundles only the
 # binaries named below, so the installer does not carry it.
+# libopus is built by CMake through the `cmake` crate, which picks its build type
+# from cargo's profile -- and a debug build type means `/MDd`, the debug CRT.
+# Rust links the release CRT in every profile, so the two disagree and every
+# libopus object fails to link with `unresolved external symbol
+# __imp__CrtDbgReportW`. Building this one package optimized fixes the mismatch
+# at its source; it is C we never step through anyway.
+[profile.dev.package.audiopus_sys]
+debug = false
+opt-level = 2
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

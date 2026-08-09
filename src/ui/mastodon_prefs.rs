@@ -6,11 +6,8 @@
 //! announce "Account", "Announcements" or "Templates" as focus enters, and wx
 //! asserts once per control if it is done the other way.
 //!
-//! No `&` mnemonics anywhere in here. Mnemonics are dialog-wide — wx's
-//! `::IsDialogMessage` searches the whole Preferences dialog, including the tabs
-//! that are not showing — and the letters this tab would naturally want (A for
-//! Add, E for Edit, R for Remove) are already spoken for by the VST and Keybinds
-//! tabs. The buttons are all Tab-reachable, which is what matters.
+//! No `&` mnemonics anywhere in here, as everywhere else in the app. The
+//! buttons are all Tab-reachable, which is what matters.
 
 use super::{App, WXK_DELETE, show_error};
 use crate::mastodon::{self, Template};

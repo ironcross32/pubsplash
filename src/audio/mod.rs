@@ -13,6 +13,7 @@ pub mod health;
 pub mod mixer;
 pub mod monitor;
 pub mod recorder;
+pub mod render;
 
 use fx_chain::FxChain;
 

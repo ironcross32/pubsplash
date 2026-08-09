@@ -29,12 +29,12 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         "Configured streaming services list",
     );
     let service_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let add_service = Button::builder(&panel).with_label("&Add service").build();
+    let add_service = Button::builder(&panel).with_label("Add service").build();
     let rename_service = Button::builder(&panel)
-        .with_label("Rena&me service")
+        .with_label("Rename service")
         .build();
     let remove_service = Button::builder(&panel)
-        .with_label("&Remove service")
+        .with_label("Remove service")
         .build();
     super::help::tag(&add_service, "dialog.connect.addSite", "Add service button");
     super::help::tag(
@@ -145,7 +145,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         "Icecast password for the selected service",
     );
 
-    let connect_button = Button::builder(&panel).with_label("&Connect").build();
+    let connect_button = Button::builder(&panel).with_label("Connect").build();
     super::help::tag(
         &connect_button,
         "dialog.connect.connectButton",
@@ -158,7 +158,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     // Connect deliberately stays off the default item: it starts or stops a live
     // connection, which is not something a stray Enter in the service list or a
     // password field should ever do.
-    let close_button = super::dismiss_button(&panel, "C&lose");
+    let close_button = super::dismiss_button(&panel, "Close");
 
     sizer.add(&services_label, 0, SizerFlag::All, 4);
     sizer.add(&services_list, 1, SizerFlag::Expand | SizerFlag::All, 4);
@@ -320,7 +320,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
             // While any connection exists the button reads Disconnect, even
             // if a different service is highlighted.
             let connected = app.run.borrow().connected_service.is_some();
-            connect_button.set_label(if connected { "Dis&connect" } else { "&Connect" });
+            connect_button.set_label(if connected { "Disconnect" } else { "Connect" });
         }
     };
 

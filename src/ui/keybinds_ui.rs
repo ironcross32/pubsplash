@@ -32,17 +32,13 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     super::help::tag(&list, "dialog.preferences.keybinds.list", "Keybinds list");
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    // Mnemonics are dialog-wide, not per tab: `::IsDialogMessage` searches the
-    // whole Preferences dialog, so these avoid the letters the other tabs
-    // already claim (a, b, i, k, l, m, n, r, s, u, v) — which is why Add binding
-    // is ALT+G and not the obvious ALT+A or ALT+B.
-    let add = Button::builder(panel).with_label("Add bindin&g...").build();
+    let add = Button::builder(panel).with_label("Add binding...").build();
     let edit = Button::builder(panel)
-        .with_label("&Edit binding...")
+        .with_label("Edit binding...")
         .build();
-    let remove = Button::builder(panel).with_label("Remove bin&ding").build();
+    let remove = Button::builder(panel).with_label("Remove binding").build();
     let reset = Button::builder(panel)
-        .with_label("Reset to de&faults")
+        .with_label("Reset to defaults")
         .build();
     super::help::tag(
         &add,
@@ -268,7 +264,7 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
         "Shortcut capture field",
     );
 
-    let global_check = CheckBox::builder(&panel).with_label("&Global").build();
+    let global_check = CheckBox::builder(&panel).with_label("Global").build();
     super::set_accessible_name(&global_check, "Global");
     super::help::tag(
         &global_check,

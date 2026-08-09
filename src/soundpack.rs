@@ -14,7 +14,7 @@
 mod convert;
 
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-use convert::decode_wav;
+use convert::{decode_audio, encode_ogg_opus};
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -29,6 +29,30 @@ const FORMAT_VERSION: u16 = 1;
 const MANIFEST_FILE: &str = "sound-pack.toml";
 const SOUNDS_DIR: &str = "sounds";
 const EMBEDDED_DEFAULT_PACK: &[u8] = include_bytes!("../assets/sounds/default/default.pspack");
+
+/// What a pack's variants may be stored as. WAV is the lossless master anyone
+/// already has; Opus is what makes a pack of long cues small enough to hand
+/// around. The compiled pack records no format at all — every consumer sniffs
+/// the bytes — so a pack may mix the two freely, and one built before Opus
+/// existed loads unchanged.
+const SOUND_EXTENSIONS: [&str; 2] = ["wav", "opus"];
+
+/// The bitrate a WAV source is re-encoded at when the author asks for Opus.
+/// Transparent for the short, mostly-percussive sounds a pack is made of, at
+/// roughly a fifteenth of the size of 48 kHz stereo WAV.
+pub const DEFAULT_OPUS_KBPS: u32 = 96;
+
+/// How a source file should be stored in a project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Storage {
+    /// Copy the file in as it stands.
+    #[default]
+    AsIs,
+    /// Re-encode to Ogg Opus at this bitrate in kbps. A source that is already
+    /// Opus is copied rather than re-encoded — a second lossy pass would cost
+    /// quality for nothing.
+    Opus(u32),
+}
 
 // This is obfuscation, not a security boundary. Pubsplash must be able to decrypt packs locally.
 const PACK_KEY: [u8; 32] = *b"Pubsplash sound pack key v1!!!!!";
@@ -161,9 +185,10 @@ pub struct LoadedPack {
     /// index.
     ///
     /// The pack is cached but the decode was not, so every cue re-parsed and
-    /// re-resampled its WAV — a burst of chat messages meant one full decode
+    /// re-resampled its audio — a burst of chat messages meant one full decode
     /// per message. The cache lives on the pack so that switching packs drops
-    /// it along with the bytes it came from.
+    /// it along with the bytes it came from. It matters more now that a variant
+    /// may be Opus, where decoding is real work rather than a byte shuffle.
     decoded: std::sync::Mutex<DecodedCache>,
 }
 
@@ -173,7 +198,7 @@ impl LoadedPack {
     }
 
     /// Decodes every variant of every sound up front, so no cue ever pays for
-    /// a WAV parse and resample. Called on the loader thread before a pack is
+    /// a parse and resample. Called on the loader thread before a pack is
     /// published as active; a variant that will not decode is logged and left
     /// out, exactly as `random_decoded` would have done on first play.
     pub fn decode_all(&self) {
@@ -186,7 +211,7 @@ impl LoadedPack {
                 if cache.contains_key(&(sound, index)) {
                     continue;
                 }
-                match decode_wav(bytes) {
+                match decode_audio(bytes, "") {
                     Ok(samples) => {
                         cache.insert((sound, index), std::sync::Arc::new(samples));
                     }
@@ -219,7 +244,7 @@ impl LoadedPack {
             return Some(samples.clone());
         }
         let bytes = &self.assets.get(&sound)?[index];
-        match decode_wav(bytes) {
+        match decode_audio(bytes, "") {
             Ok(samples) => {
                 let samples = std::sync::Arc::new(samples);
                 cache.insert((sound, index), samples.clone());
@@ -530,18 +555,41 @@ pub fn project_variants(project: &Path, sound: SoundKind) -> Result<Vec<PathBuf>
     Ok(numbered.into_values().collect())
 }
 
-pub fn add_variant(project: &Path, sound: SoundKind, source: &Path) -> Result<PathBuf, String> {
-    create_project(project)?;
-    let bytes = fs::read(source).map_err(|e| e.to_string())?;
-    let source_name = source
+/// Reads a source file and returns the bytes to store along with the extension
+/// to store them under — re-encoding to Opus first if that is what was asked
+/// for and the file is not already Opus.
+fn prepare_source(source: &Path, storage: Storage) -> Result<(Vec<u8>, &'static str), String> {
+    let bytes = fs::read(source).map_err(|e| format!("could not read {}: {e}", source.display()))?;
+    let name = source
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("selected file");
-    validate_wav(&bytes, source_name)?;
+    let extension = sound_extension(name).ok_or_else(|| {
+        format!("{name} is not a WAV or Opus file; sound packs hold those two formats")
+    })?;
+    let samples = validate_audio(&bytes, name)?;
+    match storage {
+        Storage::Opus(kbps) if extension != "opus" => {
+            let encoded = encode_ogg_opus(&samples, kbps)
+                .map_err(|e| format!("could not encode {name} as Opus: {e}"))?;
+            Ok((encoded, "opus"))
+        }
+        _ => Ok((bytes, extension)),
+    }
+}
+
+pub fn add_variant(
+    project: &Path,
+    sound: SoundKind,
+    source: &Path,
+    storage: Storage,
+) -> Result<PathBuf, String> {
+    create_project(project)?;
+    let (bytes, extension) = prepare_source(source, storage)?;
     let next = project_variants(project, sound)?.len() + 1;
     let dest = project
         .join(SOUNDS_DIR)
-        .join(format!("{}_{:02}.wav", sound.filename(), next));
+        .join(format!("{}_{:02}.{extension}", sound.filename(), next));
     fs::write(&dest, bytes).map_err(|e| e.to_string())?;
     Ok(dest)
 }
@@ -549,24 +597,22 @@ pub fn add_variant(project: &Path, sound: SoundKind, source: &Path) -> Result<Pa
 pub fn save_single_variants(
     project: &Path,
     assignments: &HashMap<SoundKind, PathBuf>,
+    storage: Storage,
 ) -> Result<usize, String> {
     create_project(project)?;
-    let mut validated = Vec::new();
+    // Everything is read, decoded and re-encoded before anything is deleted:
+    // this replaces the whole project's sounds, and a file that turns out to be
+    // unreadable halfway through must not leave the author with neither the old
+    // set nor the new one.
+    let mut prepared = Vec::new();
     for sound in SoundKind::ALL {
         let Some(source) = assignments.get(&sound) else {
             continue;
         };
-        let bytes =
-            fs::read(source).map_err(|e| format!("could not read {}: {e}", source.display()))?;
-        let source_name = source
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("selected file");
-        validate_wav(&bytes, source_name)?;
-        validated.push((sound, bytes));
+        prepared.push((sound, prepare_source(source, storage)?));
     }
-    if validated.is_empty() {
-        return Err("Choose at least one WAV before saving.".into());
+    if prepared.is_empty() {
+        return Err("Choose at least one sound file before saving.".into());
     }
 
     for sound in SoundKind::ALL {
@@ -577,11 +623,11 @@ pub fn save_single_variants(
 
     let sounds = project.join(SOUNDS_DIR);
     fs::create_dir_all(&sounds).map_err(|e| e.to_string())?;
-    for (sound, bytes) in &validated {
-        let dest = sounds.join(format!("{}_{:02}.wav", sound.filename(), 1));
+    for (sound, (bytes, extension)) in &prepared {
+        let dest = sounds.join(format!("{}_{:02}.{extension}", sound.filename(), 1));
         fs::write(dest, bytes).map_err(|e| e.to_string())?;
     }
-    Ok(validated.len())
+    Ok(prepared.len())
 }
 
 pub fn remove_variant(
@@ -605,7 +651,7 @@ fn compile_with_revision(
 ) -> Result<(), String> {
     let loaded = load_directory_with_revision(project, manifest, revision)?;
     if loaded.assets.is_empty() {
-        return Err("add at least one WAV before compiling".into());
+        return Err("add at least one sound before compiling".into());
     }
     let mut index = PackIndex {
         pack_id: manifest.pack_id,
@@ -723,7 +769,7 @@ fn load_directory_with_revision(
             };
             if let Some((sound, variant)) = parse_filename(name) {
                 let bytes = fs::read(&path).map_err(|e| e.to_string())?;
-                validate_wav(&bytes, name)?;
+                validate_audio(&bytes, name)?;
                 grouped.entry(sound).or_default().insert(variant, bytes);
             }
         }
@@ -736,7 +782,12 @@ fn load_directory_with_revision(
         for variant in 1..=max {
             let bytes = variants
                 .get(&variant)
-                .ok_or_else(|| format!("missing {}_{variant:02}.wav", sound.filename()))?;
+                .ok_or_else(|| {
+                    format!(
+                        "missing {}_{variant:02} (.wav or .opus)",
+                        sound.filename()
+                    )
+                })?;
             ordered.push(bytes.clone());
         }
         assets.insert(sound, ordered);
@@ -749,8 +800,20 @@ fn load_directory_with_revision(
     })
 }
 
+/// The stored format of a file named `name`, if it is one we keep in packs.
+///
+/// The comparison is case-insensitive because the name came from whatever the
+/// author's recorder wrote, but everything Pubsplash writes is lowercase.
+fn sound_extension(name: &str) -> Option<&'static str> {
+    let (_, extension) = name.rsplit_once('.')?;
+    SOUND_EXTENSIONS
+        .into_iter()
+        .find(|known| extension.eq_ignore_ascii_case(known))
+}
+
 fn parse_filename(name: &str) -> Option<(SoundKind, u32)> {
-    let stem = name.strip_suffix(".wav")?;
+    let extension = sound_extension(name)?;
+    let stem = &name[..name.len() - extension.len() - 1];
     for sound in SoundKind::ALL {
         let base = sound.filename();
         if stem == base {
@@ -770,45 +833,52 @@ fn parse_filename(name: &str) -> Option<(SoundKind, u32)> {
     None
 }
 
-fn validate_wav(bytes: &[u8], name: &str) -> Result<(), String> {
-    decode_wav(bytes)
-        .map(|_| ())
-        .map_err(|e| format!("{name} is not a readable WAV: {e}"))
+/// Decodes a file on disk to engine-format samples, for previewing one before
+/// it is added to a project.
+pub fn decode_file(path: &Path) -> Result<Vec<f32>, String> {
+    let bytes = fs::read(path).map_err(|e| format!("could not read {}: {e}", path.display()))?;
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("that file");
+    validate_audio(&bytes, name)
 }
 
+/// Checks that a file really is audio we can play, and hands back the decoded
+/// samples so a caller that is about to re-encode does not decode it twice.
+fn validate_audio(bytes: &[u8], name: &str) -> Result<Vec<f32>, String> {
+    decode_audio(bytes, sound_extension(name).unwrap_or_default())
+        .map_err(|e| format!("{name} is not readable audio: {e}"))
+}
+
+/// Closes the gaps in a sound's variant numbering after a removal.
+///
+/// Two passes with temporary names, because renaming `_02` to `_01` while
+/// `_01` still exists would overwrite it. Each file's own extension is carried
+/// across both renames: a sound may hold a WAV and an Opus variant at once, and
+/// the old `with_extension` call replaced the extension rather than keeping it,
+/// which would have renamed an Opus file to `.wav` and left it undecodable by
+/// name alone.
 fn renumber_variants(project: &Path, sound: SoundKind) -> Result<(), String> {
     let variants = project_variants(project, sound)?;
+    let mut staged = Vec::new();
     for (i, path) in variants.iter().enumerate() {
-        let temp = path.with_extension(format!("renumber-{i}.tmp"));
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or(SOUND_EXTENSIONS[0])
+            .to_ascii_lowercase();
+        let temp = path.with_file_name(format!("{}_{i}.renumber.tmp", sound.filename()));
         fs::rename(path, &temp).map_err(|e| e.to_string())?;
+        staged.push((temp, extension));
     }
-    let temps = project_variants_temp(project, sound)?;
-    for (i, temp) in temps.into_iter().enumerate() {
+    for (i, (temp, extension)) in staged.into_iter().enumerate() {
         let dest = project
             .join(SOUNDS_DIR)
-            .join(format!("{}_{:02}.wav", sound.filename(), i + 1));
+            .join(format!("{}_{:02}.{extension}", sound.filename(), i + 1));
         fs::rename(temp, dest).map_err(|e| e.to_string())?;
     }
     Ok(())
-}
-
-fn project_variants_temp(project: &Path, sound: SoundKind) -> Result<Vec<PathBuf>, String> {
-    let sounds = project.join(SOUNDS_DIR);
-    let mut temps = Vec::new();
-    if !sounds.exists() {
-        return Ok(temps);
-    }
-    for entry in fs::read_dir(&sounds).map_err(|e| e.to_string())? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if name.starts_with(sound.filename()) && name.ends_with(".tmp") {
-            temps.push(path);
-        }
-    }
-    temps.sort();
-    Ok(temps)
 }
 
 fn write_manifest(path: &Path, manifest: &ProjectManifest) -> Result<(), String> {
@@ -836,6 +906,138 @@ mod tests {
     }
 
     #[test]
+    fn variants_may_be_opus_as_well_as_wav() {
+        assert_eq!(
+            parse_filename("se_incoming_chat_05.opus"),
+            Some((SoundKind::IncomingChat, 5))
+        );
+        // Whatever the author's recorder wrote it as.
+        assert_eq!(
+            parse_filename("ui_startup.OPUS"),
+            Some((SoundKind::Startup, 1))
+        );
+        // Formats we decode but do not store in packs.
+        assert_eq!(parse_filename("ui_startup.mp3"), None);
+        assert_eq!(parse_filename("ui_startup.flac"), None);
+        assert_eq!(parse_filename("ui_startup"), None);
+    }
+
+    /// Renumbering used to `with_extension` its temporary name, which replaced
+    /// the extension instead of keeping it -- so closing a gap in a mixed set
+    /// would have renamed an Opus file to `.wav` and left it unloadable.
+    #[test]
+    fn renumbering_keeps_each_variant_in_its_own_format() {
+        let dir = test_dir("renumber-mixed");
+        let project = dir.join("project");
+        create_project(&project).unwrap();
+        let wav = dir.join("cue.wav");
+        fs::write(&wav, test_wav_bytes(ENGINE_SAMPLE_RATE, 2, 2400)).unwrap();
+
+        // _01 WAV, _02 Opus, _03 WAV.
+        add_variant(&project, SoundKind::IncomingChat, &wav, Storage::AsIs).unwrap();
+        add_variant(
+            &project,
+            SoundKind::IncomingChat,
+            &wav,
+            Storage::Opus(DEFAULT_OPUS_KBPS),
+        )
+        .unwrap();
+        add_variant(&project, SoundKind::IncomingChat, &wav, Storage::AsIs).unwrap();
+
+        // Drop the first, so both survivors have to move down a number.
+        remove_variant(&project, SoundKind::IncomingChat, 0).unwrap();
+
+        let names: Vec<String> = project_variants(&project, SoundKind::IncomingChat)
+            .unwrap()
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["se_incoming_chat_01.opus", "se_incoming_chat_02.wav"]
+        );
+        fs::remove_dir_all(dir).ok();
+    }
+
+    /// End to end: an Opus variant survives a compile into the encrypted pack
+    /// and decodes on the way back out, with no format recorded anywhere in the
+    /// container.
+    #[test]
+    fn a_pack_may_hold_wav_and_opus_side_by_side() {
+        let dir = test_dir("mixed-pack");
+        let project = dir.join("project");
+        create_project(&project).unwrap();
+        let wav = dir.join("cue.wav");
+        fs::write(&wav, test_wav_bytes(ENGINE_SAMPLE_RATE, 2, 4800)).unwrap();
+        add_variant(&project, SoundKind::Startup, &wav, Storage::AsIs).unwrap();
+        add_variant(
+            &project,
+            SoundKind::Shutdown,
+            &wav,
+            Storage::Opus(DEFAULT_OPUS_KBPS),
+        )
+        .unwrap();
+
+        let output = dir.join("mixed.pspack");
+        compile(&project, &output).unwrap();
+        let pack = load(&output).unwrap();
+
+        let opus = &pack.variants(SoundKind::Shutdown).unwrap()[0];
+        assert!(opus.starts_with(b"OggS"), "the Opus variant was not stored");
+        let wav_bytes = &pack.variants(SoundKind::Startup).unwrap()[0];
+        assert!(opus.len() * 4 < wav_bytes.len(), "Opus should be smaller");
+
+        // Both decode to the same duration through the same entry point.
+        pack.decode_all();
+        let played = |sound| pack.random_decoded(sound).unwrap().len();
+        assert_eq!(played(SoundKind::Startup), 4800 * ENGINE_CHANNELS);
+        assert_eq!(played(SoundKind::Shutdown), 4800 * ENGINE_CHANNELS);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn an_opus_source_is_stored_as_it_stands_rather_than_re_encoded() {
+        let dir = test_dir("opus-passthrough");
+        let project = dir.join("project");
+        create_project(&project).unwrap();
+        let wav = dir.join("cue.wav");
+        fs::write(&wav, test_wav_bytes(ENGINE_SAMPLE_RATE, 2, 2400)).unwrap();
+        let encoded = convert::encode_ogg_opus(
+            &convert::decode_wav(&fs::read(&wav).unwrap()).unwrap(),
+            DEFAULT_OPUS_KBPS,
+        )
+        .unwrap();
+        let source = dir.join("cue.opus");
+        fs::write(&source, &encoded).unwrap();
+
+        // Asking for Opus must not put an already-Opus file through a second
+        // lossy pass.
+        let stored = add_variant(
+            &project,
+            SoundKind::Startup,
+            &source,
+            Storage::Opus(DEFAULT_OPUS_KBPS),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(&stored).unwrap(), encoded);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_source_in_a_format_packs_do_not_hold_is_refused() {
+        let dir = test_dir("mp3-source");
+        let project = dir.join("project");
+        let source = dir.join("cue.mp3");
+        fs::write(&source, b"whatever").unwrap();
+
+        let error = add_variant(&project, SoundKind::Startup, &source, Storage::AsIs).unwrap_err();
+
+        assert!(error.contains("WAV or Opus"), "{error}");
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn pack_names_are_sanitized_for_project_folders() {
         assert_eq!(sanitize_pack_name("My Cool Pack").unwrap(), "My_Cool_Pack");
         assert_eq!(sanitize_pack_name(" bad:/name** ").unwrap(), "bad_name");
@@ -860,7 +1062,7 @@ revision = 2
     fn mono_44_1_khz_wav_decodes_to_48_khz_stereo() {
         let bytes = test_wav_bytes(44_100, 1, 441);
 
-        let samples = decode_wav(&bytes).unwrap();
+        let samples = decode_audio(&bytes, "wav").unwrap();
 
         assert_eq!(samples.len(), 480 * ENGINE_CHANNELS);
         for frame in samples.chunks_exact(ENGINE_CHANNELS) {
@@ -872,7 +1074,7 @@ revision = 2
     fn stereo_48_khz_wav_decodes_without_resampling() {
         let bytes = test_wav_bytes(ENGINE_SAMPLE_RATE, 2, 16);
 
-        let samples = decode_wav(&bytes).unwrap();
+        let samples = decode_audio(&bytes, "wav").unwrap();
 
         assert_eq!(samples.len(), 16 * ENGINE_CHANNELS);
     }
@@ -887,7 +1089,7 @@ revision = 2
         let mut assignments = HashMap::new();
         assignments.insert(SoundKind::Startup, source);
 
-        let saved = save_single_variants(&project, &assignments).unwrap();
+        let saved = save_single_variants(&project, &assignments, Storage::AsIs).unwrap();
 
         assert_eq!(saved, 1);
         assert!(project.join(SOUNDS_DIR).join("ui_startup_01.wav").exists());
@@ -903,7 +1105,7 @@ revision = 2
 
         let mut assignments = HashMap::new();
         assignments.insert(SoundKind::Startup, source);
-        save_single_variants(&project, &assignments).unwrap();
+        save_single_variants(&project, &assignments, Storage::AsIs).unwrap();
 
         let output = dir.join("test.pspack");
         compile(&project, &output).unwrap();
@@ -929,7 +1131,7 @@ revision = 2
         for sound in [SoundKind::Startup, SoundKind::Shutdown] {
             let variants = pack.variants(sound).expect("interface cue variants");
             assert!(!variants.is_empty(), "{sound:?} should have a variant");
-            decode_wav(&variants[0]).unwrap();
+            decode_audio(&variants[0], "").unwrap();
         }
     }
 
@@ -1022,7 +1224,7 @@ revision = 2
         fs::write(&wav, test_wav_bytes(ENGINE_SAMPLE_RATE, 2, 16)).unwrap();
         let mut assignments = HashMap::new();
         assignments.insert(SoundKind::Startup, wav);
-        save_single_variants(&project, &assignments).unwrap();
+        save_single_variants(&project, &assignments, Storage::AsIs).unwrap();
         let output = dir.join(format!("{name}.pspack"));
         compile(&project, &output).unwrap();
         output

@@ -104,7 +104,7 @@ impl UpdateDialog {
         // Cancel is the only button, so it takes both ENTER and ESCAPE through
         // `dismiss_button`. There is nothing to confirm here — the user already
         // said yes — and the one thing they might want is out.
-        let cancel_button = super::dismiss_button(&panel, "&Cancel download");
+        let cancel_button = super::dismiss_button(&panel, "Cancel download");
         super::help::tag(
             &cancel_button,
             "dialog.update.cancel",

@@ -6,9 +6,18 @@
 
 - **Preview sounds** on the Sound packs tab of Preferences opens a window listing every sound event Pubsplash has, and plays the chosen pack's sound for whichever one you select. Press SPACE on an event in the list, or use the Play button beside it. SPACE on the event already playing stops it; SPACE after arrowing to a different one cuts that sound off and plays the new one straight away, so comparing two events never means waiting one out. The button reads Stop only while pressing it would stop something. If the pack has no sound for the event you picked, Pubsplash says so instead of going quiet. Previews play only on your own output device, never to the stream or a recording.
 
+- **Sound packs can hold Opus as well as WAV.** A pack's sounds may now be Ogg Opus files, mixed freely with WAV ones in the same pack, and an existing pack keeps working untouched. In the Sound Pack Manager, **Browse** accepts `.wav` and `.opus`, and the new **Encode sounds as Opus (96 kbps)** checkbox converts WAV sources to Opus as it saves them into the project — a pack of the same sounds ends up a small fraction of the size, with no audible difference on cues this short. A source that is already Opus is copied rather than re-encoded, so nothing is ever put through two lossy passes. Leave the box clear and saving behaves exactly as it did.
+
+- Pubsplash now reads **MP3, FLAC, Ogg Vorbis and Ogg Opus** wherever it reads audio, not just WAV. This covers what a speech service sends back as well as what a sound pack is built from.
+
 ### Fixes
 
 ### Changes
+- Rewrote the README as a beginner-friendly setup and usage guide.
+
+- Removed the ALT mnemonics from every control in the app — buttons, checkboxes, menus, the menu bar and every dialog, including the Sound Pack Manager. Nothing has an underlined letter any more, and no ALT+letter shortcut fires. Every control is still reached by TAB and the arrow keys, and menu accelerators (`CTRL+,` for Preferences, `ALT+F4` to exit) are unchanged.
+
+- **Test** in the Sound Pack Manager now plays the file itself rather than handing it to Windows' built-in WAV player, so previewing an Opus file works and previewing anything else no longer briefly opens a background PowerShell.
 
 - Only one copy of Pubsplash can run at a time. Starting a second one now explains that Pubsplash is already running and closes, instead of quietly opening a copy that fights the first for the microphone, the settings file and the stream itself. This holds across installations: an installed copy and a portable copy on the same computer count as the same app. Other people signed in to the same computer are unaffected and can each run their own.
 

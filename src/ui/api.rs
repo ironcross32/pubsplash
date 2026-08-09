@@ -80,10 +80,8 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, Button) {
         "Per-engine API usage list",
     );
 
-    // ALT+F. Mnemonics are dialog-wide, not per notebook page, so this dodges
-    // every letter Home, Chat, Scenes and Buses already claim.
     let refresh_button = Button::builder(panel)
-        .with_label("Re&fresh balances")
+        .with_label("Refresh balances")
         .build();
     super::help::tag(
         &refresh_button,

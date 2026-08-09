@@ -83,12 +83,8 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         .build();
     diag_group.add(&where_text, 0, SizerFlag::All, 4);
 
-    // ALT+O and ALT+P: mnemonics are dialog-wide (`::IsDialogMessage` searches
-    // the whole Preferences dialog, not the current page), and every other
-    // letter these two buttons might want is claimed by another tab or by
-    // Close — a, b, d, e, f, g, i, k, l, m, n, r, s, u, v.
     let open_folder = Button::builder(&diag_box)
-        .with_label("&Open logs folder")
+        .with_label("Open logs folder")
         .build();
     super::set_accessible_name(&open_folder, "Open logs folder");
     super::help::tag(
@@ -123,7 +119,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     }
 
     let compress = Button::builder(&diag_box)
-        .with_label("Com&press logs...")
+        .with_label("Compress logs...")
         .build();
     super::set_accessible_name(&compress, "Compress logs");
     super::help::tag(

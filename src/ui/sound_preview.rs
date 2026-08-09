@@ -53,14 +53,11 @@ pub fn show(parent: &Dialog) {
     }
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    // This dialog is its own top-level window, so its mnemonics are its own:
-    // ALT+P and ALT+S are free here even though the Preferences dialog behind
-    // it has claimed both.
-    let play = Button::builder(&panel).with_label("&Play").build();
+    let play = Button::builder(&panel).with_label("Play").build();
     super::set_accessible_name(&play, "Play");
     super::help::tag(&play, "dialog.soundPreview.play", "Play or stop button");
     // Dismiss-only, so `dismiss_button` puts both Enter and Escape on it.
-    let close = super::dismiss_button(&panel, "C&lose");
+    let close = super::dismiss_button(&panel, "Close");
     buttons.add(&play, 0, SizerFlag::All, 4);
     buttons.add(&close, 0, SizerFlag::All, 4);
 
@@ -102,9 +99,9 @@ pub fn show(parent: &Dialog) {
                 .as_ref()
                 .is_some_and(|(kind, _)| selected == Some(*kind));
             let (label, name) = if stops {
-                ("&Stop", "Stop")
+                ("Stop", "Stop")
             } else {
-                ("&Play", "Play")
+                ("Play", "Play")
             };
             play.set_label(label);
             super::set_accessible_name(&play, name);
