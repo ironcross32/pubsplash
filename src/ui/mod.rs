@@ -660,6 +660,14 @@ pub struct Widgets {
 pub struct ConnectUi {
     pub dialog: Dialog,
     pub connect_button: Button,
+    /// Brings the service list's "(connected)" markers and the Connect button's
+    /// label back in line with `Runtime::connected_service`.
+    ///
+    /// The pump owns both, because the pump is where the connection state
+    /// actually changes. The arms here used to set the button label by hand and
+    /// leave the list alone entirely, so the row of whichever service had been
+    /// connected kept saying so for as long as the dialog stayed open.
+    pub sync: std::rc::Rc<dyn Fn()>,
 }
 
 /// A VST scan in flight: the worker handle plus the progress dialog the pump
@@ -1621,10 +1629,12 @@ pub fn service_profile_from_site(site: &SiteConfig) -> Result<ServiceProfile, St
             })
         }
         StreamingServiceType::Icecast => {
-            if site.icecast_server.trim().is_empty() {
-                return Err("Enter the Icecast server.".to_string());
-            }
-            if site.icecast_port == 0 {
+            // Parsed, not trimmed: a `host:port` or a whole pasted listen URL in
+            // the server field is understood here rather than concatenated with
+            // the port field into something no resolver can answer.
+            let (server, typed_port) = crate::net::icecast::split_host_port(&site.icecast_server)?;
+            let port = typed_port.unwrap_or(site.icecast_port);
+            if port == 0 {
                 return Err("Enter a valid Icecast port.".to_string());
             }
             if site.icecast_mount.trim().trim_start_matches('/').is_empty() {
@@ -1636,8 +1646,8 @@ pub fn service_profile_from_site(site: &SiteConfig) -> Result<ServiceProfile, St
             Ok(ServiceProfile::Icecast {
                 id: site.id.clone(),
                 nickname,
-                server: site.icecast_server.trim().to_string(),
-                port: site.icecast_port,
+                server,
+                port,
                 mount: site.icecast_mount.trim().to_string(),
                 username: site.icecast_username(),
                 password: site.icecast_password.clone(),
@@ -2574,7 +2584,7 @@ fn pump_events(app: &Rc<App>) {
                 // lives for the whole then-branch, which here opens a modal.
                 let connect_ui = app.connect_ui.borrow().clone();
                 if let Some(ui) = connect_ui {
-                    ui.connect_button.set_label("Dis&connect");
+                    (ui.sync)();
                     show_info(
                         &ui.dialog,
                         "Connected",
@@ -2604,13 +2614,32 @@ fn pump_events(app: &Rc<App>) {
             }
             NetEvent::Disconnected => {
                 let mut run = app.run.borrow_mut();
-                run.connected_service = None;
+                let was = run.connected_service.take();
                 run.connecting = false;
                 drop(run);
                 stream_ui_dirty = true;
+                // Read before the sync below rewrites the list, and while the
+                // service is still in config to be named at all.
+                let display_name = was.and_then(|id| {
+                    let config = app.config.borrow();
+                    Some(config.connection.site(&id)?.display_name())
+                });
                 let connect_ui = app.connect_ui.borrow().clone();
                 if let Some(ui) = connect_ui {
-                    ui.connect_button.set_label("&Connect");
+                    (ui.sync)();
+                    // Said out loud, like connecting is. Disconnecting answers a
+                    // button the user just pressed, so it is one of the notices
+                    // that may be a modal - and without it the only sign it
+                    // worked was a label change on the focused button, which no
+                    // screen reader reads out.
+                    show_info(
+                        &ui.dialog,
+                        "Disconnected",
+                        &match display_name {
+                            Some(name) => format!("Disconnected from {name}."),
+                            None => "Disconnected.".to_string(),
+                        },
+                    );
                     ui.connect_button.set_focus();
                 }
             }

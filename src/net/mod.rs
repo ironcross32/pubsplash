@@ -282,12 +282,13 @@ fn direct_icecast_target(
     else {
         return Err("not an Icecast service".to_string());
     };
-    let server = server.trim();
     let mount = normalize_mount(mount);
-    if server.is_empty() {
-        return Err("Enter the Icecast server.".to_string());
-    }
-    if *port == 0 {
+    // The server field is parsed rather than concatenated: a `host:port` typed
+    // into it must not have the port field appended a second time. See
+    // [`icecast::split_host_port`].
+    let (host, typed_port) = icecast::split_host_port(server)?;
+    let port = typed_port.unwrap_or(*port);
+    if port == 0 {
         return Err("Enter a valid Icecast port.".to_string());
     }
     if mount.is_empty() {
@@ -302,12 +303,39 @@ fn direct_icecast_target(
         username.trim().to_string()
     };
     Ok(IcecastTarget {
-        host: format!("{server}:{port}"),
+        host: format!("{host}:{port}"),
         mount,
         username,
         password: password.clone(),
         content_type: content_type.to_string(),
     })
+}
+
+/// Checks that an Icecast host resolves, at Connect time.
+///
+/// A direct Icecast service has nothing to log into, so Connect was pure field
+/// validation and the first thing that ever touched the network was Start
+/// streaming — which is where a mistyped server surfaced, as a "Streaming
+/// problem" modal saying `unknown host`, long after the dialog holding the
+/// field that was wrong had been closed.
+///
+/// A name lookup is the most that can be checked here without harm: a real
+/// handshake would claim the mount, and stock Icecast then holds it for
+/// `<source-timeout>`, so the user's actual Start streaming would answer
+/// `403 Mountpoint in use`.
+async fn resolve_icecast_host(host: &str) -> Result<(), String> {
+    let lookup = tokio::time::timeout(icecast::CONNECT_TIMEOUT, tokio::net::lookup_host(host));
+    let found = match lookup.await {
+        Ok(Ok(mut addresses)) => addresses.next().is_some(),
+        Ok(Err(_)) => false,
+        Err(_) => return Err(format!("looking up the server {host:?} timed out.")),
+    };
+    if !found {
+        return Err(format!(
+            "the server {host:?} could not be found. Check the Icecast server and port."
+        ));
+    }
+    Ok(())
 }
 
 async fn end_active_stream(active: &ActiveStream, connection: Option<&Connection>) {
@@ -402,8 +430,15 @@ async fn net_loop(mut commands: tokio_mpsc::UnboundedReceiver<NetCommand>, event
                             username,
                             password,
                         };
-                        match direct_icecast_target(&armed, "audio/mpeg") {
-                            Ok(_) => {
+                        let checked = match direct_icecast_target(&armed, "audio/mpeg") {
+                            Ok(target) => resolve_icecast_host(&target.host)
+                                .await
+                                .map(|()| target.host),
+                            Err(message) => Err(message),
+                        };
+                        match checked {
+                            Ok(host) => {
+                                log::info!("Icecast service {nickname:?} resolves to {host}");
                                 connection = Some(armed);
                                 let _ = events.send(NetEvent::Connected {
                                     service_id: id,
@@ -411,6 +446,7 @@ async fn net_loop(mut commands: tokio_mpsc::UnboundedReceiver<NetCommand>, event
                                 });
                             }
                             Err(message) => {
+                                log::warn!("Icecast service {nickname:?}: {message}");
                                 let _ = events.send(NetEvent::ConnectFailed { message });
                             }
                         }
@@ -419,7 +455,12 @@ async fn net_loop(mut commands: tokio_mpsc::UnboundedReceiver<NetCommand>, event
             }
             NetCommand::Disconnect => {
                 if let Some(active) = stream.take() {
+                    log::warn!("Disconnecting from a service while a stream is live; ending it");
                     end_active_stream(&active, connection.as_ref()).await;
+                    // Said out loud for the same reason `Connect` says it: the
+                    // UI stayed on "Streaming" otherwise, and the engine kept
+                    // encoding into a channel with nothing left reading it.
+                    let _ = events.send(NetEvent::StreamEnded);
                 }
                 connection = None;
                 let _ = events.send(NetEvent::Disconnected);
@@ -468,6 +509,10 @@ async fn net_loop(mut commands: tokio_mpsc::UnboundedReceiver<NetCommand>, event
                         stream = Some(active);
                     }
                     Err(message) => {
+                        // The only record of a stream that never started: the
+                        // modal this becomes is gone as soon as it is dismissed,
+                        // and the log is what users are asked to send.
+                        log::error!("Starting the stream failed: {message}");
                         let _ = events.send(NetEvent::StreamError { message });
                     }
                 }
@@ -1406,6 +1451,38 @@ mod host_tests {
         assert_eq!(target.username, "dj");
         assert_eq!(target.password.as_str(), "secret");
         assert_eq!(target.content_type, "audio/aac");
+    }
+
+    /// The reported bug: `host:port` typed into the server field had the port
+    /// field appended to it, producing `gomsen.com:8000:8000` and an
+    /// unknown-host failure at Start streaming.
+    #[test]
+    fn a_port_in_the_server_field_is_not_appended_twice() {
+        let conn = Connection::Icecast {
+            server: "gomsen.com:8000".to_string(),
+            port: 8000,
+            mount: "live.mp3".to_string(),
+            username: "source".to_string(),
+            password: Secret::new("secret"),
+        };
+        let target = direct_icecast_target(&conn, "audio/mpeg").unwrap();
+        assert_eq!(target.host, "gomsen.com:8000");
+        assert_eq!(target.mount, "live.mp3");
+    }
+
+    /// The port typed alongside the host wins over the port field, since it is
+    /// the more specific of the two things the user wrote.
+    #[test]
+    fn a_pasted_listen_url_reaches_the_right_host_and_port() {
+        let conn = Connection::Icecast {
+            server: "http://ice.example.org:9000/live".to_string(),
+            port: 8000,
+            mount: "live".to_string(),
+            username: "dj".to_string(),
+            password: Secret::new("secret"),
+        };
+        let target = direct_icecast_target(&conn, "audio/mpeg").unwrap();
+        assert_eq!(target.host, "ice.example.org:9000");
     }
 
     #[test]

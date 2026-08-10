@@ -6,6 +6,20 @@
 
 ### Fixes
 
+- An Icecast server entered as `host:port` now works. The port field was appended to whatever was in the server field, so `ice.example.org:8000` became `ice.example.org:8000:8000` and streaming failed with "connection failed: unknown host (os error 11001)". A whole listen URL pasted into the field — scheme, credentials, port and mount and all — is understood too, and its parts are moved into the fields they belong in, so the dialog shows what will actually be dialled.
+
+- Connecting to an Icecast service now checks that the address it was given exists, and reports it on the spot. It used to be pure field validation, so a mistyped server said "Connected" and then failed as a "Streaming problem" the next time Start streaming was pressed. The mount point is not touched by the check.
+
+- The Connect button now acts on the service you have highlighted. It read "Disconnect" whenever any service at all was connected, so pressing it on a service you had just selected disconnected the other one instead of connecting to this one. Pressing Connect on a second service now switches to it.
+
+- Disconnecting now says so, the way connecting always has. The only sign it had worked was a label change on the button already under the cursor, which no screen reader reads out.
+
+- The service list keeps its "(connected)" marker up to date. It was written once, when the dialog opened, so the service you had connected to earlier went on claiming to be connected for as long as the dialog stayed open, and the one you had just connected to never said so.
+
+- Disconnecting from a service while a stream is live now ends the stream in Pubsplash too. The broadcast stopped, but the app stayed on "Streaming" and kept encoding.
+
+- A stream that fails to start now says why in the log. The reason only ever appeared in the modal, which is gone as soon as it is dismissed.
+
 ### Changes
 
 ## 0.1.6
