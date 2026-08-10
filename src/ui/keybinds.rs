@@ -355,6 +355,13 @@ fn run(app: &Rc<App>, action: &BindAction) {
                 home::toggle_mute_target(app, target);
             }
         }
+        BindAction::ToggleMediaPlayback { source } => {
+            super::media_transport(app, source, crate::media::player::Command::PlayPause);
+        }
+        BindAction::NextTrack { source } => {
+            super::media_transport(app, source, crate::media::player::Command::Next);
+        }
+        BindAction::OpenTrack { source } => super::media_open_file(app, source),
     }
 }
 

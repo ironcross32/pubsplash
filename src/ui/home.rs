@@ -2,7 +2,9 @@
 
 use super::slider_uia;
 use super::{
-    App, ID_MIXER_BOOST, ID_MIXER_MONITOR, Monitors, StreamState, WXK_DOWN, WXK_END, WXK_HOME,
+    App, ID_MIXER_BOOST, ID_MIXER_MEDIA_NEXT, ID_MIXER_MEDIA_OPEN, ID_MIXER_MEDIA_PLAY,
+    ID_MIXER_MONITOR, Monitors,
+    StreamState, WXK_DOWN, WXK_END, WXK_HOME,
     WXK_LEFT, WXK_PAGEDOWN, WXK_PAGEUP, WXK_RIGHT, WXK_UP,
 };
 use crate::audio::EngineCommand;
@@ -188,6 +190,9 @@ pub fn switch_to_scene_named(app: &Rc<App>, name: &str) {
     // The new scene's sources are different strips at the same positions.
     app.clear_source_monitors();
     app.sync_engine_sources();
+    // The old scene's media players have no ring to feed now, and the new
+    // scene's have one waiting.
+    sync_media_players(app);
     rebuild_mixer(app);
     refresh_scene_list(app);
     // Nothing else says which scene is live when the switch came from a
@@ -513,6 +518,26 @@ pub fn rebuild_mixer(app: &Rc<App>) {
     // Strip names are derived from what each source points at (device, running
     // application, voice) rather than from `SourceConfig.name`, which is only
     // ever the kind's display name — see `crate::source_name`.
+    // The identity name of every source that is a media player, by strip index,
+    // so those strips can carry transport in their context menu. `None` for
+    // every other kind.
+    let media_names: Vec<Option<String>> = {
+        let config = app.config.borrow();
+        config
+            .scenes
+            .active_scene()
+            .map(|scene| {
+                scene
+                    .sources
+                    .iter()
+                    .map(|source| match source.kind {
+                        crate::config::SourceKindConfig::MediaPlayer(_) => Some(source.name.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
     let ((master_volume, master_muted, master_boost), sources, buses) = {
         let config = app.config.borrow();
         let ctx = app.name_context(
@@ -559,6 +584,7 @@ pub fn rebuild_mixer(app: &Rc<App>) {
         master_boost,
         StripTarget::Master,
         None,
+        None,
     );
 
     for (index, (name, volume, muted, boost)) in sources.iter().enumerate() {
@@ -572,6 +598,7 @@ pub fn rebuild_mixer(app: &Rc<App>) {
             *boost,
             StripTarget::Source(index),
             Some(index),
+            media_names.get(index).cloned().flatten(),
         );
     }
     for (index, (name, volume, muted, boost)) in buses.iter().enumerate() {
@@ -584,6 +611,7 @@ pub fn rebuild_mixer(app: &Rc<App>) {
             *muted,
             *boost,
             StripTarget::Bus(index),
+            None,
             None,
         );
     }
@@ -711,6 +739,9 @@ fn add_strip(
     boost: bool,
     target: StripTarget,
     source_index: Option<usize>,
+    // `Some(identity name)` when this strip is a Media Player, which is what
+    // puts play/pause and next track in its context menu.
+    media_source: Option<String>,
 ) {
     let row = BoxSizer::builder(Orientation::Horizontal).build();
     let label = StaticText::builder(parent).build();
@@ -774,6 +805,32 @@ fn add_strip(
         SizerFlag::AlignCenterVertical | SizerFlag::All,
         4,
     );
+    // A media player's strip carries the one transport control that cannot be
+    // done blind: picking a file. Play, pause and skip are keybindings and menu
+    // items because they are pressed mid-broadcast from wherever the user
+    // happens to be, but choosing a track means a file dialog either way, so it
+    // may as well have a button — and a button is what makes the feature
+    // findable at all by somebody who has not been through the Keybinds tab.
+    //
+    // No mnemonic: this is the Home tab, where a mnemonic on a per-strip control
+    // would collide with every other strip's copy of it.
+    if let Some(source) = &media_source {
+        let open = Button::builder(parent).with_label("Open file...").build();
+        // Named after the strip, like everything else on it — the identity name
+        // the click carries is a routing key and not what the user calls this.
+        super::set_accessible_name(&open, &format!("Open a file to play on {}", name.borrow()));
+        super::help::tag(
+            &open,
+            "tab.home.mixer.strip.openFile",
+            "Mixer strip open file button",
+        );
+        {
+            let app = app.clone();
+            let source = source.clone();
+            open.on_click(move |_| super::media_open_file(&app, &source));
+        }
+        row.add(&open, 0, SizerFlag::AlignCenterVertical | SizerFlag::All, 4);
+    }
     sizer.add_sizer(&row, 0, SizerFlag::Expand, 0);
 
     // Volume changes.
@@ -867,10 +924,11 @@ fn add_strip(
     {
         let app = app.clone();
         let slider_for_menu = slider;
+        let media_source = media_source.clone();
         slider.bind_internal(EventType::CONTEXT_MENU, move |_| {
             let boost = boost_of(&app, target);
             let monitor = monitor_of(&app, target);
-            let mut menu = Menu::builder()
+            let mut builder = Menu::builder()
                 .append_check_item(
                     ID_MIXER_BOOST,
                     "Enable volume boost",
@@ -880,8 +938,34 @@ fn add_strip(
                     ID_MIXER_MONITOR,
                     "&Monitor this strip",
                     "Play this strip through your speakers or headphones",
-                )
-                .build();
+                );
+            // A media player's transport lives here as well as on a keybinding,
+            // so it is reachable without one — and it is read from the player
+            // every time the menu opens, so the item says what pressing it will
+            // do rather than what it did last time.
+            if let Some(name) = &media_source {
+                let paused = app.media.status(name).is_some_and(|status| {
+                    status.state == crate::media::player::PlaybackState::Paused
+                });
+                builder = builder
+                    .append_separator()
+                    .append_item(
+                        ID_MIXER_MEDIA_PLAY,
+                        if paused { "&Play" } else { "&Pause" },
+                        "Start or stop this media player",
+                    )
+                    .append_item(
+                        ID_MIXER_MEDIA_NEXT,
+                        "&Next track",
+                        "Skip to the next track in the folder",
+                    )
+                    .append_item(
+                        ID_MIXER_MEDIA_OPEN,
+                        "&Open file...",
+                        "Play a file of your choosing, then carry on with the folder",
+                    );
+            }
+            let mut menu = builder.build();
             menu.check_item(ID_MIXER_BOOST, boost);
             menu.check_item(ID_MIXER_MONITOR, monitor);
             // Anchor to the slider rather than the mouse so the keyboard paths
@@ -919,6 +1003,32 @@ fn add_strip(
         slider.bind_with_id_internal(EventType::MENU, ID_MIXER_MONITOR, move |_| {
             toggle_monitor(&app, target, &strip_for_menu_monitor);
         });
+    }
+
+    // Media transport, from the same popup. Both go through
+    // `super::media_transport`, which is also what the keybindings call, so the
+    // spoken feedback is identical either way.
+    if let Some(name) = media_source {
+        {
+            let app = app.clone();
+            let name = name.clone();
+            slider.bind_with_id_internal(EventType::MENU, ID_MIXER_MEDIA_PLAY, move |_| {
+                super::media_transport(&app, &name, crate::media::player::Command::PlayPause);
+            });
+        }
+        {
+            let app = app.clone();
+            let name = name.clone();
+            slider.bind_with_id_internal(EventType::MENU, ID_MIXER_MEDIA_NEXT, move |_| {
+                super::media_transport(&app, &name, crate::media::player::Command::Next);
+            });
+        }
+        {
+            let app = app.clone();
+            slider.bind_with_id_internal(EventType::MENU, ID_MIXER_MEDIA_OPEN, move |_| {
+                super::media_open_file(&app, &name);
+            });
+        }
     }
 
     // Mute toggling; unmute restores the last volume (kept in config). The
@@ -1148,8 +1258,9 @@ pub fn on_sources_changed(app: &Rc<App>, previous_sources: Option<&[SourceConfig
     app.sync_engine_sources();
     // Beside `sync_engine_sources`, because that is where `ExternalFeeds` gains
     // and loses its rings: a cue worker for a source that just left the scene
-    // has nothing left to feed.
+    // has nothing left to feed, and a media player for one has nowhere to play.
     app.cues.retain(&active_source_names(app));
+    sync_media_players(app);
     rebuild_mixer(app);
     refresh_scene_list(app);
 }
@@ -1161,6 +1272,24 @@ fn active_source_names(app: &Rc<App>) -> std::collections::HashSet<String> {
         Some(scene) => scene.sources.iter().map(|s| s.name.clone()).collect(),
         None => std::collections::HashSet::new(),
     }
+}
+
+/// Starts a worker for every media player in the active scene and retires the
+/// rest.
+///
+/// Called wherever the active scene's source list can have changed — beside
+/// `sync_engine_sources`, which is what installs and removes the rings these
+/// workers feed. The sources are copied out first because `apply` starts and
+/// joins threads, and nothing that waits should be holding the config borrow.
+pub fn sync_media_players(app: &Rc<App>) {
+    let sources = {
+        let config = app.config.borrow();
+        match config.scenes.active_scene() {
+            Some(scene) => scene.sources.clone(),
+            None => Vec::new(),
+        }
+    };
+    app.media.apply(&sources, &app.engine.external_feeds);
 }
 
 #[cfg(test)]

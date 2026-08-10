@@ -31,6 +31,10 @@ pub struct NameContext {
     /// keyed by engine id and then voice id. Only engines that need it are
     /// looked up, and an id the catalog has never seen is simply absent.
     pub voice_labels: HashMap<String, HashMap<String, String>>,
+    /// What each running media player is doing, keyed by identity name. Absent
+    /// means no player is running for that source, which is every media player
+    /// outside the active scene.
+    pub media: HashMap<String, crate::media::player::Status>,
 }
 
 impl NameContext {
@@ -43,6 +47,7 @@ impl NameContext {
         sources: &[SourceConfig],
         apps: HashMap<String, AppProcess>,
         failing: HashSet<String>,
+        media: HashMap<String, crate::media::player::Status>,
     ) -> Self {
         let needs_devices = sources
             .iter()
@@ -56,6 +61,7 @@ impl NameContext {
             apps,
             failing,
             voice_labels: voice_labels_for(sources),
+            media,
         }
     }
 
@@ -190,7 +196,32 @@ fn base_strip_label(source: &SourceConfig, ctx: &NameContext) -> String {
             VoiceDisplay::Default | VoiceDisplay::Unnamed => "Text-to-Speech".to_string(),
         },
         SourceKindConfig::SoundEvents(_) => "Sound Events".to_string(),
+        // The folder, not the track: this name is spoken again every time it
+        // changes (see `home::relabel_source_strips`), and a strip that renamed
+        // itself every three minutes would interrupt whoever was using the
+        // mixer. What is playing belongs in the list form below, which is
+        // refreshed in place.
+        SourceKindConfig::MediaPlayer(media) => match folder_name(&media.folder) {
+            Some(folder) => format!("Media Player ({folder})"),
+            None => "Media Player".to_string(),
+        },
     }
+}
+
+/// The last component of a folder path — "Jazz" out of `D:\music\Jazz` — which
+/// is what a user calls it. Falls back to the whole string for a path with no
+/// components (a bare drive), and answers `None` for an unset folder.
+fn folder_name(folder: &str) -> Option<&str> {
+    let folder = folder.trim().trim_end_matches(['\\', '/']);
+    if folder.is_empty() {
+        return None;
+    }
+    Some(
+        folder
+            .rsplit(['\\', '/'])
+            .find(|part| !part.is_empty())
+            .unwrap_or(folder),
+    )
 }
 
 fn list_label(source: &SourceConfig, ctx: &NameContext) -> String {
@@ -225,6 +256,43 @@ fn base_list_label(source: &SourceConfig, ctx: &NameContext) -> String {
             }
         }
         SourceKindConfig::SoundEvents(_) => "Sound Events".to_string(),
+        SourceKindConfig::MediaPlayer(media) => media_list_label(source, media, ctx),
+    }
+}
+
+/// The Sources list form of a media player, which is where what it is playing
+/// is reported.
+///
+/// A source in a scene that is not active has no player running and so no
+/// status at all — it says what it is set to and nothing about playback, which
+/// is the truth: nothing is playing.
+fn media_list_label(
+    source: &SourceConfig,
+    media: &crate::config::MediaPlayerSourceConfig,
+    ctx: &NameContext,
+) -> String {
+    use crate::media::player::PlaybackState;
+    let Some(folder) = folder_name(&media.folder) else {
+        return "Media Player: no folder set".to_string();
+    };
+    let Some(status) = ctx.media.get(&source.name) else {
+        return format!("Media Player: {folder}");
+    };
+    match (&status.state, &status.track) {
+        (PlaybackState::Playing, Some(track)) => format!("Media Player: {folder}, playing {track}"),
+        (PlaybackState::Paused, Some(track)) => {
+            format!("Media Player: {folder}, paused on {track}")
+        }
+        (PlaybackState::Paused, None) => format!("Media Player: {folder}, paused"),
+        (PlaybackState::NoFiles, _) => {
+            format!("Media Player: {folder} has no audio files Pubsplash can play")
+        }
+        // Starting up: the folder has been read but the first track has not
+        // been opened yet. A fraction of a second, and never worth its own
+        // wording.
+        (PlaybackState::Playing, None) | (PlaybackState::NoFolder, _) => {
+            format!("Media Player: {folder}")
+        }
     }
 }
 
@@ -314,6 +382,7 @@ mod tests {
                 crate::tts::engines::ELEVENLABS.to_string(),
                 HashMap::from([("21m00Tcm4TlvDq8ikWAM".to_string(), "Rachel".to_string())]),
             )]),
+            media: HashMap::new(),
         }
     }
 
@@ -420,6 +489,105 @@ mod tests {
             ),
             "Sound Events"
         );
+    }
+
+    fn media_player(folder: &str) -> SourceConfig {
+        source(SourceKindConfig::MediaPlayer(
+            crate::config::MediaPlayerSourceConfig {
+                folder: folder.to_string(),
+                ..Default::default()
+            },
+        ))
+    }
+
+    fn playing(track: &str) -> crate::media::player::Status {
+        crate::media::player::Status {
+            state: crate::media::player::PlaybackState::Playing,
+            track: Some(track.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// The strip name must be the folder and never the track: it is spoken
+    /// again whenever it changes, and a track lasts three minutes.
+    #[test]
+    fn a_media_player_strip_is_named_after_its_folder() {
+        let src = media_player(r"D:\music\Jazz");
+        let mut ctx = ctx();
+        ctx.media.insert(src.name.clone(), playing("So What"));
+        assert_eq!(strip_label(&src, &ctx), "Media Player (Jazz)");
+    }
+
+    #[test]
+    fn the_sources_list_says_what_is_playing() {
+        let src = media_player(r"D:\music\Jazz");
+        let mut ctx = ctx();
+        ctx.media.insert(src.name.clone(), playing("So What"));
+        assert_eq!(list_label(&src, &ctx), "Media Player: Jazz, playing So What");
+    }
+
+    #[test]
+    fn a_paused_media_player_says_so_and_keeps_its_track() {
+        let src = media_player(r"D:\music\Jazz");
+        let mut ctx = ctx();
+        ctx.media.insert(
+            src.name.clone(),
+            crate::media::player::Status {
+                state: crate::media::player::PlaybackState::Paused,
+                track: Some("So What".to_string()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            list_label(&src, &ctx),
+            "Media Player: Jazz, paused on So What"
+        );
+    }
+
+    /// A media player in a scene that is not active has no worker, so there is
+    /// nothing to report about playback — and it must not claim there is.
+    #[test]
+    fn a_media_player_in_another_scene_reports_only_its_folder() {
+        assert_eq!(
+            list_label(&media_player(r"D:\music\Jazz"), &ctx()),
+            "Media Player: Jazz"
+        );
+    }
+
+    #[test]
+    fn a_media_player_with_no_folder_says_it_needs_one() {
+        assert_eq!(
+            list_label(&media_player("  "), &ctx()),
+            "Media Player: no folder set"
+        );
+        assert_eq!(strip_label(&media_player(""), &ctx()), "Media Player");
+    }
+
+    #[test]
+    fn a_folder_with_nothing_playable_in_it_is_not_silent_about_it() {
+        let src = media_player(r"D:\music\Jazz\");
+        let mut ctx = ctx();
+        ctx.media.insert(
+            src.name.clone(),
+            crate::media::player::Status {
+                state: crate::media::player::PlaybackState::NoFiles,
+                track: None,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            list_label(&src, &ctx),
+            "Media Player: Jazz has no audio files Pubsplash can play"
+        );
+    }
+
+    #[test]
+    fn a_folder_name_is_its_last_component_however_it_is_written() {
+        assert_eq!(folder_name(r"D:\music\Jazz"), Some("Jazz"));
+        assert_eq!(folder_name(r"D:\music\Jazz\"), Some("Jazz"));
+        assert_eq!(folder_name("D:/music/Jazz"), Some("Jazz"));
+        assert_eq!(folder_name(r"D:\"), Some("D:"));
+        assert_eq!(folder_name("   "), None);
     }
 
     #[test]

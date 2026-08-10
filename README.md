@@ -9,14 +9,16 @@ It is built in Rust with the wxDragon UI toolkit, and designed from the ground u
 - Stream live audio to audiopub.site, a self-hosted Audiopub instance, or a direct Icecast server
 - MP3 encoding with configurable bitrate
 - Scenes: group any number of audio sources and switch between them
-- Source types: microphone, desktop audio, per-application audio, text-to-speech, and sound events
+- Source types: microphone, desktop audio, per-application audio, text-to-speech, sound events, and a media player
 - Applications are picked from a list of what is running by default; just the ones that have actually played sound
 - Sources name themself based on what they're capturing
 - Sources reconnect on their own if their device is unplugged, resets, or is not ready yet when Pubsplash starts. A source that is retrying reads "(reconnecting)" on its mixer strip
 - Audiopub chat: read incoming messages in an accessible list, send outbound messages, and have chat read aloud automatically with text-to-speech (optionally spoken into the stream as well)
 - The chat feed looks after itself: if the connection drops or goes quiet it reconnects on its own, and **Reconnect chat** (`ALT+O`) forces a fresh connection at any time. Neither interrupts your audio
 - Nine speech engines: SAPI 5 and Microsoft Edge need no setup, and Google Translate, OpenAI, ElevenLabs, Azure, AWS Polly, Google Cloud, and a self-hosted Star server are available once you enter their credentials on the Speech tab of Preferences. Keys are encrypted for your Windows account
-- Loop-safe by design: Desktop Audio capture excludes Pubsplash's own audio, so text-to-speech and sound cues can never echo into your stream
+- Loop-safe by design: Desktop Audio capture excludes Pubsplash's own audio, so text-to-speech, sound cues and the media player can never echo into your stream
+- A media player source shuffles a folder of your own music into the stream — MP3, M4A, AAC, FLAC, OGG, WAV and more, subfolders included — with its own volume, mute, monitor and sends like any other source
+- The music gets out of your way on its own: it turns down while you talk, or while chat is being read aloud, and comes back up when you stop, by however much you choose
 - Built-in startup and shutdown sounds, each able to be switched off, plus audio cues for stream events (listener changes, incoming and outgoing messages) that you can send to your listeners or keep to yourself
 - A fully keyboard-accessible mixer with per-source volume and mute, plus an optional per-strip volume boost for sources that are too quiet at 100%
 - Empty lists contain a placeholder item explaining what they're meant to contain, this is a workaround to an NVDA sisue that causes empty controls to not announce their type and speak a message like, "Unknown"
@@ -102,16 +104,17 @@ The **Stream overview** at the top of the Home tab is a list you can arrow throu
 | `CTRL+Tab` / `CTRL+Shift+Tab` | Next / previous parameter (plugin parameter dialog) |
 | `F6` | Inside a plugin's own interface only: move focus back out to the toolbar |
 | `Escape` | Close a plugin's interface window (from its toolbar; inside the plugin's own interface, `Escape` goes to the plugin) |
-| `SHIFT+F10` / `Applications` | Open the context menu for the focused control (mixer volume sliders) |
+| `SHIFT+F10` / `Applications` | Open the context menu for the focused control (mixer volume sliders: volume boost, monitoring, and media player transport) |
 | `ALT+G` | Open the Go to menu (stream page, data directory) |
+| `CTRL+O` | Open a file and play it on your first media player (a default keybinding you can change or remove) |
 
 In the mixer, sliders respond to arrow keys for 1% steps, `Page Up` / `Page Down` for 10% steps, and `Home` / `End` for maximum / minimum volume. `Up`, `Right`, and `Page Up` always raise the volume; `Down`, `Left`, and `Page Down` always lower it.
 
 ### Keybinds
 
-The shortcuts above are fixed, but **Preferences > Keybinds** lets you put your own key on the things you reach for most, so you don't have to tab to the control first. Out of the box `F9` starts and stops streaming and `F10` starts and stops recording; both are ordinary bindings you can change or delete.
+The shortcuts above are fixed, but **Preferences > Keybinds** lets you put your own key on the things you reach for most, so you don't have to tab to the control first. Out of the box `F9` starts and stops streaming and `F10` starts and stops recording, and the first media player you add is given `CTRL+O` for **Open file**; all three are ordinary bindings you can change or delete.
 
-The tab is a list of every action that can be bound, each row reading the action followed by its keys, or *Unassigned*. **Add binding** and **Edit binding** open the same dialog; **Remove binding** (or `Delete` on the list) takes a shortcut away, and **Reset to defaults** puts back just `F9` and `F10`.
+The tab is a list of every action that can be bound, each row reading the action followed by its keys, or *Unassigned*. **Add binding** and **Edit binding** open the same dialog; **Remove binding** (or `Delete` on the list) takes a shortcut away, and **Reset to defaults** puts back just `F9`, `F10`, and `CTRL+O` on your first media player.
 
 You can bind:
 
@@ -119,8 +122,9 @@ You can bind:
 - switching to the next or previous scene — these cycle round, and do nothing at all if you only have one scene — or jumping straight to a scene by name
 - monitoring master, any source, or any bus
 - muting master, any source, or any bus
+- playing or pausing a media player, skipping to its next track, and opening a file to play on it
 
-In the Add binding dialog, choose a category and then an action. Actions that need to know *which* scene, source or bus add a third dropdown right after the action; it disappears again if you pick an action that doesn't need one. Then tab to the **Shortcut** box and simply press the keys you want — they are read back to you. `Escape` or `Delete` clears the box, and `Tab` and `Shift+Tab` still move you on rather than being captured (which is also why they can't be bound). `F1` and `F6` are refused, since they belong to help and pane switching.
+In the Add binding dialog, choose a category and then an action. Actions that need to know *which* scene, source, bus or media player add a third dropdown right after the action; it disappears again if you pick an action that doesn't need one. Then tab to the **Shortcut** box and simply press the keys you want — they are read back to you. `Escape` or `Delete` clears the box, and `Tab` and `Shift+Tab` still move you on rather than being captured (which is also why they can't be bound). `F1` and `F6` are refused, since they belong to help and pane switching.
 
 Tick **Global** to make a shortcut work anywhere in Windows, not only while Pubsplash is in front — handy for muting your microphone from inside a game. A global shortcut has to include `CTRL`, `ALT` or `SHIFT`, or be a function key; a bare letter or digit would be swallowed everywhere you type. Another application that grabs the same combination first still wins.
 
@@ -151,6 +155,44 @@ The picker that opens lists the applications you can capture. Use the controls t
 **Type a name...** enters a program name by hand. This can be used to capture an application that's not running yet. When Pubsplash detects the app, it'll start capturing it automatically.
 
 Applications that run as several processes at once — web browsers, Discord, Spotify, and anything else built on Chromium or Electron — are captured whole; you do not need to know which of their processes makes the sound. If you have two separate copies of the same program open, Pubsplash captures the one that is playing sound, and stays with that copy until you close it.
+
+## The media player
+
+A **Media Player** source plays a folder of your own music into the mix. Add one on the **Scenes and Sources** tab (**Add source**, then pick "Media Player") and its dialog asks for the folder.
+
+Everything in that folder is played, subfolders included, so pointing it at a whole music library works as well as pointing it at one album. Pubsplash plays MP3, M4A, MP4, AAC, FLAC, OGG, WAV, AIFF, CAF, MKA and MP1/MP2 files; anything else in the folder — artwork, playlists, or Opus and WMA files, which Pubsplash cannot decode — is ignored rather than queued and then skipped in silence. The folder is read again every few minutes, so music you add during a session joins in without restarting anything.
+
+**Shuffle the folder** is on by default. Shuffled means every file is played once before any of them repeats; when the folder runs out it is reshuffled, and a new round never starts with the track that just finished. Turn it off to play the folder in filename order instead, over and over.
+
+A media player starts playing as soon as its scene is the live one, and stops when you switch to a scene it is not in — the same rule the microphones follow. Where it has got to is shown in the Sources list: "playing", "paused on", or a note that the folder has nothing playable in it.
+
+### Talking over it
+
+**Turn the music down while other sources are playing** is on by default. With it on, the music drops as soon as any other source in the scene makes a sound, and comes back up about a second after it stops, so you can talk over it — or let chat be read over it — without touching a fader.
+
+**Turned-down level** is how far it drops, as a percentage of this source's own volume slider: 25% means a quarter of whatever the fader is set to, and 0% silences the music completely while anything else is playing. Your microphone, your text-to-speech and your sound events all count as something playing; other media players do not, so two of them never fight each other. A muted microphone, or one pulled down to zero, does not turn the music down either.
+
+**Start turning down at** is how loud something has to get before it counts. It is a level in decibels, from -60 (almost anything) to -10 (only a shout), and it ships at -30 dB: the level of somebody deliberately talking, and far enough above a breath across the microphone, a fan or a knock on the desk that none of those turn your music down. Lower it if a normal sentence does not duck the music; raise it if something in the room does.
+
+**Calibrate to my voice** sets that level for you, and is the easiest way to get it right. Press it and talk normally for five seconds — read a sentence at the volume you actually broadcast at — and Pubsplash listens to the same signal the ducking watches, then puts the level a little way underneath what it heard. It measures whatever is in your live scene right now, through its faders and mutes, so make sure the microphone you are calibrating is in that scene and unmuted. If nothing loud enough to be a voice arrives, it says so and changes nothing.
+
+If your music stays turned down when nobody is talking, the source holding it there is one that is genuinely making noise: a **Desktop Audio** source counts, so a video playing in a background tab will duck the music for as long as it runs.
+
+### Playing, pausing and skipping
+
+The transport is on the media player's mixer strip. Open the strip's volume slider context menu with `SHIFT+F10`, the `Applications` key or a right click, and choose **Play** / **Pause**, **Next track** or **Open file**. All three are also bindable to shortcuts of your own — see [Keybinds](#keybinds) — which is what you want mid-broadcast, since a shortcut works from any tab.
+
+Skipping tells you what it moved to rather than that you pressed it: "Media Player, playing" and then the name of the track now starting.
+
+**Open file** plays one file of your choosing, wherever it is on your computer — it does not have to be in the source's folder, and nothing about it is remembered. It interrupts whatever is playing, exactly as a skip does, and when it finishes the folder carries on with the track it was going to play next. There is a button for it on the media player's mixer strip beside the mute box, and the first media player you add is given `CTRL+O` for it.
+
+Pausing is for this session only: a media player is playing again the next time you start Pubsplash, or the next time you switch back to its scene.
+
+### Hearing it yourself
+
+A media player is an ordinary source in every other respect: it has a volume slider, a mute, bus sends, and its own monitor toggle (`CTRL+M` on its strip, or a keybinding). It plays to the stream by default and is not monitored, so press `CTRL+M` if you want to hear it yourself. What you monitor is exactly what your listeners get, volume and ducking included — when the music ducks for you, it has ducked for them.
+
+If you monitor it through speakers rather than headphones, a microphone source in the same room will pick the music up and send it to the stream a second time, a beat late. That is worth knowing because the more obvious worry — a **Desktop Audio** source capturing the music and doubling it — cannot happen: Desktop Audio deliberately leaves Pubsplash's own sound out, and the media player's audio never leaves Pubsplash except through the mixer. Use headphones and none of it can happen at all.
 
 ## Buses and sends
 

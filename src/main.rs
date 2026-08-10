@@ -9,6 +9,7 @@ mod json_store;
 mod keybind;
 mod logging;
 mod mastodon;
+mod media;
 mod net;
 mod secret;
 mod soundpack;
@@ -113,6 +114,7 @@ fn main() {
             orphaned_plugins: RefCell::new(Vec::new()),
             chain_library: RefCell::new(chain_library.clone()),
             cues: Default::default(),
+            media: Default::default(),
             open_editors: RefCell::new(Vec::new()),
             shutting_down: std::cell::Cell::new(false),
             config_dirty: std::cell::Cell::new(false),

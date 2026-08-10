@@ -224,9 +224,9 @@ message = "While this field has focus, press the key combination you want and it
 
 [[control]]
 id = "dialog.keybind.specifier"
-label = "Binding scene, source or bus choice"
+label = "Binding scene, source, bus or media player choice"
 file = "src/ui/keybinds_ui.rs"
-message = "Which scene, source or bus the action applies to. This appears only for actions that need one, and disappears again when you pick an action that does not. A source shortcut runs against the scene that is live when you press it, so it does nothing while you are in a scene that has no source by that name."
+message = "Which scene, source, bus or media player the action applies to. This appears only for actions that need one, and disappears again when you pick an action that does not. A source shortcut runs against the scene that is live when you press it, so it does nothing while you are in a scene that has no source by that name."
 
 [[control]]
 id = "dialog.loadChain.delete"
@@ -287,6 +287,42 @@ id = "dialog.mastodonTokens.text"
 label = "Template token reference"
 file = "src/ui/mastodon_templates.rs"
 message = "The tokens you can use in a template, one per line, each with what it is replaced with. You can select text here and copy it with CONTROL plus C."
+
+[[control]]
+id = "dialog.mediaPlayerSource.calibrate"
+label = "Calibrate ducking threshold button"
+file = "src/ui/scenes.rs"
+message = "Sets the level above for you. Press this and talk normally for five seconds, at the volume you actually broadcast at, and Pubsplash measures the very signal the ducking watches, then puts the level a little way underneath what it heard. It listens to the sources in your live scene, through their volume sliders and mutes, so the microphone you are calibrating has to be in that scene and unmuted. When it has finished it tells you the level it chose, and the slider above moves to it. If nothing loud enough to be a voice was heard, it says so and nothing is changed. Nothing is saved until you choose OK."
+
+[[control]]
+id = "dialog.mediaPlayerSource.duck"
+label = "Ducking checkbox"
+file = "src/ui/scenes.rs"
+message = "When checked, the music turns itself down whenever any other source in this scene is making sound, and comes back up about a second after it stops. Your microphone and your text-to-speech are both other sources, so this is what lets you talk over the music without touching a fader. Making a sound means a real signal rather than the hiss of an open microphone in a quiet room, so an idle microphone does not hold the music down. Other media players do not count either, so two of them never fight each other. The level it drops to is the next control."
+
+[[control]]
+id = "dialog.mediaPlayerSource.duckLevel"
+label = "Turned-down level slider"
+file = "src/ui/scenes.rs"
+message = "How loud the music is while it is turned down, as a percentage of this source's own volume slider. Twenty-five percent means a quarter of whatever the fader is set to, which leaves the music audible underneath you. Zero silences it completely while anything else is playing. This has no effect unless the checkbox above is checked."
+
+[[control]]
+id = "dialog.mediaPlayerSource.duckThreshold"
+label = "Ducking threshold slider"
+file = "src/ui/scenes.rs"
+message = "How loud another source has to get before the music is turned down, in decibels below full scale. Minus sixty is almost anything, minus ten is only a shout, and the default of minus thirty is the level of somebody deliberately talking, far enough above a breath across the microphone or a knock on the desk that neither turns your music down. Lower it if a normal sentence does not duck the music, raise it if something in the room does, or press the Calibrate button below and let Pubsplash measure your own voice. This has no effect unless the ducking checkbox is checked."
+
+[[control]]
+id = "dialog.mediaPlayerSource.folder"
+label = "Media player folder box"
+file = "src/ui/scenes.rs"
+message = "The folder this source plays, including everything in its subfolders. Type the full path or use the browse button. Pubsplash plays MP3, M4A, AAC, FLAC, OGG, WAV, AIFF and a few others; anything it cannot decode, such as Opus or WMA, is ignored. The folder is read again every few minutes, so music you add during a session joins in without restarting anything. Until this is filled in, the source stays silent."
+
+[[control]]
+id = "dialog.mediaPlayerSource.shuffle"
+label = "Shuffle checkbox"
+file = "src/ui/scenes.rs"
+message = "When checked, the folder is played in a random order, and every file is played once before any of them repeats. It is reshuffled each time it runs out, and never starts a new round with the track that just finished. Unchecked plays the folder in filename order instead, over and over."
 
 [[control]]
 id = "dialog.missingPlugins.apply"
@@ -1043,6 +1079,12 @@ id = "tab.home.mixer.strip.mute"
 label = "Mixer strip mute checkbox"
 file = "src/ui/home.rs"
 message = ""
+
+[[control]]
+id = "tab.home.mixer.strip.openFile"
+label = "Mixer strip open file button"
+file = "src/ui/home.rs"
+message = "Plays one file of your choosing on this media player. The file can be anywhere on your computer and does not have to be in the source's folder. It interrupts whatever is playing, exactly as skipping to the next track does, and when it finishes the folder carries on with the track it was going to play next. Nothing about the file is remembered. This button only appears on a media player's strip."
 
 [[control]]
 id = "tab.home.mixer.strip.volume"

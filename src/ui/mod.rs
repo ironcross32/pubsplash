@@ -20,6 +20,7 @@ mod logging_ui;
 mod mastodon_post;
 mod mastodon_prefs;
 mod mastodon_templates;
+mod media;
 mod native_acc;
 mod panes;
 mod preferences;
@@ -78,6 +79,12 @@ const ID_MENU_GOTO_DATA_DIR: i32 = 2402;
 pub const ID_MIXER_BOOST: i32 = 2201;
 /// Command id of the "Monitor this strip" item in the same menu.
 pub const ID_MIXER_MONITOR: i32 = 2202;
+/// Command ids of the media player items in the same menu, added only to the
+/// strips that have a player behind them. Transport has to be reachable while a
+/// broadcast is running, and this is where the user already is.
+pub const ID_MIXER_MEDIA_PLAY: i32 = 2203;
+pub const ID_MIXER_MEDIA_NEXT: i32 = 2204;
+pub const ID_MIXER_MEDIA_OPEN: i32 = 2205;
 /// Id worn by every dialog's confirm button, so that ENTER can reach it. See
 /// `ok_button`, which is the only thing that should ever use it — and which
 /// documents why it is this private id rather than `ID_OK`.
@@ -243,11 +250,21 @@ pub struct Runtime {
     /// happens on worker threads, so the pump watches this rather than being
     /// told, exactly as it does for the catalog above.
     pub usage_generation: u64,
+    /// The `App::media` generation the source labels were last built from. A
+    /// media player moving to the next track is the same shape of problem: a
+    /// worker thread changed what a label should say.
+    pub media_generation: u64,
     /// Which mixer strips are being monitored through the local playback
     /// device. Deliberately not persisted — see [`Monitors`].
     pub monitors: Monitors,
     /// What `refresh_stream_ui` last wrote to the stream/record controls.
     pub shown: ShownStreamUi,
+    /// The answer to the last `MeasureDuckTrigger`, waiting to be collected by
+    /// whoever asked for it — the Calibrate button in the Media Player source
+    /// dialog. Parked here rather than delivered because the engine's events
+    /// have exactly one reader, the pump, and the dialog that wants this is a
+    /// modal the pump keeps ticking underneath (see `scenes::calibrate_duck`).
+    pub duck_calibration: Option<f32>,
     /// When the next still-streaming Mastodon post is due, or `None` when none
     /// is. A deadline rather than a tick count, so it survives ticks missed
     /// under a modal dialog and a stream that started mid-interval.
@@ -522,8 +539,11 @@ impl Default for Runtime {
             // Nothing has spoken yet, so this is 0 and the first pump tick has
             // nothing to redraw.
             usage_generation: crate::tts::usage::generation(),
+            // No media player is running before the first scene is applied.
+            media_generation: 0,
             monitors: Monitors::default(),
             shown: ShownStreamUi::default(),
+            duck_calibration: None,
             next_announcement: None,
             last_stream: None,
         }
@@ -703,6 +723,8 @@ pub struct App {
     /// One worker per sound-event source, feeding its cues into the mixer. See
     /// [`cue_feed`] for why this is not a thread per cue.
     pub cues: cue_feed::CueFeeds,
+    /// One worker per Media Player source in the active scene. See [`media`].
+    pub media: media::MediaPlayers,
     /// Open native plugin editor windows.
     pub open_editors: RefCell<Vec<fx_editor::EditorWindow>>,
     /// Set once the frame is closing. The pump timer keeps firing during the
@@ -930,6 +952,129 @@ fn report_speech_problems(app: &Rc<App>) {
     }
 }
 
+/// Drives one media player's transport and says what happened.
+///
+/// Every route to play, pause and skip comes through here — the keybindings and
+/// the mixer strip's context menu — so the spoken feedback is the same whichever
+/// one the user took. Announced rather than shown: these are pressed while the
+/// user is somewhere else entirely, often mid-broadcast, and the answer has to
+/// reach them without moving focus.
+pub(crate) fn media_transport(
+    app: &Rc<App>,
+    source_name: &str,
+    command: crate::media::player::Command,
+) {
+    use crate::media::player::{Command, PlaybackState};
+    let Some(status) = app.media.status(source_name) else {
+        // The binding names a source by identity, and that source may live in a
+        // scene that is not the active one — where there is no player at all.
+        help::announce(&format!(
+            "There is no media player called {source_name} in this scene"
+        ));
+        return;
+    };
+    let label = media_label(app, source_name);
+    let spoken = match (&command, &status.state) {
+        (Command::PlayPause, PlaybackState::Paused) => match &status.track {
+            Some(track) => format!("{label}, playing {track}"),
+            None => format!("{label}, playing"),
+        },
+        (Command::PlayPause, _) => format!("{label}, paused"),
+        // The track being skipped *to*, which the player publishes for exactly
+        // this — "next track" told the user only what they had just pressed.
+        // `None` is a folder with nothing playable in it, where there is no
+        // answer to give and the label already says so.
+        (Command::Next, _) => match &status.next {
+            Some(next) => format!("{label}, playing {next}"),
+            None => format!("{label}, next track"),
+        },
+        (Command::PlayFile(path), _) => {
+            format!("{label}, playing {}", crate::media::track_title(path))
+        }
+        // Settings edits do not come through here; `media::apply` sends them.
+        (Command::Reload { .. }, _) => return,
+    };
+    app.media.send(source_name, command);
+    help::announce(&spoken);
+}
+
+/// Asks for a file and plays it on one media player, in place of whatever it is
+/// on now.
+///
+/// The picker is a modal, which everything else in `media_transport` is
+/// deliberately not — but this one answers a deliberate press and cannot arrive
+/// on its own, which is the test that decides between a dialog and an
+/// announcement. Every filter is built from the decoder's own list, so the
+/// dialog cannot offer a file the player would then fail to play.
+pub(crate) fn media_open_file(app: &Rc<App>, source_name: &str) {
+    if app.media.status(source_name).is_none() {
+        help::announce(&format!(
+            "There is no media player called {source_name} in this scene"
+        ));
+        return;
+    }
+    let Some(frame) = app.widgets(|w| w.frame) else {
+        return;
+    };
+    let patterns = crate::media::SUPPORTED_EXTENSIONS
+        .iter()
+        .map(|e| format!("*.{e}"))
+        .collect::<Vec<_>>()
+        .join(";");
+    let dialog = FileDialog::builder(&frame)
+        .with_message("Choose a file to play")
+        // The folder the source plays is where the user is most likely to be
+        // looking, and it costs nothing when they are not.
+        .with_default_dir(&media_folder(app, source_name))
+        .with_wildcard(&format!("Audio files ({patterns})|{patterns}|All files (*.*)|*.*"))
+        .with_style(FileDialogStyle::Open | FileDialogStyle::FileMustExist)
+        .build();
+    let chosen = if dialog.show_modal() == ID_OK {
+        dialog.get_path()
+    } else {
+        None
+    };
+    let Some(path) = chosen else {
+        return;
+    };
+    media_transport(
+        app,
+        source_name,
+        crate::media::player::Command::PlayFile(std::path::PathBuf::from(path)),
+    );
+}
+
+/// The folder one media player source is configured with, for the file picker
+/// to open in. Empty when the source has none, which wx reads as "wherever you
+/// were last".
+fn media_folder(app: &Rc<App>, source_name: &str) -> String {
+    let config = app.config.borrow();
+    config
+        .scenes
+        .active_scene()
+        .and_then(|scene| scene.sources.iter().find(|s| s.name == source_name))
+        .and_then(|source| match &source.kind {
+            SourceKindConfig::MediaPlayer(media) => Some(media.folder.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// What to call a media player out loud: the same name its mixer strip has.
+///
+/// Built against an empty [`NameContext`] on purpose — a media player's name
+/// comes from its folder and nothing else, and the full context enumerates
+/// capture devices, which is not something to do on a keypress.
+fn media_label(app: &Rc<App>, source_name: &str) -> String {
+    let config = app.config.borrow();
+    config
+        .scenes
+        .active_scene()
+        .and_then(|scene| scene.sources.iter().find(|s| s.name == source_name))
+        .map(|source| crate::source_name::strip_label(source, &NameContext::default()))
+        .unwrap_or_else(|| source_name.to_string())
+}
+
 /// Whether a source's audio should reach the listeners.
 ///
 /// Only TTS sources can answer no, and it is exactly what "Send speech to the
@@ -1091,8 +1236,9 @@ impl App {
     /// sources explicitly because the Sources list shows whichever scene is
     /// selected, which is not always the active one.
     pub fn name_context(&self, sources: &[crate::config::SourceConfig]) -> NameContext {
+        let media = self.media.statuses();
         let run = self.run.borrow();
-        NameContext::build(sources, run.apps.clone(), run.failing.clone())
+        NameContext::build(sources, run.apps.clone(), run.failing.clone(), media)
     }
 
     /// Re-enumerates the processes behind every scene's Application sources —
@@ -1318,6 +1464,20 @@ impl App {
                 // Speech is for the broadcaster first, so a TTS strip is always
                 // played out of the local device — see `SourceSpec::local`.
                 local: matches!(&s.kind, SourceKindConfig::Tts(_)),
+                // Only a media player ducks, and only when it is asked to. The
+                // rest of the mixer is what it ducks *for*, which is why every
+                // other source is a trigger — a microphone, a game, a chat
+                // message being read out.
+                duck: match &s.kind {
+                    SourceKindConfig::MediaPlayer(media) if media.duck => {
+                        Some(crate::audio::DuckSpec {
+                            percent: media.duck_percent,
+                            threshold_db: media.duck_threshold_db,
+                        })
+                    }
+                    _ => None,
+                },
+                duck_trigger: !matches!(&s.kind, SourceKindConfig::MediaPlayer(_)),
                 to_master: s.to_master && tts_reaches_the_stream(s),
                 // Sends go too when speech is off the stream. A bus mixes into
                 // master unconditionally, so leaving them would have put the
@@ -1355,9 +1515,9 @@ impl App {
                             }
                         }
                     }
-                    SourceKindConfig::Tts(_) | SourceKindConfig::SoundEvents(_) => {
-                        FeedKind::External
-                    }
+                    SourceKindConfig::Tts(_)
+                    | SourceKindConfig::SoundEvents(_)
+                    | SourceKindConfig::MediaPlayer(_) => FeedKind::External,
                 },
             })
             .collect();
@@ -1927,6 +2087,9 @@ pub fn build(app: Rc<App>) {
     // Buses before sources: sources reference buses by index.
     fx::sync_engine_buses(&app);
     app.sync_engine_sources();
+    // The active scene's media players start playing here, the same as its
+    // microphones start capturing.
+    home::sync_media_players(&app);
 
     if !failures.is_empty() {
         // Two different problems with two different answers: install the
@@ -2000,8 +2163,12 @@ pub fn build(app: Rc<App>) {
             // main frame goes away.
             fx_editor::close_all(&app);
             // Cue workers hold an `ExternalFeeds` clone and would otherwise sit
-            // on an empty queue through the whole shutdown cue.
+            // on an empty queue through the whole shutdown cue. Media players
+            // go for a stronger reason: theirs is not an idle thread but one
+            // decoding a file, and it would keep playing into the mixer for the
+            // whole of the shutdown sound.
             app.cues.stop_all();
+            app.media.stop_all();
             // Vanish immediately: the user asked to exit, so the app should
             // look gone while the cue finishes in the background.
             frame_for_close.show(false);
@@ -2786,6 +2953,10 @@ fn pump_events(app: &Rc<App>) {
             crate::audio::EngineEvent::BusesApplied => {
                 app.engine.reclaim_retired_chains();
             }
+            // Parked for the dialog that asked; see `Runtime::duck_calibration`.
+            crate::audio::EngineEvent::DuckTriggerMeasured { peak } => {
+                app.run.borrow_mut().duck_calibration = Some(peak);
+            }
         }
     }
     // Instances the UI took out of a chain but did not release, for the same
@@ -2804,6 +2975,18 @@ fn pump_events(app: &Rc<App>) {
         let mut run = app.run.borrow_mut();
         if run.tts_catalog_generation != generation {
             run.tts_catalog_generation = generation;
+            labels_dirty = true;
+        }
+    }
+
+    // A media player moved to another track, or was paused or resumed. The
+    // Sources list says what each one is playing, so the label is stale; the
+    // counter is how a worker thread reports that without touching `App`.
+    {
+        let generation = app.media.generation();
+        let mut run = app.run.borrow_mut();
+        if run.media_generation != generation {
+            run.media_generation = generation;
             labels_dirty = true;
         }
     }

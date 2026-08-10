@@ -62,6 +62,26 @@ pub struct SourceSpec {
     /// property of the source. Both taps are taken as one, so a monitored TTS
     /// strip is heard once, not twice.
     pub local: bool,
+    /// How this source gets out of the way while anything else in the scene has
+    /// signal. `None` is a source that never ducks, which is everything except a
+    /// Media Player with ducking on.
+    pub duck: Option<DuckSpec>,
+    /// Whether this source's own signal is what *makes* others duck. False for
+    /// media players, so two of them do not fight each other, and true for
+    /// everything else — a microphone, a chat message being read out, a game.
+    pub duck_trigger: bool,
+}
+
+/// A ducking source's two settings: how far down it goes, and how loud
+/// everything else has to be before it does. Both are the user's, and both are
+/// carried together because [`mixer::Ducker::matches`] has to compare them as a
+/// pair to decide whether a duck in progress survives a routing update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DuckSpec {
+    /// The level the source drops to, as a percentage of its own fader.
+    pub percent: u32,
+    /// dBFS RMS; see [`mixer::DUCK_THRESHOLD_DB_DEFAULT`].
+    pub threshold_db: i32,
 }
 
 /// A source's send into a bus, addressed by bus index (matching the order
@@ -145,6 +165,15 @@ pub enum EngineCommand {
         path: std::path::PathBuf,
     },
     StopRecording,
+    /// Measure how loud the scene's ducking triggers get over the next
+    /// `seconds`, and answer with [`EngineEvent::DuckTriggerMeasured`].
+    ///
+    /// The measurement is the engine's own [`mixer::trigger_level`] and not a
+    /// separate capture, which is the whole point: a threshold calibrated
+    /// anywhere else would be calibrated against a different signal than the one
+    /// the ducker compares it to. Post-fader like the trigger itself, so a muted
+    /// or pulled-down microphone measures as the silence it is contributing.
+    MeasureDuckTrigger { seconds: f32 },
     Shutdown,
 }
 
@@ -180,6 +209,10 @@ pub enum EngineEvent {
     /// The engine finished applying the FX portion of a `SetRouting` and queued
     /// every replaced chain for reclamation on the UI thread.
     BusesApplied,
+    /// The answer to [`EngineCommand::MeasureDuckTrigger`]: the loudest block
+    /// any ducking trigger produced over the window, as an RMS. Zero is a
+    /// perfectly good answer and means nothing was heard.
+    DuckTriggerMeasured { peak: f32 },
 }
 
 /// Why a recording failed *to start*, as opposed to one that stopped after
@@ -268,6 +301,20 @@ impl ExternalFeeds {
         }
     }
 
+    /// How many samples are already waiting in the named source's ring, or
+    /// `None` when there is no such source.
+    ///
+    /// A one-shot feeder (a cue, an utterance) has no use for this: it pushes
+    /// what it has and is done. A feeder that could run forever does — see
+    /// `media::player`, which uses it to keep only a fraction of a second
+    /// queued, because everything already in the ring is audio that will be
+    /// heard no matter what the user presses next.
+    pub fn queued(&self, name: &str) -> Option<usize> {
+        let map = device::lock_recovering(&self.0, "External feeds");
+        let producer = map.get(name)?;
+        Some(producer.buffer().capacity() - producer.slots())
+    }
+
     /// Feeds a whole buffer in, pacing to the mixer's drain rate, and stops if
     /// the source disappears (a scene switch).
     ///
@@ -302,6 +349,15 @@ impl ExternalFeeds {
     fn clear(&self) {
         self.0.lock().unwrap().clear();
     }
+
+    /// Parks a ring under `name` with no engine behind it, so a test can watch
+    /// what a feeder actually pushes. The engine's own path is `SetRouting`.
+    #[cfg(test)]
+    pub fn park_for_test(&self, name: &str, capacity: usize) -> rtrb::Consumer<f32> {
+        let (producer, consumer) = RingBuffer::new(capacity);
+        self.insert(name.to_string(), producer);
+        consumer
+    }
 }
 
 struct ActiveSource {
@@ -316,6 +372,10 @@ struct ActiveSource {
     monitor: bool,
     /// See [`SourceSpec::local`].
     local: bool,
+    /// Present when this source ducks for the others. See [`mixer::Ducker`].
+    ducker: Option<mixer::Ducker>,
+    /// See [`SourceSpec::duck_trigger`].
+    duck_trigger: bool,
     /// What the capture thread has seen, if this source has one.
     stats: Arc<health::CaptureStats>,
     /// What the mixer has seen of this source's ring since the last report.
@@ -337,6 +397,16 @@ struct ActiveBus {
     /// This block's summed sends, reused across iterations.
     buffer: Vec<f32>,
     monitor: bool,
+}
+
+/// A duck-threshold calibration window in progress. See
+/// [`EngineCommand::MeasureDuckTrigger`].
+struct DuckCalibration {
+    /// Blocks still to be measured. Counted rather than timed so the window is
+    /// the same length of *audio* however the mixer's cadence slips.
+    blocks_left: u32,
+    /// The loudest trigger seen so far.
+    peak: f32,
 }
 
 /// The live monitoring output: the producer half of the ring the render thread
@@ -470,6 +540,12 @@ fn engine_loop(
     // Recording runs on its own encoder so it works with or without streaming.
     let mut rec_encoder: Option<encoder::Mp3Encoder> = None;
     let mut recorder: Option<recorder::RecorderHandle> = None;
+    // A duck-threshold calibration in progress; see `EngineCommand::
+    // MeasureDuckTrigger`. Its presence also keeps the loop off the idle park
+    // below, or a scene with nothing but a media player in it would park with
+    // the measurement still owing and answer only when the user next did
+    // something.
+    let mut calibration: Option<DuckCalibration> = None;
 
     let block_period = Duration::from_millis(10);
     let mut next_tick = Instant::now() + block_period;
@@ -503,7 +579,8 @@ fn engine_loop(
             && rec_encoder.is_none()
             && recorder.is_none()
             && monitor_out.is_none()
-            && !master_monitor;
+            && !master_monitor
+            && calibration.is_none();
         if idle && parked_command.is_none() {
             match commands.recv() {
                 Ok(command) => parked_command = Some(command),
@@ -547,6 +624,14 @@ fn engine_loop(
                     // waiting to hear that its retired plugins are unreferenced.
                     let touched_fx = new_buses.is_some() || new_master_chain.is_some();
                     if let Some(specs) = new_sources {
+                        // A routing update arrives for every scene edit, and a
+                        // media player mid-duck must not be snapped back to full
+                        // by one. Duckers are carried across by source name (the
+                        // identity key), and only when the level still agrees.
+                        let previous_duckers: HashMap<String, mixer::Ducker> = sources
+                            .iter()
+                            .filter_map(|s| Some((s.name.clone(), s.ducker.clone()?)))
+                            .collect();
                         stop_sources(&mut sources, last_health.elapsed());
                         // The replacement sources deserve a full window before
                         // their first line, and their rings start empty.
@@ -581,6 +666,16 @@ fn engine_loop(
                                     feeds.insert(spec.name.clone(), producer);
                                 }
                             }
+                            let ducker = spec.duck.map(|duck| {
+                                let mut ducker =
+                                    mixer::Ducker::new(duck.percent, duck.threshold_db);
+                                if let Some(previous) = previous_duckers.get(&spec.name)
+                                    && previous.matches(duck.percent, duck.threshold_db)
+                                {
+                                    ducker.adopt(previous);
+                                }
+                                ducker
+                            });
                             sources.push(ActiveSource {
                                 name: spec.name,
                                 strip: ChannelStrip::new(spec.volume, spec.muted),
@@ -591,6 +686,8 @@ fn engine_loop(
                                 sends: active_sends(spec.sends),
                                 monitor: spec.monitor,
                                 local: spec.local,
+                                ducker,
+                                duck_trigger: spec.duck_trigger,
                                 stats,
                                 window: health::Window::default(),
                                 baseline: health::Counters::default(),
@@ -734,6 +831,15 @@ fn engine_loop(
                 Ok(EngineCommand::StopRecording) => {
                     finalize_recording(&mut rec_encoder, &mut recorder);
                 }
+                Ok(EngineCommand::MeasureDuckTrigger { seconds }) => {
+                    // A second press replaces the first rather than queueing, so
+                    // the user cannot be left waiting out somebody else's window.
+                    calibration = Some(DuckCalibration {
+                        blocks_left: (seconds.max(0.0) * mixer::SAMPLE_RATE as f32
+                            / mixer::BLOCK_FRAMES as f32) as u32,
+                        peak: 0.0,
+                    });
+                }
                 Ok(EngineCommand::Shutdown) => {
                     finalize_recording(&mut rec_encoder, &mut recorder);
                     stop_sources(&mut sources, last_health.elapsed());
@@ -800,7 +906,7 @@ fn engine_loop(
             _ => {}
         }
 
-        mix_one_block(
+        let trigger = mix_one_block(
             &mut sources,
             &mut buses,
             &mut master_chain,
@@ -811,6 +917,17 @@ fn engine_loop(
             master_monitor,
         );
         crate::vst::host2::advance_transport(mixer::BLOCK_FRAMES as u64);
+
+        // A calibration window, if one is open. The peak of the same number the
+        // ducker tests against, so the threshold it produces means what it says.
+        if let Some(run) = &mut calibration {
+            run.peak = run.peak.max(trigger);
+            run.blocks_left = run.blocks_left.saturating_sub(1);
+            if run.blocks_left == 0 {
+                events.send(EngineEvent::DuckTriggerMeasured { peak: run.peak });
+                calibration = None;
+            }
+        }
 
         if let Some(out) = &mut monitor_out {
             // A short ring means the render thread is behind; writing what
@@ -925,6 +1042,15 @@ fn engine_loop(
 /// **post-fader and post-mute**, so what a monitored strip sounds like is
 /// exactly what it contributes: muting it silences the monitor too, and its
 /// volume slider moves the monitor level.
+///
+/// The two passes over the sources are what ducking needs and the only reason
+/// they are two: a media player's gain for this block depends on how loud
+/// *everything else* is in the same block, so every strip has to be pulled and
+/// faded before any of them can be routed. The duck is applied between the
+/// passes, which puts it ahead of every tap — master, sends and monitor alike —
+/// so the broadcaster hears the music duck exactly as the listeners do.
+///
+/// Returns that trigger level, which is what a threshold calibration measures.
 #[allow(clippy::too_many_arguments)]
 fn mix_one_block(
     sources: &mut [ActiveSource],
@@ -935,12 +1061,17 @@ fn mix_one_block(
     monitor_block: &mut [f32],
     send_scratch: &mut [f32],
     master_monitor: bool,
-) {
+) -> f32 {
     mix_block.fill(0.0);
     monitor_block.fill(0.0);
     for bus in buses.iter_mut() {
         bus.buffer.fill(0.0);
     }
+    // The loudest post-fader block among the sources that make others duck.
+    // Post-fader, so a muted microphone or one pulled to zero stops ducking the
+    // music — the trigger is what the source is contributing, not what its
+    // device happens to be hearing.
+    let mut trigger_level = 0.0f32;
     for source in sources.iter_mut() {
         // Ring occupancy is read here, before the pull, because this is the only
         // place it can be: the level *after* a pull is always near zero, and it
@@ -956,6 +1087,14 @@ fn mix_one_block(
             source.window.starved_blocks += 1;
         }
         source.strip.process(&mut source.scratch);
+        if source.duck_trigger {
+            trigger_level = trigger_level.max(mixer::trigger_level(&source.scratch));
+        }
+    }
+    for source in sources.iter_mut() {
+        if let Some(ducker) = &mut source.ducker {
+            ducker.process(&mut source.scratch, trigger_level);
+        }
         // One tap for both reasons a strip can be heard locally. The implicit
         // one is dropped when the strip is already arriving through the master
         // monitor below, so a broadcaster monitoring master does not hear their
@@ -991,6 +1130,7 @@ fn mix_one_block(
     if master_monitor {
         mixer::mix_into(monitor_block, mix_block);
     }
+    trigger_level
 }
 
 /// Hands every live `FxChain` back for the UI thread to drop.
@@ -1107,6 +1247,8 @@ mod routing_tests {
             sends: active_sends(sends),
             monitor: false,
             local: false,
+            ducker: None,
+            duck_trigger: true,
             stats: Arc::new(health::CaptureStats::new()),
             window: health::Window::default(),
             baseline: health::Counters::default(),
@@ -1308,6 +1450,135 @@ mod routing_tests {
         let mut buses = Vec::new();
         let (_, monitor) = run_block_monitoring(&mut sources, &mut buses, true);
         assert!((monitor[0] - 1.0).abs() < 1e-6, "got {}", monitor[0]);
+    }
+
+    /// How many blocks of signal the ducking tests' rings hold. A duck ramp is
+    /// measured in hundreds of milliseconds and the hold is a second, so these
+    /// tests run through seconds of audio, and both sources have to keep playing
+    /// for all of it — a ring that runs dry reads as somebody stopping talking.
+    const STEADY_BLOCKS: usize = 400;
+
+    /// A source that plays a constant value for [`STEADY_BLOCKS`] blocks.
+    fn steady_source(value: f32, muted: bool) -> ActiveSource {
+        let (mut producer, consumer) = RingBuffer::new(BLOCK_SAMPLES * STEADY_BLOCKS);
+        for _ in 0..BLOCK_SAMPLES * STEADY_BLOCKS {
+            producer.push(value).unwrap();
+        }
+        let mut source = test_source(value, 100, muted, true, vec![]);
+        source.consumer = consumer;
+        source
+    }
+
+    /// A monitored media player at full volume, plus whatever is playing over
+    /// it. The music is first and is the only monitored strip, so `monitor[0]`
+    /// is the music on its own.
+    fn ducking_pair(duck_percent: u32, over: ActiveSource) -> Vec<ActiveSource> {
+        let mut music = steady_source(1.0, false);
+        music.ducker = Some(mixer::Ducker::new(
+            duck_percent,
+            mixer::DUCK_THRESHOLD_DB_DEFAULT,
+        ));
+        music.duck_trigger = false;
+        music.monitor = true;
+        vec![music, over]
+    }
+
+    /// Runs `blocks` blocks and returns the last `(master, monitor)` pair.
+    fn run_blocks(sources: &mut [ActiveSource], blocks: usize) -> (Vec<f32>, Vec<f32>) {
+        let mut buses = Vec::new();
+        let mut out = (Vec::new(), Vec::new());
+        for _ in 0..blocks {
+            out = run_block_monitoring(sources, &mut buses, false);
+        }
+        out
+    }
+
+    /// The point of the whole feature: somebody talking turns the music down.
+    #[test]
+    fn a_talking_source_ducks_the_media_player() {
+        let mut sources = ducking_pair(25, steady_source(0.5, false));
+        // Half a second, past the 150 ms attack.
+        let (mix, _) = run_blocks(&mut sources, 50);
+        // Master carries the ducked music plus the talking itself.
+        assert!((mix[0] - 0.75).abs() < 1e-3, "music at 25%: {}", mix[0]);
+    }
+
+    /// What the broadcaster hears is what the listeners hear: the monitor tap is
+    /// after the duck, not before it.
+    #[test]
+    fn the_monitor_hears_the_music_ducked() {
+        let mut sources = ducking_pair(25, steady_source(0.5, false));
+        let (_, monitor) = run_blocks(&mut sources, 50);
+        assert!(
+            (monitor[0] - 0.25).abs() < 1e-3,
+            "monitored music is the ducked signal: {}",
+            monitor[0]
+        );
+    }
+
+    /// A media player is not a trigger, so two of them never duck each other.
+    #[test]
+    fn one_media_player_does_not_duck_another() {
+        let mut other = steady_source(1.0, false);
+        other.duck_trigger = false;
+        let mut sources = ducking_pair(25, other);
+        let (_, monitor) = run_blocks(&mut sources, 50);
+        assert!((monitor[0] - 1.0).abs() < 1e-6, "full level: {}", monitor[0]);
+    }
+
+    /// The trigger is post-fader, so muting the microphone stops it ducking.
+    #[test]
+    fn a_muted_talker_does_not_duck_anything() {
+        let mut sources = ducking_pair(25, steady_source(0.5, true));
+        let (_, monitor) = run_blocks(&mut sources, 50);
+        assert!((monitor[0] - 1.0).abs() < 1e-6, "full level: {}", monitor[0]);
+    }
+
+    /// One block, returning the trigger level `mix_one_block` reports — the
+    /// number a duck-threshold calibration takes the peak of.
+    fn run_block_trigger(sources: &mut [ActiveSource]) -> f32 {
+        let mut buses = Vec::new();
+        let mut master_chain = FxChain::empty();
+        let mut master = ChannelStrip::new(100, false);
+        let mut mix_block = vec![0f32; BLOCK_SAMPLES];
+        let mut monitor_block = vec![0f32; BLOCK_SAMPLES];
+        let mut send_scratch = vec![0f32; BLOCK_SAMPLES];
+        mix_one_block(
+            sources,
+            &mut buses,
+            &mut master_chain,
+            &mut master,
+            &mut mix_block,
+            &mut monitor_block,
+            &mut send_scratch,
+            false,
+        )
+    }
+
+    /// A calibration measures the number the ducker itself tests, which is why
+    /// the mixer reports it rather than the UI measuring anything of its own.
+    #[test]
+    fn the_measured_trigger_is_the_talker_and_never_the_music() {
+        let mut sources = ducking_pair(25, steady_source(0.5, false));
+        let trigger = run_block_trigger(&mut sources);
+        assert!(
+            (trigger - 0.5).abs() < 1e-3,
+            "the talker's own level, not the louder music: {trigger}"
+        );
+
+        // A muted microphone contributes silence, so a calibration run over one
+        // measures silence and has to say so rather than write a threshold.
+        let mut muted = ducking_pair(25, steady_source(0.5, true));
+        assert_eq!(run_block_trigger(&mut muted), 0.0);
+    }
+
+    /// Ducking turned off is a media player that mixes like any other source.
+    #[test]
+    fn a_media_player_with_ducking_off_is_left_alone() {
+        let mut sources = ducking_pair(25, steady_source(0.5, false));
+        sources[0].ducker = None;
+        let (_, monitor) = run_blocks(&mut sources, 50);
+        assert!((monitor[0] - 1.0).abs() < 1e-6, "full level: {}", monitor[0]);
     }
 
     #[test]

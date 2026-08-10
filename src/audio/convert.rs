@@ -116,22 +116,22 @@ pub fn convert_to_stereo(samples: &[f32], source_channels: usize) -> Result<Vec<
     Ok(stereo)
 }
 
-/// Converts a *stream* of little-endian 16-bit PCM into interleaved stereo f32
-/// at [`ENGINE_SAMPLE_RATE`], a chunk at a time.
+/// Resamples a *stream* of interleaved stereo f32 to [`ENGINE_SAMPLE_RATE`], a
+/// piece at a time.
 ///
-/// [`pcm16_to_engine`] cannot just be called per chunk. A frame can straddle a
-/// chunk boundary, and linear interpolation needs the frame *after* the one it
-/// reads from, which may not have arrived yet — converting each chunk on its
-/// own would drop the straddling bytes and clamp the last output frame of every
-/// chunk against a neighbour it cannot see, which is a click per chunk. So this
-/// holds back both the odd trailing bytes and the last complete source frame,
-/// and carries the output position across calls. Feeding a buffer through in
-/// any number of pieces gives the same samples as converting it in one go.
-pub struct Pcm16Stream {
+/// [`resample_stereo`] cannot just be called per piece. Linear interpolation
+/// needs the frame *after* the one it reads from, which may not have arrived
+/// yet, so converting each piece on its own would clamp the last output frame
+/// of every piece against a neighbour it cannot see — a click per piece. This
+/// holds back the last complete source frame instead, and carries the output
+/// position across calls, so feeding a buffer through in any number of pieces
+/// gives the same samples as converting it in one go.
+///
+/// Two callers with the same problem in different clothes: speech APIs deliver
+/// PCM in HTTP chunks ([`Pcm16Stream`], which wraps this), and the media player
+/// decodes a file one packet at a time.
+pub struct StereoStream {
     source_rate: u32,
-    source_channels: usize,
-    /// Bytes from the last chunk that fell short of a whole frame.
-    carry: Vec<u8>,
     /// Source frames from `base` onward, already widened to stereo.
     pending: Vec<f32>,
     /// Index of the source frame sitting in `pending[0]`.
@@ -140,53 +140,37 @@ pub struct Pcm16Stream {
     next_target: u64,
 }
 
-impl Pcm16Stream {
-    pub fn new(source_rate: u32, source_channels: usize) -> Self {
+impl StereoStream {
+    pub fn new(source_rate: u32) -> Self {
         Self {
             source_rate,
-            source_channels,
-            carry: Vec::new(),
             pending: Vec::new(),
             base: 0,
             next_target: 0,
         }
     }
 
-    /// Whether this converter can do anything at all. Nonsense parameters
-    /// yield no samples rather than an error, matching [`pcm16_to_engine`].
+    /// Whether this converter can do anything at all. A zero rate yields no
+    /// samples rather than an error, matching [`pcm16_to_engine`].
     fn usable(&self) -> bool {
-        self.source_rate != 0 && self.source_channels != 0
+        self.source_rate != 0
     }
 
-    /// Samples ready from `bytes` plus whatever was carried over.
-    pub fn push(&mut self, bytes: &[u8]) -> Vec<f32> {
+    /// Feeds already-stereo source frames in and takes whatever is ready.
+    /// `stereo` is interleaved and whole-framed; a trailing half frame is
+    /// dropped rather than carried, since the callers that can produce one
+    /// ([`Pcm16Stream`]) already hold their partial frames back themselves.
+    pub fn push(&mut self, stereo: &[f32]) -> Vec<f32> {
         if !self.usable() {
             return Vec::new();
         }
-        let frame_bytes = self.source_channels * 2;
-        let mut source = std::mem::take(&mut self.carry);
-        source.extend_from_slice(bytes);
-        let whole = source.len() - source.len() % frame_bytes;
-        for frame in source[..whole].chunks_exact(frame_bytes) {
-            let sample = |index: usize| {
-                i16::from_le_bytes([frame[index * 2], frame[index * 2 + 1]]) as f32 / 32768.0
-            };
-            let left = sample(0);
-            self.pending.push(left);
-            self.pending.push(if self.source_channels == 1 {
-                left
-            } else {
-                sample(1)
-            });
-        }
-        self.carry = source[whole..].to_vec();
+        self.pending
+            .extend_from_slice(&stereo[..stereo.len() - stereo.len() % ENGINE_CHANNELS]);
         self.emit(false)
     }
 
-    /// The tail, once the body has ended. A trailing partial frame is dropped,
-    /// as it is in [`pcm16_to_engine`].
+    /// The tail, once the body has ended.
     pub fn finish(&mut self) -> Vec<f32> {
-        self.carry.clear();
         if !self.usable() {
             return Vec::new();
         }
@@ -239,6 +223,71 @@ impl Pcm16Stream {
             self.base = keep_from;
         }
         out
+    }
+}
+
+/// Converts a *stream* of little-endian 16-bit PCM into interleaved stereo f32
+/// at [`ENGINE_SAMPLE_RATE`], a chunk at a time.
+///
+/// [`pcm16_to_engine`] cannot just be called per chunk: a frame can straddle a
+/// chunk boundary, so this holds back the odd trailing bytes, and [`StereoStream`]
+/// underneath holds back the frame the interpolator still needs a partner for.
+pub struct Pcm16Stream {
+    source_channels: usize,
+    /// Bytes from the last chunk that fell short of a whole frame.
+    carry: Vec<u8>,
+    stream: StereoStream,
+}
+
+impl Pcm16Stream {
+    pub fn new(source_rate: u32, source_channels: usize) -> Self {
+        Self {
+            source_channels,
+            carry: Vec::new(),
+            stream: StereoStream::new(source_rate),
+        }
+    }
+
+    /// Whether this converter can do anything at all. Nonsense parameters
+    /// yield no samples rather than an error, matching [`pcm16_to_engine`].
+    fn usable(&self) -> bool {
+        self.stream.usable() && self.source_channels != 0
+    }
+
+    /// Samples ready from `bytes` plus whatever was carried over.
+    pub fn push(&mut self, bytes: &[u8]) -> Vec<f32> {
+        if !self.usable() {
+            return Vec::new();
+        }
+        let frame_bytes = self.source_channels * 2;
+        let mut source = std::mem::take(&mut self.carry);
+        source.extend_from_slice(bytes);
+        let whole = source.len() - source.len() % frame_bytes;
+        let mut stereo = Vec::with_capacity(whole / frame_bytes * ENGINE_CHANNELS);
+        for frame in source[..whole].chunks_exact(frame_bytes) {
+            let sample = |index: usize| {
+                i16::from_le_bytes([frame[index * 2], frame[index * 2 + 1]]) as f32 / 32768.0
+            };
+            let left = sample(0);
+            stereo.push(left);
+            stereo.push(if self.source_channels == 1 {
+                left
+            } else {
+                sample(1)
+            });
+        }
+        self.carry = source[whole..].to_vec();
+        self.stream.push(&stereo)
+    }
+
+    /// The tail, once the body has ended. A trailing partial frame is dropped,
+    /// as it is in [`pcm16_to_engine`].
+    pub fn finish(&mut self) -> Vec<f32> {
+        self.carry.clear();
+        if !self.usable() {
+            return Vec::new();
+        }
+        self.stream.finish()
     }
 }
 
@@ -388,6 +437,43 @@ mod tests {
         let mut out = stream.push(&bytes);
         out.extend(stream.finish());
         assert_eq!(out.len() / ENGINE_CHANNELS, 4);
+    }
+
+    /// The media player's use of the same core: a file decoded packet by packet
+    /// must land where decoding it whole would have.
+    #[test]
+    fn a_piecewise_stereo_resample_matches_a_single_one() {
+        let frames = 700;
+        let source: Vec<f32> = (0..frames * ENGINE_CHANNELS)
+            .map(|n| (n as f32 * 0.013).sin())
+            .collect();
+        for rate in [44_100, 22_050, 96_000] {
+            let whole = resample_stereo(&source, rate, ENGINE_SAMPLE_RATE);
+            for packet in [2, 18, 1152 * ENGINE_CHANNELS] {
+                let mut stream = StereoStream::new(rate);
+                let mut out = Vec::new();
+                for piece in source.chunks(packet) {
+                    out.extend(stream.push(piece));
+                }
+                out.extend(stream.finish());
+                // The one-shot form rounds the frame count; the streaming one
+                // emits every frame whose left neighbour exists, so allow the
+                // pair to differ by a frame at the very end.
+                assert!(
+                    out.len().abs_diff(whole.len()) <= ENGINE_CHANNELS,
+                    "{rate} Hz in {packet}-sample pieces: {} vs {}",
+                    out.len(),
+                    whole.len()
+                );
+                let common = out.len().min(whole.len());
+                for (index, (a, b)) in out[..common].iter().zip(&whole[..common]).enumerate() {
+                    assert!(
+                        (a - b).abs() < 1e-6,
+                        "sample {index} differs at {rate} Hz in {packet}-sample pieces: {a} vs {b}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -33,6 +33,8 @@ impl Config {
     /// blank names (first occurrence wins), drops sends that reference a bus
     /// that no longer exists, and holds every un-boosted strip at 100 so a
     /// hand-edited (or downgraded) file can't leave a strip silently amplified.
+    /// A media player's duck level is held to its own range for the same
+    /// reason — above 100 it would amplify rather than attenuate.
     pub fn fix_up_routing(&mut self) {
         let mut seen = std::collections::HashSet::new();
         self.buses
@@ -44,6 +46,9 @@ impl Config {
             for source in &mut scene.sources {
                 source.sends.retain(|s| names.contains(&s.bus));
                 source.volume = clamp_volume(source.volume, source.boost);
+                if let SourceKindConfig::MediaPlayer(media) = &mut source.kind {
+                    media.fix_up();
+                }
             }
         }
         for bus in &mut self.buses.buses {
@@ -716,6 +721,7 @@ pub enum SourceKindConfig {
     },
     Tts(TtsSourceConfig),
     SoundEvents(SoundEventsSourceConfig),
+    MediaPlayer(MediaPlayerSourceConfig),
 }
 
 impl SourceKindConfig {
@@ -726,6 +732,7 @@ impl SourceKindConfig {
             SourceKindConfig::Application { .. } => "Application",
             SourceKindConfig::Tts(_) => "Text-to-Speech",
             SourceKindConfig::SoundEvents(_) => "Sound Events",
+            SourceKindConfig::MediaPlayer(_) => "Media Player",
         }
     }
 }
@@ -1748,5 +1755,49 @@ impl Default for SoundEventsSourceConfig {
             outgoing_chat: true,
             output_to_stream: true,
         }
+    }
+}
+
+/// Settings for one Media Player source: a folder of music, and how it gets out
+/// of the way of whoever is talking.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct MediaPlayerSourceConfig {
+    /// The folder played, including its subfolders. Empty means unconfigured,
+    /// which is a source that stays silent rather than an error.
+    pub folder: String,
+    /// Play the folder in a random order, reshuffled each time it runs out.
+    /// Off plays it in filename order.
+    pub shuffle: bool,
+    /// Turn the music down while any other source in the scene has signal.
+    pub duck: bool,
+    /// The level the music drops to while ducked, as a percentage of its own
+    /// fader — 30 means "a third of whatever the strip is set to". Held to
+    /// 0-100 by [`MediaPlayerSourceConfig::fix_up`]: this is an attenuation, and
+    /// a value above 100 would turn ducking into a boost.
+    pub duck_percent: u32,
+    /// How loud everything else has to be before the music gets out of the way,
+    /// in dBFS RMS. Held to the range the slider offers — see
+    /// [`crate::audio::mixer::DUCK_THRESHOLD_DB_DEFAULT`], which is also what a
+    /// settings file written before this existed loads as.
+    pub duck_threshold_db: i32,
+}
+
+impl Default for MediaPlayerSourceConfig {
+    fn default() -> Self {
+        Self {
+            folder: String::new(),
+            shuffle: true,
+            duck: true,
+            duck_percent: 25,
+            duck_threshold_db: crate::audio::mixer::DUCK_THRESHOLD_DB_DEFAULT,
+        }
+    }
+}
+
+impl MediaPlayerSourceConfig {
+    pub fn fix_up(&mut self) {
+        self.duck_percent = self.duck_percent.min(100);
+        self.duck_threshold_db = crate::audio::mixer::clamp_threshold_db(self.duck_threshold_db);
     }
 }

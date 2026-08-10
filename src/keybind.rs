@@ -183,6 +183,13 @@ pub enum BindAction {
     ToggleMuteMaster,
     ToggleMuteSource { source: String },
     ToggleMuteBus { bus: String },
+    /// Play or pause one Media Player source.
+    ToggleMediaPlayback { source: String },
+    /// Abandon the track a Media Player source is on and start the next one.
+    NextTrack { source: String },
+    /// Pick a file and play it on a Media Player source, in place of whatever it
+    /// is on now.
+    OpenTrack { source: String },
 }
 
 /// Which extra dropdown the Add-binding dialog must show for an action.
@@ -192,6 +199,10 @@ pub enum Specifier {
     Scene,
     Source,
     Bus,
+    /// Media Player sources only. A separate list from [`Specifier::Source`]
+    /// because binding "next track" to a microphone is not a thing a user could
+    /// have meant, and the dropdown is where that is worth saying.
+    MediaSource,
 }
 
 impl Specifier {
@@ -202,6 +213,7 @@ impl Specifier {
             Specifier::Scene => "Scene",
             Specifier::Source => "Source",
             Specifier::Bus => "Bus",
+            Specifier::MediaSource => "Media player",
         }
     }
 }
@@ -213,14 +225,16 @@ pub enum Category {
     Scenes,
     Monitoring,
     Muting,
+    MediaPlayer,
 }
 
 impl Category {
-    pub const ALL: [Category; 4] = [
+    pub const ALL: [Category; 5] = [
         Category::Streaming,
         Category::Scenes,
         Category::Monitoring,
         Category::Muting,
+        Category::MediaPlayer,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -229,6 +243,7 @@ impl Category {
             Category::Scenes => "Scenes",
             Category::Monitoring => "Monitoring",
             Category::Muting => "Muting",
+            Category::MediaPlayer => "Media player",
         }
     }
 
@@ -259,6 +274,17 @@ impl Category {
                 },
                 BindAction::ToggleMuteBus { bus: String::new() },
             ],
+            Category::MediaPlayer => vec![
+                BindAction::ToggleMediaPlayback {
+                    source: String::new(),
+                },
+                BindAction::NextTrack {
+                    source: String::new(),
+                },
+                BindAction::OpenTrack {
+                    source: String::new(),
+                },
+            ],
         }
     }
 }
@@ -276,6 +302,9 @@ impl BindAction {
             BindAction::ToggleMuteMaster
             | BindAction::ToggleMuteSource { .. }
             | BindAction::ToggleMuteBus { .. } => Category::Muting,
+            BindAction::ToggleMediaPlayback { .. }
+            | BindAction::NextTrack { .. }
+            | BindAction::OpenTrack { .. } => Category::MediaPlayer,
         }
     }
 
@@ -288,6 +317,9 @@ impl BindAction {
             BindAction::ToggleMonitorBus { .. } | BindAction::ToggleMuteBus { .. } => {
                 Specifier::Bus
             }
+            BindAction::ToggleMediaPlayback { .. }
+            | BindAction::NextTrack { .. }
+            | BindAction::OpenTrack { .. } => Specifier::MediaSource,
             _ => Specifier::None,
         }
     }
@@ -297,7 +329,10 @@ impl BindAction {
         match self {
             BindAction::SwitchScene { scene } => Some(scene),
             BindAction::ToggleMonitorSource { source }
-            | BindAction::ToggleMuteSource { source } => Some(source),
+            | BindAction::ToggleMuteSource { source }
+            | BindAction::ToggleMediaPlayback { source }
+            | BindAction::NextTrack { source }
+            | BindAction::OpenTrack { source } => Some(source),
             BindAction::ToggleMonitorBus { bus } | BindAction::ToggleMuteBus { bus } => Some(bus),
             _ => None,
         }
@@ -315,6 +350,11 @@ impl BindAction {
             BindAction::ToggleMuteSource { .. } => BindAction::ToggleMuteSource { source: name },
             BindAction::ToggleMonitorBus { .. } => BindAction::ToggleMonitorBus { bus: name },
             BindAction::ToggleMuteBus { .. } => BindAction::ToggleMuteBus { bus: name },
+            BindAction::ToggleMediaPlayback { .. } => {
+                BindAction::ToggleMediaPlayback { source: name }
+            }
+            BindAction::NextTrack { .. } => BindAction::NextTrack { source: name },
+            BindAction::OpenTrack { .. } => BindAction::OpenTrack { source: name },
             other => other.clone(),
         }
     }
@@ -334,6 +374,9 @@ impl BindAction {
             BindAction::ToggleMuteMaster => "Mute or unmute master",
             BindAction::ToggleMuteSource { .. } => "Mute or unmute a source",
             BindAction::ToggleMuteBus { .. } => "Mute or unmute a bus",
+            BindAction::ToggleMediaPlayback { .. } => "Play or pause a media player",
+            BindAction::NextTrack { .. } => "Skip to the next track",
+            BindAction::OpenTrack { .. } => "Open a file and play it",
         }
     }
 
@@ -345,6 +388,9 @@ impl BindAction {
             BindAction::ToggleMonitorBus { bus } => format!("Monitor the bus {bus}"),
             BindAction::ToggleMuteSource { source } => format!("Mute or unmute {source}"),
             BindAction::ToggleMuteBus { bus } => format!("Mute or unmute the bus {bus}"),
+            BindAction::ToggleMediaPlayback { source } => format!("Play or pause {source}"),
+            BindAction::NextTrack { source } => format!("Skip to the next track on {source}"),
+            BindAction::OpenTrack { source } => format!("Open a file and play it on {source}"),
             other => other.template_label().to_string(),
         }
     }
@@ -360,6 +406,8 @@ pub struct Targets {
     pub scenes: Vec<String>,
     pub sources: Vec<String>,
     pub buses: Vec<String>,
+    /// The subset of `sources` that are Media Players.
+    pub media_sources: Vec<String>,
 }
 
 impl Targets {
@@ -373,10 +421,16 @@ impl Targets {
     /// lives in some other scene bindable at all.
     pub fn from_config(config: &Config) -> Self {
         let mut sources: Vec<String> = Vec::new();
+        let mut media_sources: Vec<String> = Vec::new();
         for scene in &config.scenes.scenes {
             for source in &scene.sources {
                 if !sources.iter().any(|s| s == &source.name) {
                     sources.push(source.name.clone());
+                }
+                if matches!(source.kind, crate::config::SourceKindConfig::MediaPlayer(_))
+                    && !media_sources.iter().any(|s| s == &source.name)
+                {
+                    media_sources.push(source.name.clone());
                 }
             }
         }
@@ -389,6 +443,7 @@ impl Targets {
                 .collect(),
             sources,
             buses: config.buses.buses.iter().map(|b| b.name.clone()).collect(),
+            media_sources,
         }
     }
 
@@ -398,6 +453,7 @@ impl Targets {
             Specifier::Scene => &self.scenes,
             Specifier::Source => &self.sources,
             Specifier::Bus => &self.buses,
+            Specifier::MediaSource => &self.media_sources,
         }
     }
 }
@@ -478,6 +534,38 @@ pub const VK_F1: u32 = 0x70;
 pub const VK_F6: u32 = 0x75;
 pub const VK_F9: u32 = 0x78;
 pub const VK_F10: u32 = 0x79;
+pub const VK_O: u32 = b'O' as u32;
+
+/// The chord a new Media Player source is given for Open file, if it is free.
+///
+/// Not in [`KeybindsConfig::default`] with the other two, because it cannot be:
+/// the action names a source, and no source exists when the defaults are built.
+/// So it is seeded when a Media Player is added instead — which also means every
+/// existing settings file gets it on the next one added, rather than never.
+pub const DEFAULT_OPEN_TRACK: Chord = Chord {
+    vk: VK_O,
+    ctrl: true,
+    alt: false,
+    shift: false,
+};
+
+impl KeybindsConfig {
+    /// Gives `source` the default Open-file chord, unless something already
+    /// holds that chord — including an earlier media player, since two sources
+    /// cannot share one key and the first one to be added keeps it.
+    ///
+    /// Returns whether anything was added, so the caller knows to save.
+    pub fn seed_media_defaults(&mut self, source: &str) -> bool {
+        let action = BindAction::OpenTrack {
+            source: source.to_string(),
+        };
+        if self.find(&action).is_some() || self.conflict(DEFAULT_OPEN_TRACK, None).is_some() {
+            return false;
+        }
+        self.set(action, DEFAULT_OPEN_TRACK, false);
+        true
+    }
+}
 
 impl KeybindsConfig {
     /// Post-load repair: drops keyless binds and keeps only the first bind on any
@@ -621,17 +709,18 @@ mod tests {
     fn targets() -> Targets {
         Targets {
             scenes: vec!["Default".into(), "Live".into()],
-            sources: vec!["Microphone 1".into()],
+            sources: vec!["Microphone 1".into(), "Media Player".into()],
             buses: vec!["Music".into()],
+            media_sources: vec!["Media Player".into()],
         }
     }
 
     #[test]
     fn the_catalogue_expands_one_row_per_target() {
         let all = catalogue(&targets());
-        // Streaming 2, Scenes 2 + 2 scenes, Monitoring 1 + 1 source + 1 bus,
-        // Muting the same 3.
-        assert_eq!(all.len(), 2 + 2 + 2 + 3 + 3);
+        // Streaming 2, Scenes 2 + 2 scenes, Monitoring 1 + 2 sources + 1 bus,
+        // Muting the same 4, Media player 3 actions on the one media source.
+        assert_eq!(all.len(), 2 + 2 + 2 + 4 + 4 + 3);
         assert!(all.contains(&BindAction::SwitchScene {
             scene: "Live".into()
         }));
@@ -722,6 +811,38 @@ mod tests {
         config.set(BindAction::ToggleStream, Chord::default(), false);
         assert!(config.find(&BindAction::ToggleStream).is_none());
         assert_eq!(config.binds.len(), 1);
+    }
+
+    /// The first media player added gets CTRL+O; the second does not take it
+    /// away from it, and nothing takes it from a user who bound it elsewhere.
+    #[test]
+    fn the_first_media_player_gets_the_open_file_default() {
+        let mut config = KeybindsConfig::default();
+        assert!(config.seed_media_defaults("Media Player 1"));
+        assert_eq!(
+            config
+                .find(&BindAction::OpenTrack {
+                    source: "Media Player 1".into()
+                })
+                .map(|b| b.key.label())
+                .as_deref(),
+            Some("CTRL+O")
+        );
+
+        assert!(!config.seed_media_defaults("Media Player 2"));
+        assert!(
+            config
+                .find(&BindAction::OpenTrack {
+                    source: "Media Player 2".into()
+                })
+                .is_none()
+        );
+        // And seeding the same source twice is not a way to move its chord.
+        assert!(!config.seed_media_defaults("Media Player 1"));
+
+        let mut taken = KeybindsConfig::default();
+        taken.set(BindAction::NextScene, DEFAULT_OPEN_TRACK, false);
+        assert!(!taken.seed_media_defaults("Media Player 1"));
     }
 
     #[test]

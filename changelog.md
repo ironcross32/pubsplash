@@ -4,9 +4,37 @@
 
 ### Additions
 
+- **New source type: Media Player.** It plays a folder of music into the mixer, including everything in the folder's subfolders. MP3, M4A, MP4, AAC, FLAC, OGG, WAV, AIFF, CAF, MKA and MP1/MP2 files are played; anything else in the folder is ignored.
+
+- The folder can be played shuffled or in filename order. Shuffled plays every file once before any of them repeats, reshuffles when it runs out, and never starts a new round with the track that just finished.
+
+- The folder is re-read every five minutes and whenever the source's settings are changed, so music added during a session joins in without restarting anything.
+
+- A media player turns itself down while any other source in the scene is making sound, and comes back up about a second after it stops. The level it drops to is set per source as a percentage of that source's own volume slider. Both the ducking and the level are on the source's settings dialog. Other media players do not trigger it, so two of them never fight each other.
+
+- A media player has the same volume slider, mute, monitor toggle and bus sends as every other source. Its monitor carries exactly what the listeners get, ducking included.
+
+- Play/pause, next track and open file are on the mixer strip's context menu (right-click, SHIFT+F10 or the applications key on the strip's volume slider), and can be bound to shortcuts from the new **Media player** category on the Keybinds tab.
+
+- **How loud something has to be before it turns the music down is now yours to set.** A **Start turning down at** slider sits beside the turned-down level on the media player's settings, from -60 dB (almost anything) to -10 dB (only a shout).
+
+- **Calibrate to my voice**, next to that slider, sets it for you: press it, talk normally for five seconds, and Pubsplash measures the very signal the ducking watches — your live scene's sources, through their faders and mutes — and puts the level a little way under what it heard. If nothing loud enough to be a voice arrives, it says so and changes nothing.
+
+- **Open file** on a media player plays one file of your choosing, from anywhere on your computer. It interrupts what is playing exactly as a skip does, and when it ends the folder carries on with the track it was going to play next. There is a button for it on the media player's mixer strip, an item on the strip's context menu, and the first media player you add is given `CTRL+O` for it.
+
+- The Scenes and Sources list shows what each media player is playing, and says so when it is paused, when its folder holds nothing playable, and when no folder has been set yet.
+
 ### Fixes
 
+- **Next track did nothing.** A media player keeps only a quarter of a second of music decoded ahead of the mixer and spends the rest of its time waiting for that to drain, and a skip that arrived during one of those waits was taken off the queue and then discarded. Play and pause were unaffected, which is why it looked like the transport worked.
+
+- **Ducking no longer stays on while nobody is talking.** It measured how loud the other sources were by their loudest single sample in each ten-millisecond block, and a microphone's idle hiss has individual samples well above its actual level — so an open microphone in a silent room held the music down permanently, and ducking looked like it was ignoring the levels entirely. The measurement is now each block's overall level.
+
+- **Ducking no longer fires on a breath or a bump.** The level it triggered at was fixed at -40 dB, which is close enough to a real room's noise floor that wind across the microphone, a fan or a knock on the desk would turn the music down for a second with nothing said. It now starts at -30 dB — the level of somebody deliberately talking — and is a setting, with a Calibrate button that measures your own voice.
+
 ### Changes
+
+- **Next track says which track.** It announced "next track", which the user already knew, and is now the name of the track that is starting.
 
 ## 0.1.6
 

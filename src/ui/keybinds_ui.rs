@@ -176,9 +176,19 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         let dialog = *dialog;
         let refresh = refresh.clone();
         reset.on_click(move |_| {
+            // The Open-file default names a source, so it is not in
+            // `KeybindsConfig::default()` and has to be restored separately —
+            // and only promised here when there is a media player to give it to.
+            let media = crate::keybind::Targets::from_config(&app.config.borrow())
+                .media_sources
+                .first()
+                .cloned();
             let confirm = MessageDialog::builder(
                 &dialog,
-                "Discard every keybinding and restore the defaults, F9 for streaming and F10 for recording?",
+                match &media {
+                    Some(_) => "Discard every keybinding and restore the defaults: F9 for streaming, F10 for recording, and CONTROL plus O to open a file on your first media player?",
+                    None => "Discard every keybinding and restore the defaults, F9 for streaming and F10 for recording?",
+                },
                 "Reset to defaults",
             )
             .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
@@ -186,7 +196,13 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
             if confirm.show_modal() != ID_YES {
                 return;
             }
-            app.config.borrow_mut().keybinds = crate::keybind::KeybindsConfig::default();
+            {
+                let mut config = app.config.borrow_mut();
+                config.keybinds = crate::keybind::KeybindsConfig::default();
+                if let Some(name) = &media {
+                    config.keybinds.seed_media_defaults(name);
+                }
+            }
             app.save_config();
             super::keybinds::reload(&app.config.borrow());
             refresh(None);
@@ -245,7 +261,7 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
     super::help::tag(
         &specifier_choice,
         "dialog.keybind.specifier",
-        "Binding scene, source or bus choice",
+        "Binding scene, source, bus or media player choice",
     );
 
     let shortcut_label = StaticText::builder(&panel).with_label("Shortcut").build();

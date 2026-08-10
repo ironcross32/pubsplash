@@ -4,10 +4,11 @@
 use super::home::on_sources_changed;
 use super::slider_uia::SliderAnnouncer;
 use super::{App, WXK_DELETE, WXK_DOWN, WXK_UP, show_error};
+use crate::audio::mixer;
 use crate::config::{
-    AzureTtsSettings, ElevenLabsTtsSettings, GoogleTtsSettings, GttsTtsSettings, OpenAiTtsSettings,
-    PollyTtsSettings, SoundEventsSourceConfig, SourceConfig, SourceKindConfig, TtsEngineProfile,
-    TtsEngineSettings, TtsSourceConfig,
+    AzureTtsSettings, ElevenLabsTtsSettings, GoogleTtsSettings, GttsTtsSettings,
+    MediaPlayerSourceConfig, OpenAiTtsSettings, PollyTtsSettings, SoundEventsSourceConfig,
+    SourceConfig, SourceKindConfig, TtsEngineProfile, TtsEngineSettings, TtsSourceConfig,
 };
 use crate::soundpack::StreamEvent;
 use crate::state::{ListEdit, move_down, move_up};
@@ -466,6 +467,7 @@ fn add_source(app: &Rc<App>) {
         "Application",
         "Text-to-Speech",
         "Sound Events",
+        "Media Player",
     ];
     let dialog =
         SingleChoiceDialog::builder(&frame, "What kind of source?", "Add source", &types).build();
@@ -481,6 +483,7 @@ fn add_source(app: &Rc<App>) {
         },
         3 => SourceKindConfig::Tts(TtsSourceConfig::default()),
         4 => SourceKindConfig::SoundEvents(SoundEventsSourceConfig::default()),
+        5 => SourceKindConfig::MediaPlayer(MediaPlayerSourceConfig::default()),
         _ => return,
     };
 
@@ -492,12 +495,20 @@ fn add_source(app: &Rc<App>) {
             return;
         };
         let name = unique_source_name(&scene.sources, kind.type_display_name());
+        let media = matches!(kind, SourceKindConfig::MediaPlayer(_));
         scene.sources.push(SourceConfig {
-            name,
+            name: name.clone(),
             kind,
             ..Default::default()
         });
-        scene.sources.len() - 1
+        let index = scene.sources.len() - 1;
+        // Open file is worth a key out of the box, and the binding names a
+        // source, so this is the only moment it can be given one. The hook's
+        // snapshot is re-read below, once the save has happened.
+        if media && config.keybinds.seed_media_defaults(&name) {
+            super::keybinds::reload(&config);
+        }
+        index
     };
     after_source_edit(app, previous_sources);
     app.widgets(|w| w.sources_list.set_selection(new_index as u32, true));
@@ -544,6 +555,9 @@ fn edit_source(app: &Rc<App>, list: &ListBox) {
         }
         SourceKindConfig::SoundEvents(settings) => {
             edit_sound_events(app, scene_index, index, settings)
+        }
+        SourceKindConfig::MediaPlayer(settings) => {
+            edit_media_player(app, scene_index, index, settings)
         }
     }
 }
@@ -2485,6 +2499,300 @@ fn edit_sound_events(
         );
     }
     dialog.destroy();
+}
+
+/// The Media Player source dialog: which folder, in what order, and how far out
+/// of the way it gets when somebody talks.
+///
+/// There are no transport controls here. Play, pause and skip belong somewhere
+/// reachable while a broadcast is running — the strip's context menu and a
+/// keybinding — not behind a modal that has to be opened and dismissed.
+fn edit_media_player(
+    app: &Rc<App>,
+    scene_index: usize,
+    source_index: usize,
+    current: MediaPlayerSourceConfig,
+) {
+    let Some(frame) = app.widgets(|w| w.frame) else {
+        return;
+    };
+    let dialog = Dialog::builder(&frame, "Media Player source")
+        .with_style(DialogStyle::DefaultDialogStyle)
+        // Tall enough for the ducking group in full: two sliders, the calibrate
+        // button and the wrapped note under them.
+        .with_size(520, 540)
+        .build();
+    let panel = Panel::builder(&dialog).build();
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+
+    let folder_label = StaticText::builder(&panel).with_label("&Folder").build();
+    let folder_input = TextCtrl::builder(&panel)
+        .with_value(&current.folder)
+        .build();
+    super::set_accessible_name(&folder_input, "Folder");
+    super::help::tag(
+        &folder_input,
+        "dialog.mediaPlayerSource.folder",
+        "Media player folder box",
+    );
+    let browse = Button::builder(&panel).with_label("&Browse...").build();
+
+    let shuffle = CheckBox::builder(&panel)
+        .with_label("&Shuffle the folder")
+        .build();
+    super::set_accessible_name(&shuffle, "Shuffle the folder");
+    super::help::tag(
+        &shuffle,
+        "dialog.mediaPlayerSource.shuffle",
+        "Shuffle checkbox",
+    );
+    shuffle.set_value(current.shuffle);
+
+    let duck = CheckBox::builder(&panel)
+        .with_label("&Turn the music down while other sources are playing")
+        .build();
+    super::set_accessible_name(
+        &duck,
+        "Turn the music down while other sources are playing",
+    );
+    super::help::tag(&duck, "dialog.mediaPlayerSource.duck", "Ducking checkbox");
+    duck.set_value(current.duck);
+
+    let duck_label = StaticText::builder(&panel)
+        .with_label("Turned-down &level")
+        .build();
+    let duck_slider = Slider::builder(&panel)
+        .with_value(current.duck_percent.min(100) as i32)
+        .with_min_value(0)
+        .with_max_value(100)
+        .build();
+    super::set_accessible_name(&duck_slider, "Turned-down level");
+    super::help::tag(
+        &duck_slider,
+        "dialog.mediaPlayerSource.duckLevel",
+        "Turned-down level slider",
+    );
+    let duck_announcer = wire_slider(&duck_slider, "Turned-down level", "%", 0, 100, 10);
+
+    // The threshold sits beside the level it belongs to, and the Calibrate
+    // button beside the threshold, because the number is the hard part: nobody
+    // knows what their own voice measures, and the answer is different for every
+    // microphone and every gain setting.
+    let threshold_label = StaticText::builder(&panel)
+        .with_label("Start turning down &at")
+        .build();
+    let threshold_slider = Slider::builder(&panel)
+        .with_value(mixer::clamp_threshold_db(current.duck_threshold_db))
+        .with_min_value(mixer::DUCK_THRESHOLD_DB_MIN)
+        .with_max_value(mixer::DUCK_THRESHOLD_DB_MAX)
+        .build();
+    super::set_accessible_name(&threshold_slider, "Start turning down at");
+    super::help::tag(
+        &threshold_slider,
+        "dialog.mediaPlayerSource.duckThreshold",
+        "Ducking threshold slider",
+    );
+    let threshold_announcer = wire_slider(
+        &threshold_slider,
+        "Start turning down at",
+        " dB",
+        mixer::DUCK_THRESHOLD_DB_MIN,
+        mixer::DUCK_THRESHOLD_DB_MAX,
+        5,
+    );
+    let calibrate = Button::builder(&panel)
+        .with_label("&Calibrate to my voice")
+        .build();
+    super::help::tag(
+        &calibrate,
+        "dialog.mediaPlayerSource.calibrate",
+        "Calibrate ducking threshold button",
+    );
+
+    // The question every broadcaster asks about this source, answered where
+    // they are asking it. Desktop Audio captures the system's other
+    // applications and deliberately excludes Pubsplash's own output, so the
+    // music cannot come back round that way; what it *can* do is reach an open
+    // microphone through the speakers.
+    let note = StaticText::builder(&panel)
+        .with_label(
+            "This music is mixed into the stream directly. A Desktop Audio source will not \
+             capture it a second time, because Desktop Audio leaves Pubsplash's own sound out. \
+             If you monitor this source, use headphones: a microphone in the same room will pick \
+             the music up and send it out twice, echoed.",
+        )
+        .build();
+    note.wrap(480);
+
+    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
+    let ok = super::ok_button(&panel, "OK");
+    // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
+    let cancel = Button::builder(&panel)
+        .with_id(ID_CANCEL)
+        .with_label("Cancel")
+        .build();
+    buttons.add(&ok, 0, SizerFlag::All, 4);
+    buttons.add(&cancel, 0, SizerFlag::All, 4);
+
+    let folder_row = BoxSizer::builder(Orientation::Horizontal).build();
+    folder_row.add(&folder_input, 1, SizerFlag::Expand | SizerFlag::All, 4);
+    folder_row.add(&browse, 0, SizerFlag::All, 4);
+    sizer.add(&folder_label, 0, SizerFlag::All, 4);
+    sizer.add_sizer(&folder_row, 0, SizerFlag::Expand, 0);
+    sizer.add(&shuffle, 0, SizerFlag::All, 4);
+    sizer.add(&duck, 0, SizerFlag::All, 4);
+    sizer.add(&duck_label, 0, SizerFlag::All, 4);
+    sizer.add(&duck_slider, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&threshold_label, 0, SizerFlag::All, 4);
+    sizer.add(&threshold_slider, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&calibrate, 0, SizerFlag::All, 4);
+    sizer.add(&note, 0, SizerFlag::Expand | SizerFlag::All, 8);
+    sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight, 0);
+    panel.set_sizer(sizer, true);
+    let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
+    dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
+    dialog.set_sizer(dialog_sizer, true);
+
+    {
+        browse.on_click(move |_| {
+            let picker = DirDialog::builder(
+                &dialog,
+                "Choose a folder of music for this source",
+                &folder_input.get_value(),
+            )
+            .with_style(DirDialogStyle::MustExist.bits())
+            .build();
+            if picker.show_modal() != ID_OK {
+                return;
+            }
+            let Some(path) = picker.get_path() else {
+                return;
+            };
+            let path = path.trim().to_string();
+            if path.is_empty() {
+                return;
+            }
+            folder_input.set_value(&path);
+            folder_input.set_focus();
+        });
+    }
+    // The calibration outlives the click that started it — five seconds of
+    // measurement answered from the pump — so it needs to know whether the
+    // dialog it would write to is still there. Same `alive` flag the credential
+    // validation in `preferences` uses, and for the same reason.
+    let alive = Rc::new(std::cell::Cell::new(true));
+    {
+        let app = app.clone();
+        let alive = alive.clone();
+        let announcer = threshold_announcer.clone();
+        calibrate.on_click(move |_| {
+            calibrate_duck(&app, threshold_slider, &announcer, calibrate, &alive);
+        });
+    }
+    {
+        ok.on_click(move |_| dialog.end_modal(ID_OK));
+    }
+    {
+        cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
+    }
+
+    let outcome = dialog.show_modal();
+    // Before anything is destroyed: a calibration still running would otherwise
+    // wake up on the next pump tick holding freed widgets.
+    alive.set(false);
+    if outcome == ID_OK {
+        set_source_kind(
+            app,
+            scene_index,
+            source_index,
+            SourceKindConfig::MediaPlayer(MediaPlayerSourceConfig {
+                folder: folder_input.get_value().trim().to_string(),
+                shuffle: shuffle.get_value(),
+                duck: duck.get_value(),
+                duck_percent: duck_slider.value().clamp(0, 100) as u32,
+                duck_threshold_db: mixer::clamp_threshold_db(threshold_slider.value()),
+            }),
+        );
+    }
+    // The UIA provider is keyed by HWND, so it has to go before the window does.
+    duck_announcer.uninstall();
+    threshold_announcer.uninstall();
+    dialog.destroy();
+}
+
+/// How long the user is asked to talk for. Long enough to say a sentence at a
+/// natural volume, short enough that nobody trails off before it ends.
+const CALIBRATION_SECONDS: f32 = 5.0;
+
+/// The longest the answer is waited for before the button is given back. The
+/// engine answers in `CALIBRATION_SECONDS`; this only covers it never answering
+/// at all, which would otherwise leave the button disabled for good.
+const CALIBRATION_PATIENCE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Measures how loud the scene's other sources get while the user talks, and
+/// puts the threshold slider just under it.
+///
+/// The measurement is the engine's, not ours: it is the peak of the very
+/// [`mixer::trigger_level`] the ducker compares against, so what is calibrated
+/// is the thing being set. That also means it measures the active scene's
+/// microphones through their own faders and mutes — the same conditions the
+/// duck will happen under, and the reason a muted microphone reports silence
+/// rather than a number.
+fn calibrate_duck(
+    app: &Rc<App>,
+    slider: Slider,
+    announcer: &Rc<SliderAnnouncer>,
+    button: Button,
+    alive: &Rc<std::cell::Cell<bool>>,
+) {
+    // A result left parked by a run whose dialog was closed before it landed
+    // would otherwise be taken for this one's, instantly.
+    app.run.borrow_mut().duck_calibration = None;
+    app.engine
+        .send(crate::audio::EngineCommand::MeasureDuckTrigger {
+            seconds: CALIBRATION_SECONDS,
+        });
+    button.enable(false);
+    super::help::announce("Talk normally for five seconds, starting now.");
+
+    let deadline = std::time::Instant::now() + CALIBRATION_PATIENCE;
+    let app = app.clone();
+    let alive = alive.clone();
+    let announcer = announcer.clone();
+    super::run_when_ready(move || {
+        if !alive.get() {
+            return true;
+        }
+        let measured = app.run.borrow_mut().duck_calibration.take();
+        let Some(peak) = measured else {
+            if std::time::Instant::now() < deadline {
+                return false;
+            }
+            button.enable(true);
+            super::help::announce("The audio engine did not answer; nothing was changed.");
+            return true;
+        };
+        button.enable(true);
+        match mixer::calibrated_threshold_db(peak) {
+            Some(db) => {
+                slider.set_value(db);
+                // Set rather than announced: the sentence below is what the
+                // user hears, and two announcements at once would collide.
+                announcer.set_text("Start turning down at", &format!("{db} dB"));
+                super::help::announce(&format!(
+                    "Calibrated. The music will start turning down at {db} decibels."
+                ));
+            }
+            // Nothing was heard, which is a real answer and a common one: the
+            // microphone is muted, is in another scene, or is not there at all.
+            // Saying so beats writing a threshold that can never be crossed.
+            None => super::help::announce(
+                "Nothing loud enough to be a voice was heard, so the level was left alone. \
+                 Check that your microphone is in this scene, unmuted, and turned up.",
+            ),
+        }
+        true
+    });
 }
 
 #[cfg(test)]
