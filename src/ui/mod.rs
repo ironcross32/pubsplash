@@ -947,6 +947,34 @@ fn tts_reaches_the_stream(source: &crate::config::SourceConfig) -> bool {
     }
 }
 
+/// One source's engine-side routing: whether it mixes into master, and its
+/// sends with bus names resolved to the indices the engine addresses them by.
+///
+/// The single home of the [`tts_reaches_the_stream`] gate, which drops
+/// `to_master` *and* the sends together — a bus mixes into master
+/// unconditionally, so leaving the sends would put the speech back on the
+/// stream by another route. Both `App::source_specs` and
+/// `App::sync_source_routing` go through here so the two paths cannot drift.
+fn source_routing(
+    source: &crate::config::SourceConfig,
+    bus_index: impl Fn(&str) -> Option<usize>,
+) -> (bool, Vec<crate::audio::SendSpec>) {
+    if !tts_reaches_the_stream(source) {
+        return (false, Vec::new());
+    }
+    let sends = source
+        .sends
+        .iter()
+        .filter_map(|send| {
+            Some(crate::audio::SendSpec {
+                bus_index: bus_index(&send.bus)?,
+                level: send.level,
+            })
+        })
+        .collect();
+    (source.to_master, sends)
+}
+
 /// Reads an incoming chat message through every unmuted TTS source in the
 /// active scene.
 /// The log line for a change in the live-events connection.
@@ -1312,58 +1340,103 @@ impl App {
             .sources
             .iter()
             .enumerate()
-            .map(|(index, s)| SourceSpec {
-                name: s.name.clone(),
-                volume: s.volume,
-                muted: s.muted,
-                monitor: monitors.source(index),
-                // Speech is for the broadcaster first, so a TTS strip is always
-                // played out of the local device — see `SourceSpec::local`.
-                local: matches!(&s.kind, SourceKindConfig::Tts(_)),
-                to_master: s.to_master && tts_reaches_the_stream(s),
-                // Sends go too when speech is off the stream. A bus mixes into
-                // master unconditionally, so leaving them would have put the
-                // speech back on the stream by another route.
-                sends: if tts_reaches_the_stream(s) {
-                    s.sends
-                        .iter()
-                        .filter_map(|send| {
-                            Some(crate::audio::SendSpec {
-                                bus_index: bus_index(&send.bus)?,
-                                level: send.level,
+            .map(|(index, s)| {
+                let (to_master, sends) = source_routing(s, bus_index);
+                SourceSpec {
+                    name: s.name.clone(),
+                    volume: s.volume,
+                    muted: s.muted,
+                    monitor: monitors.source(index),
+                    // Speech is for the broadcaster first, so a TTS strip is
+                    // always played out of the local device — see
+                    // `SourceSpec::local`.
+                    local: matches!(&s.kind, SourceKindConfig::Tts(_)),
+                    to_master,
+                    sends,
+                    feed: match &s.kind {
+                        SourceKindConfig::Microphone { device_id } => {
+                            FeedKind::Capture(CaptureKind::Microphone {
+                                device_id: device_id.clone(),
                             })
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                },
-                feed: match &s.kind {
-                    SourceKindConfig::Microphone { device_id } => {
-                        FeedKind::Capture(CaptureKind::Microphone {
-                            device_id: device_id.clone(),
-                        })
-                    }
-                    SourceKindConfig::DesktopAudio => FeedKind::Capture(CaptureKind::DesktopAudio),
-                    SourceKindConfig::Application { process_name } => {
-                        match apps.get(&process_name.trim().to_ascii_lowercase()) {
-                            Some(app) => {
-                                FeedKind::Capture(CaptureKind::Application { pid: app.pid })
-                            }
-                            None => {
-                                log::warn!(
-                                    "Process {process_name:?} not running; source will be silent"
-                                );
-                                FeedKind::External
+                        }
+                        SourceKindConfig::DesktopAudio => {
+                            FeedKind::Capture(CaptureKind::DesktopAudio)
+                        }
+                        SourceKindConfig::Application { process_name } => {
+                            match apps.get(&process_name.trim().to_ascii_lowercase()) {
+                                Some(app) => {
+                                    FeedKind::Capture(CaptureKind::Application { pid: app.pid })
+                                }
+                                None => {
+                                    log::warn!(
+                                        "Process {process_name:?} not running; source will be silent"
+                                    );
+                                    FeedKind::External
+                                }
                             }
                         }
-                    }
-                    SourceKindConfig::Tts(_) | SourceKindConfig::SoundEvents(_) => {
-                        FeedKind::External
-                    }
-                },
+                        SourceKindConfig::Tts(_) | SourceKindConfig::SoundEvents(_) => {
+                            FeedKind::External
+                        }
+                    },
+                }
             })
             .collect();
         Some(specs)
+    }
+
+    /// Applies one source's `to_master` and sends to the engine without
+    /// disturbing anything else about it.
+    ///
+    /// A no-op unless `scene_index` names the active scene: the engine only
+    /// ever holds the active scene's sources, so `source_index` addresses
+    /// nothing otherwise. (Sending the whole source list instead would respawn
+    /// every capture thread in the app to apply an edit to a scene that is not
+    /// even loaded.)
+    pub fn sync_source_routing(&self, scene_index: usize, source_index: usize) {
+        let config = self.config.borrow();
+        let Some(scene) = config.scenes.scenes.get(scene_index) else {
+            return;
+        };
+        if scene.name != config.scenes.active_scene {
+            return;
+        }
+        let Some(source) = scene.sources.get(source_index) else {
+            return;
+        };
+        let bus_index = |name: &str| config.buses.buses.iter().position(|b| b.name == name);
+        let (to_master, sends) = source_routing(source, bus_index);
+        self.engine.send(EngineCommand::SetSourceRouting(
+            source_index,
+            to_master,
+            sends,
+        ));
+    }
+
+    /// Applies one send's level to the engine. See [`App::sync_source_routing`]
+    /// for the active-scene rule; `bus` is a bus name, resolved here.
+    pub fn set_send_level(&self, scene_index: usize, source_index: usize, bus: &str, level: u32) {
+        let config = self.config.borrow();
+        let Some(scene) = config.scenes.scenes.get(scene_index) else {
+            return;
+        };
+        if scene.name != config.scenes.active_scene {
+            return;
+        }
+        // Speech that is off the stream has no sends in the engine at all, so
+        // there is nothing to level.
+        if !scene
+            .sources
+            .get(source_index)
+            .is_some_and(tts_reaches_the_stream)
+        {
+            return;
+        }
+        let Some(bus_index) = config.buses.buses.iter().position(|b| b.name == bus) else {
+            return;
+        };
+        self.engine
+            .send(EngineCommand::SetSendLevel(source_index, bus_index, level));
     }
 
     pub fn is_streaming_or_starting(&self) -> bool {

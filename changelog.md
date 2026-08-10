@@ -13,6 +13,14 @@
 ### Fixes
 
 ### Changes
+- **Sends is now one list of every destination.** The Sends dialog on Scenes and Sources shows master output and every bus as checkable rows: arrow to one and press SPACE to switch it on or off. Each row also says whether it is on, so screen readers announce the change. The separate Send directly to master checkbox is gone — master is the first row — and so are the Add send and Remove send buttons.
+
+- Each bus you check gets its own send level slider, which appears under the list and disappears again when you uncheck the bus. Switching a bus off and back on during the same visit keeps the level it had.
+
+- Changes in the Sends dialog take effect immediately, so it closes with a single Close button instead of OK and Cancel. If you leave a source sending to nowhere at all, Pubsplash says so as the dialog closes — for a text-to-speech source it points out that you will still hear the speech yourself, and it stays quiet about one whose speech you have already chosen to keep off the stream.
+
+- Editing a source's sends no longer restarts every capture source in the app, so it cannot glitch a live stream.
+
 - Rewrote the README as a beginner-friendly setup and usage guide.
 
 - Removed the ALT mnemonics from every control in the app — buttons, checkboxes, menus, the menu bar and every dialog, including the Sound Pack Manager. Nothing has an underlined letter any more, and no ALT+letter shortcut fires. Every control is still reached by TAB and the arrow keys, and menu accelerators (`CTRL+,` for Preferences, `ALT+F4` to exit) are unchanged.

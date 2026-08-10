@@ -64,9 +64,9 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox) {
         "Sources list for the selected scene",
     );
     let sources_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let source_add = Button::builder(panel).with_label("Add source").build();
-    let source_edit = Button::builder(panel).with_label("Edit").build();
-    let source_sends = Button::builder(panel).with_label("Sends...").build();
+    let source_add = Button::builder(panel).with_label("&Add source").build();
+    let source_edit = Button::builder(panel).with_label("&Edit").build();
+    let source_sends = Button::builder(panel).with_label("&Sends...").build();
     let source_remove = Button::builder(panel).with_label("Remove source").build();
     let source_up = Button::builder(panel).with_label("Move up").build();
     let source_down = Button::builder(panel).with_label("Move down").build();

@@ -112,6 +112,21 @@ pub enum EngineCommand {
     SetRouting(Box<RoutingUpdate>),
     SetSourceVolume(usize, u32),
     SetSourceMute(usize, bool),
+    /// Replaces one source's `to_master` flag and its whole set of sends,
+    /// leaving everything else about the source alone.
+    ///
+    /// [`EngineCommand::SetRouting`] can express this too, but only by carrying
+    /// the whole source list, which tears down and respawns *every* capture
+    /// thread in the app. That is the right price for a scene change and much
+    /// too high for a checkbox: the Sends dialog applies live, so an edit there
+    /// would restart the microphone mid-stream. Sends still address buses by
+    /// index, so this must not be sent across a bus reorder — `SetRouting` is
+    /// what carries both halves together.
+    SetSourceRouting(usize, bool, Vec<SendSpec>),
+    /// One source's level into one bus, addressed by bus index. The send's
+    /// level is a `ChannelStrip` for the same reason a source's volume is, so
+    /// this ramps rather than steps.
+    SetSendLevel(usize, usize, u32),
     /// Play (or stop playing) this source's post-fader signal out of the local
     /// monitoring device. The output device is opened on the first strip that
     /// asks for it and closed again when the last one stops.
@@ -362,6 +377,31 @@ fn active_sends(specs: Vec<SendSpec>) -> Vec<ActiveSend> {
             strip: ChannelStrip::new(s.level, false),
         })
         .collect()
+}
+
+/// Rebuilds a source's sends from `specs`, carrying each surviving send's
+/// existing `ChannelStrip` across.
+///
+/// A `ChannelStrip` holds fade state, so building the whole set afresh would
+/// restart every send in the source just because the user added one more. Only
+/// a genuinely new bus index gets a new strip.
+fn rebuild_sends(old: Vec<ActiveSend>, specs: Vec<SendSpec>) -> Vec<ActiveSend> {
+    let mut old = old;
+    let mut rebuilt = Vec::with_capacity(specs.len());
+    for spec in specs {
+        match old.iter().position(|s| s.bus_index == spec.bus_index) {
+            Some(index) => {
+                let mut send = old.remove(index);
+                send.strip.set_volume(spec.level);
+                rebuilt.push(send);
+            }
+            None => rebuilt.push(ActiveSend {
+                bus_index: spec.bus_index,
+                strip: ChannelStrip::new(spec.level, false),
+            }),
+        }
+    }
+    rebuilt
 }
 
 pub struct AudioEngine {
@@ -631,6 +671,21 @@ fn engine_loop(
                 Ok(EngineCommand::SetSourceVolume(i, v)) => {
                     if let Some(s) = sources.get_mut(i) {
                         s.strip.set_volume(v);
+                    }
+                }
+                Ok(EngineCommand::SetSourceRouting(i, to_master, sends)) => {
+                    if let Some(s) = sources.get_mut(i) {
+                        s.to_master = to_master;
+                        let old = std::mem::take(&mut s.sends);
+                        s.sends = rebuild_sends(old, sends);
+                    }
+                }
+                Ok(EngineCommand::SetSendLevel(i, bus_index, level)) => {
+                    if let Some(send) = sources
+                        .get_mut(i)
+                        .and_then(|s| s.sends.iter_mut().find(|s| s.bus_index == bus_index))
+                    {
+                        send.strip.set_volume(level);
                     }
                 }
                 Ok(EngineCommand::SetSourceMute(i, m)) => {
@@ -1078,6 +1133,59 @@ fn finalize_recording(
     }
     if let Some(rec) = recorder.take() {
         rec.finish();
+    }
+}
+
+#[cfg(test)]
+mod send_rebuild_tests {
+    use super::*;
+
+    fn spec(bus_index: usize, level: u32) -> SendSpec {
+        SendSpec { bus_index, level }
+    }
+
+    /// Muting is what marks a strip as the original one: `rebuild_sends` never
+    /// creates a muted strip, so a muted survivor can only have been carried
+    /// across.
+    fn marked(bus_index: usize, level: u32) -> ActiveSend {
+        let mut strip = ChannelStrip::new(level, false);
+        strip.set_muted(true);
+        ActiveSend { bus_index, strip }
+    }
+
+    #[test]
+    fn a_surviving_send_keeps_its_strip() {
+        let rebuilt = rebuild_sends(vec![marked(2, 40)], vec![spec(2, 40)]);
+        assert!(rebuilt[0].strip.muted());
+    }
+
+    #[test]
+    fn a_survivor_takes_its_new_level_without_restarting() {
+        let rebuilt = rebuild_sends(vec![marked(2, 40)], vec![spec(2, 75)]);
+        assert!(rebuilt[0].strip.muted());
+        assert_eq!(rebuilt[0].strip.volume(), 75);
+    }
+
+    #[test]
+    fn a_new_bus_gets_a_fresh_strip() {
+        let rebuilt = rebuild_sends(vec![marked(2, 40)], vec![spec(2, 40), spec(5, 10)]);
+        assert_eq!(rebuilt.len(), 2);
+        assert!(!rebuilt[1].strip.muted());
+        assert_eq!(rebuilt[1].bus_index, 5);
+    }
+
+    #[test]
+    fn a_dropped_bus_is_gone_and_order_follows_the_specs() {
+        let rebuilt = rebuild_sends(
+            vec![marked(2, 40), marked(5, 10)],
+            vec![spec(5, 10), spec(9, 100)],
+        );
+        assert_eq!(
+            rebuilt.iter().map(|s| s.bus_index).collect::<Vec<_>>(),
+            vec![5, 9]
+        );
+        // The one that survived is still the one that was there.
+        assert!(rebuilt[0].strip.muted());
     }
 }
 

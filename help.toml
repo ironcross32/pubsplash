@@ -613,34 +613,16 @@ file = "src/ui/scan_dialog.rs"
 message = "What the scan is doing right now: how many plugins are done out of how many, and the name of the one being loaded. Read-only, and it does not read itself out as it changes, so tab here whenever you want to know where the scan has got to."
 
 [[control]]
-id = "dialog.sends.add"
-label = "Add a send to a bus button"
+id = "dialog.sends.busList"
+label = "Destinations for this source list"
 file = "src/ui/sends.rs"
-message = "Add a send to the selected bus."
+message = "Everywhere this source can be heard: master output first, then every bus. Arrow to a row and press SPACE to switch it on or off; each row says whether it is on. Master output and the buses are independent, so a source can go straight to master, through a bus, through several buses, or any combination. Keeping master output checked alongside a send is how you hear the dry signal as well as the effect: send a reverb the full signal, then lower its send level to taste. Changes take effect at once, so there is nothing to confirm."
 
 [[control]]
 id = "dialog.sends.level"
-label = "Send level slider for the selected bus"
+label = "Send level slider for one bus"
 file = "src/ui/sends.rs"
-message = "How much of the output of the effect would you like to send to the bus."
-
-[[control]]
-id = "dialog.sends.remove"
-label = "Remove selected send button"
-file = "src/ui/sends.rs"
-message = "Remove the selected send from the bus."
-
-[[control]]
-id = "dialog.sends.sendList"
-label = "Bus sends for this source list"
-file = "src/ui/sends.rs"
-message = "Use the arrow keys to select a bus to work with."
-
-[[control]]
-id = "dialog.sends.toMaster"
-label = "Send this source directly to master checkbox"
-file = "src/ui/sends.rs"
-message = "When checked, the source's output is sent to master as well as to the selected bus. This lets you, for instance, set up a reverb so that you still hear the dry signal, but can lower the send level and give the reverb effect the full wet signal."
+message = "How much of this source is sent to the bus named in the slider, from 0 to 100. There is one of these for each bus you have checked, and it appears and disappears with that bus. Master output has none: its level is the source's own volume on the mixer."
 
 [[control]]
 id = "dialog.soundEventsSource.incomingChat"

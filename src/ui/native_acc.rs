@@ -142,6 +142,23 @@ pub fn install(list: &ListBox, name: &str) {
     install_hwnd(HWND(list.get_handle()), Some(list_subclass_proc), name);
 }
 
+/// The same for a check list box, which has the same disease for the same
+/// reason.
+///
+/// A `wxCheckListBox` on MSW is a real `LISTBOX` — owner-drawn, so that wx can
+/// paint the check next to each item, but a `LISTBOX` in every other respect,
+/// including the standard proxy `CreateStdAccessibleObject` builds for it. So
+/// the same `WM_GETOBJECT` passthrough applies unchanged, and the same rule
+/// comes with it: `name` must be the text of the static control immediately
+/// before the list.
+///
+/// The check state is not something this either grants or takes away. wx's own
+/// accessible has nothing to say about it, so a reader gets it (or does not)
+/// from the standard proxy on both sides of this call.
+pub fn install_check_list(list: &CheckListBox, name: &str) {
+    install_hwnd(HWND(list.get_handle()), Some(list_subclass_proc), name);
+}
+
 /// Makes `radio` and each of its items present themselves as the native Win32
 /// controls they are, so the items announce their own labels instead of wx's
 /// `"radioButton"` and the group announces its title instead of `"radioBox"`.

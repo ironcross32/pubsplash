@@ -34,8 +34,8 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
         "Buses list (row 0 is the master output)",
     );
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let add = Button::builder(panel).with_label("Add bus").build();
-    let rename = Button::builder(panel).with_label("Rename bus").build();
+    let add = Button::builder(panel).with_label("&Add bus").build();
+    let rename = Button::builder(panel).with_label("&Rename bus").build();
     let remove = Button::builder(panel).with_label("Remove bus").build();
     let up = Button::builder(panel).with_label("Move up").build();
     let down = Button::builder(panel).with_label("Move down").build();
@@ -64,18 +64,18 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
         "Effects chain on the selected bus",
     );
     let fx_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let fx_add = Button::builder(panel).with_label("Add plugin").build();
+    let fx_add = Button::builder(panel).with_label("Add &plugin").build();
     let fx_remove = Button::builder(panel).with_label("Remove plugin").build();
     let fx_up = Button::builder(panel).with_label("Move plugin up").build();
     let fx_down = Button::builder(panel)
         .with_label("Move plugin down")
         .build();
-    let fx_bypass = CheckBox::builder(panel).with_label("Bypass").build();
+    let fx_bypass = CheckBox::builder(panel).with_label("&Bypass").build();
     super::set_accessible_name(&fx_bypass, "Bypass selected plugin");
     let fx_edit = Button::builder(panel)
-        .with_label("Edit parameters")
+        .with_label("&Edit parameters")
         .build();
-    let fx_open = Button::builder(panel).with_label("Open interface").build();
+    let fx_open = Button::builder(panel).with_label("Open &interface").build();
     super::help::tag(&fx_add, "tab.buses.fxAdd", "Add plugin to chain button");
     super::help::tag(
         &fx_remove,
