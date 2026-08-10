@@ -22,7 +22,7 @@ pub use types::*;
 
 use std::path::{Path, PathBuf};
 
-/// `%LOCALAPPDATA%\pubsplash\vst_plugins.json`, beside config.json.
+/// `vst_plugins.json` in the data directory, beside config.json.
 pub fn cache_path() -> PathBuf {
     crate::config::config_dir().join("vst_plugins.json")
 }

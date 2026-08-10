@@ -38,7 +38,9 @@ These two links always point at the newest release, so they never go stale:
 - [**Installer**](https://github.com/ironcross32/pubsplash/releases/latest/download/pubsplash-setup.exe) — the usual choice. Asks whether to install for just you or for everyone on the machine, and adds Pubsplash to the Start menu.
 - [**Portable ZIP**](https://github.com/ironcross32/pubsplash/releases/latest/download/pubsplash-portable.zip) — unzip it anywhere and run `pubsplash.exe`. Nothing is installed and nothing is written to the registry. Handy for a USB stick or a machine you cannot install software on.
 
-Either way your settings, logs and recordings live in `%LOCALAPPDATA%\pubsplash`, not next to the program, so they survive an update or a move.
+The two keep their data in different places, on purpose. The installed copy uses `%LOCALAPPDATA%\pubsplash`, away from the program itself, so an update or a move cannot disturb it. The portable copy uses a `user_data` folder inside the folder you unzipped, so the folder is the whole of it: carry it on a stick, copy it to another machine, or delete it, and nothing is left behind anywhere else. Updates leave `user_data` untouched.
+
+One thing does not travel with a portable copy: saved passwords and API keys are encrypted for the Windows account that entered them, so on a different machine or a different user account they read as blank and have to be entered again. Everything else — scenes, sources, FX chains, preferences — comes across as it is.
 
 Both kinds keep themselves up to date — see [Automatic updates](#automatic-updates). Every release is also on the [releases page](https://github.com/ironcross32/pubsplash/releases) under its version number, along with debug symbols.
 
@@ -67,7 +69,7 @@ Two things Pubsplash will not do. It will **never ask about an update while you 
 
 1. Launch Pubsplash.
 2. Open **File > Setup streaming services**, select **Audiopub** or add an **Icecast** service, enter that service's connection details, and press **Connect**. The built-in **Audiopub** service is permanent and cannot be removed or changed to Icecast.
-3. Optionally open **File > Set stream info** to set the stream's title, description, streaming quality (MP3 bitrate), whether an Audiopub stream should be archived on the server, and whether to **record this stream** to a file on your computer. The title, description, archive, and record choices reset every time Pubsplash starts; the quality setting is saved and persists across sessions. To have archiving or recording pre-selected each launch, enable **Archive streams by default** or **Record streams by default** on the Archiving tab of **File > Preferences** (`CTRL+,`). Recordings are an exact copy of the streamed MP3, saved as `recording_<yyyy-mm-dd>_<HH-MM-SS>.mp3` in the recording folder set on that same tab (your Music library by default).
+3. Optionally open **File > Set stream info** to set the stream's title, description, streaming quality (MP3 bitrate), whether an Audiopub stream should be archived on the server, and whether to **record this stream** to a file on your computer. The title, description, archive, and record choices reset every time Pubsplash starts; the quality setting is saved and persists across sessions. To have archiving or recording pre-selected each launch, enable **Archive streams by default** or **Record streams by default** on the Archiving tab of **File > Preferences** (`CTRL+,`). Recordings are an exact copy of the streamed MP3, saved as `recording_<yyyy-mm-dd>_<HH-MM-SS>.mp3` in the recording folder set on that same tab — your Music library by default, or a `recordings` folder inside `user_data` if you are running the portable build, so recordings stay with the copy they were made from.
 4. On the **Home** tab, press **Start streaming** (`ALT+S`). If you haven't set the stream info yet, the dialog opens first — press **OK** to start with what's filled in (tabbing into a text field selects its contents so you can just type over the defaults), or **Cancel** to not start streaming.
 5. Press **Stop streaming** (`ALT+T`) when you're done.
 
@@ -188,7 +190,7 @@ Use the chain library buttons under the effects list to reuse setups:
 - **Export chain** writes the current chain to a `.pubfx` file you can copy to another machine.
 - **Import chain** reads a `.pubfx` file into your library and offers to apply it.
 
-When a chain you load or import uses plugins that aren't installed on this machine, Pubsplash lists the missing ones and lets you apply the chain with just the plugins you do have, or cancel. Chains are stored together in `%LOCALAPPDATA%\pubsplash\fx_chains.json`.
+When a chain you load or import uses plugins that aren't installed on this machine, Pubsplash lists the missing ones and lets you apply the chain with just the plugins you do have, or cancel. Chains are stored together in `fx_chains.json` in the data directory.
 
 ## VST plugins
 
@@ -306,7 +308,7 @@ The **Go to** menu (`ALT+G`) has two items.
 
 ## Configuration
 
-Pubsplash stores its configuration data in `C:\Users\<Your-user-name>\AppData\Local\pubsplash`. **Go to > Go to Pubsplash data directory** opens it for you.
+Pubsplash stores its configuration data in `C:\Users\<Your-user-name>\AppData\Local\pubsplash`, or, if you are running the portable build, in the `user_data` folder beside `pubsplash.exe`. **Go to > Go to Pubsplash data directory** opens whichever it is for you, so you never have to know which.
 
 **config.json** is where all of your app settings live. It holds things like preferences, your streaming service profiles, your scenes and sources, and so on. It is written when the app is first launched. Pubsplash will also regenerate it if it becomes missing or if it is found to be corrupt. In the latter case, the corrupted file will be renamed and given a .bak extension, allowing you to fix it if you so choose.
 
@@ -316,7 +318,7 @@ Pubsplash stores its configuration data in `C:\Users\<Your-user-name>\AppData\Lo
 
 ## Logging
 
-Logs are written to `%LOCALAPPDATA%\pubsplash\logs\`. The current one is `pubsplash_rCURRENT.log`; it rolls over at 5 MB and the last five are kept.
+Logs are written to the `logs` folder inside the data directory described under [Configuration](#configuration). The current one is `pubsplash_rCURRENT.log`; it rolls over at 5 MB and the last five are kept.
 
 Everything to do with logging is on the **Logging & debugging** tab of **File > Preferences** (`CTRL+,`), which is the last tab:
 
@@ -324,7 +326,7 @@ Everything to do with logging is on the **Logging & debugging** tab of **File > 
 - **Open logs folder** (`ALT+O`) opens the folder above in Explorer.
 - **Compress logs** (`ALT+P`) is the one to use when reporting a problem. It packages every log file and every crash dump into a single ZIP and asks where to save it. Logging is stopped for the moment that takes, so the session you are in right now is closed off and goes into the archive complete rather than with its last lines still unwritten; it resumes as soon as the archive is written. The ZIP holds nothing else — no settings, no passwords, no API keys.
 
-Pubsplash runs VST plugins inside its own process, so a badly behaved plugin can bring the whole app down without any warning it could otherwise print. If that happens, the last lines of the log name the plugin file that faulted, and a crash dump is written to `%LOCALAPPDATA%\pubsplash\crashes\`. Both are worth attaching to a bug report, and **Compress logs** collects both for you; the dump is only useful in a debugger and can be deleted freely.
+Pubsplash runs VST plugins inside its own process, so a badly behaved plugin can bring the whole app down without any warning it could otherwise print. If that happens, the last lines of the log name the plugin file that faulted, and a crash dump is written to the `crashes` folder in the data directory. Both are worth attaching to a bug report, and **Compress logs** collects both for you; the dump is only useful in a debugger and can be deleted freely.
 
 ## Building from source
 

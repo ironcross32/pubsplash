@@ -1,3 +1,7 @@
+// `soundpack.rs` resolves `packs_dir()` through this, and there is no
+// `crate::config` here to reach it by.
+#[path = "../data_dir.rs"]
+mod data_dir;
 #[path = "../soundpack.rs"]
 mod soundpack;
 

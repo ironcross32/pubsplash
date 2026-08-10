@@ -19,8 +19,8 @@ name = "pubsplash-soundpack"
 path = "src/bin/soundpack_manager.rs"
 
 # Applies an automatic update after pubsplash.exe has exited, since Windows will
-# not let a running exe be replaced. Always run from a copy under
-# %LOCALAPPDATA%, never from the install directory it may be overwriting.
+# not let a running exe be replaced. Always run from a copy in the data
+# directory, never from the install directory it may be overwriting.
 [[bin]]
 name = "pubsplash-update"
 path = "src/bin/updater.rs"

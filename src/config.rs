@@ -1,6 +1,8 @@
 //! Configuration loading, saving, and corruption recovery.
 //!
-//! The config lives at `%LOCALAPPDATA%\pubsplash\config.json`. A missing file
+//! The config lives at `config.json` in the data directory, which is
+//! `%LOCALAPPDATA%\pubsplash` or `user_data\` beside a portable copy's
+//! executable — see [`crate::data_dir`] and [`config_dir`]. A missing file
 //! is regenerated from defaults. A corrupt file is renamed to `config.json.bak`
 //! and replaced with defaults so the app always starts.
 
@@ -422,8 +424,9 @@ impl Default for UpdatesConfig {
     }
 }
 
-/// Archiving and local-recording preferences.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Archiving and local-recording preferences. Every default is the empty one —
+/// both boxes off, and no pinned recording folder — so this one is derived.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ArchivingConfig {
     /// When set, the "Archive the stream" checkbox in the stream-info dialog
@@ -432,24 +435,16 @@ pub struct ArchivingConfig {
     /// When set, the "Record this stream" checkbox in the stream-info dialog
     /// starts checked on each fresh launch. Defaults to off.
     pub record_streams_by_default: bool,
-    /// Folder that stream recordings are written to. Empty means "use the
-    /// music library" (see `recording_dir`).
+    /// Folder that stream recordings are written to. Empty means "wherever
+    /// [`default_recording_dir`] says", which is what a fresh config holds:
+    /// storing the resolved path would pin a portable copy to the drive letter
+    /// it was first run from, and Preferences shows the resolved path anyway.
     pub recording_folder: String,
-}
-
-impl Default for ArchivingConfig {
-    fn default() -> Self {
-        Self {
-            archive_streams_by_default: false,
-            record_streams_by_default: false,
-            recording_folder: default_recording_dir().to_string_lossy().into_owned(),
-        }
-    }
 }
 
 impl ArchivingConfig {
     /// Resolves the folder recordings are written to: the configured folder, or
-    /// the music library if it is blank.
+    /// the default if it is blank.
     pub fn recording_dir(&self) -> PathBuf {
         let trimmed = self.recording_folder.trim();
         if trimmed.is_empty() {
@@ -575,10 +570,16 @@ impl Default for SoundsConfig {
     }
 }
 
-/// The default recordings folder: the user's music library
-/// (`%USERPROFILE%\Music`), falling back to the config dir if unavailable.
+/// The default recordings folder: `recordings\` inside the data folder of a
+/// portable copy, so a recording lands with the rest of that copy's data and
+/// travels with it; otherwise the user's music library (`%USERPROFILE%\Music`),
+/// falling back to the data folder if there isn't one.
 pub fn default_recording_dir() -> PathBuf {
-    dirs::audio_dir().unwrap_or_else(config_dir)
+    if crate::data_dir::is_portable() {
+        config_dir().join("recordings")
+    } else {
+        dirs::audio_dir().unwrap_or_else(config_dir)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1025,15 +1026,18 @@ impl Default for LoggingConfig {
     }
 }
 
-/// `%LOCALAPPDATA%\pubsplash`
+/// The data directory: `%LOCALAPPDATA%\pubsplash`, or `user_data\` beside the
+/// executable of a portable copy. See [`crate::data_dir`] for which is which.
+///
+/// Everything the app writes hangs off this — the config, the logs, the crash
+/// dumps, the caches and the sound packs — so this is the one function that has
+/// to know, and the rest of the app asks it.
 pub fn config_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .expect("LOCALAPPDATA should always exist on Windows")
-        .join("pubsplash")
+    crate::data_dir::root().to_path_buf()
 }
 
 pub fn config_path() -> PathBuf {
-    config_dir().join("config.json")
+    config_dir().join(crate::data_dir::SETTINGS_FILE)
 }
 
 /// Loads the config, creating it from defaults if missing, and recovering

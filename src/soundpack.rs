@@ -417,15 +417,12 @@ pub struct InstalledPack {
     pub file_name: String,
 }
 
-/// Where imported packs are copied to. Deliberately derived from
-/// `dirs::data_local_dir()` rather than `crate::config::config_dir()`: this
-/// module is `#[path]`-included into the standalone soundpack binaries, which
-/// have no `crate::config`.
+/// Where imported packs are copied to. Reached through `crate::data_dir` rather
+/// than `crate::config::config_dir()` because this module is `#[path]`-included
+/// into the standalone soundpack binaries, which have no `crate::config` — the
+/// two names resolve to the same folder in the main app.
 pub fn packs_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("pubsplash")
-        .join("soundpacks")
+    crate::data_dir::root().join("soundpacks")
 }
 
 /// Every `.pspack` in `packs_dir()`, sorted for a stable dropdown order. A

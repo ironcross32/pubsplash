@@ -206,8 +206,13 @@ fn build_archiving_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     let folder_label = StaticText::builder(&recording_box)
         .with_label("Recording folder")
         .build();
+    // The resolved folder rather than the stored string, which a fresh config
+    // leaves blank so it can follow a portable copy from one machine to the
+    // next. An empty box would read as "recordings go nowhere"; typing or
+    // browsing here is what pins the choice to a path.
+    let folder = app.config.borrow().archiving.recording_dir();
     let folder_input = TextCtrl::builder(&recording_box)
-        .with_value(&app.config.borrow().archiving.recording_folder)
+        .with_value(&folder.to_string_lossy())
         .build();
     super::set_accessible_name(&folder_input, "Recording folder");
     super::help::tag(

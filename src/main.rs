@@ -4,6 +4,7 @@ mod audio;
 mod b64;
 mod config;
 mod crash;
+mod data_dir;
 mod fx;
 mod json_store;
 mod keybind;
@@ -30,6 +31,16 @@ fn main() {
     // are buffered and written on a background thread so the audio engine never
     // blocks on one.
     logging::init("info");
+    // Before the config is read, so a portable copy that was last run by a build
+    // which kept its settings in %LOCALAPPDATA% finds them where it now looks.
+    // After logging, so the one time it happens is visible in the log.
+    if let Some(from) = data_dir::migrate_from_legacy() {
+        log::info!(
+            "Brought existing settings across from {} into {}",
+            from.display(),
+            data_dir::root().display()
+        );
+    }
     let config = config::load();
     logging::set_level(&config.logging.level);
     logging::install_panic_hook();

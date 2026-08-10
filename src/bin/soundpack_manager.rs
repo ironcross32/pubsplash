@@ -2,6 +2,12 @@
 // frame, which is clutter on screen and a stray stop for screen-reader focus.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! Standalone Sound Pack Manager.
+//!
+//! Shipped beside `pubsplash.exe`, so it resolves the same data folder from its
+//! own location and installs packs where Pubsplash will find them — including
+//! `user_data\soundpacks` in a portable copy.
+#[path = "../data_dir.rs"]
+mod data_dir;
 #[path = "../soundpack.rs"]
 mod soundpack;
 

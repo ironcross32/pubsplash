@@ -1,5 +1,5 @@
 //! The FX chain library: named plugin chains persisted in a single file
-//! (`%LOCALAPPDATA%\pubsplash\fx_chains.json`), plus standalone `.pubfx`
+//! (`fx_chains.json` in the data directory), plus standalone `.pubfx`
 //! export/import so chains can be shared across machines, and the resolution
 //! logic that matches a chain's plugin references against the local plugin
 //! cache.
@@ -43,7 +43,7 @@ pub struct ChainFile {
     pub chain: NamedChain,
 }
 
-/// `%LOCALAPPDATA%\pubsplash\fx_chains.json`, beside config.json.
+/// `fx_chains.json` in the data directory, beside config.json.
 pub fn library_path() -> PathBuf {
     crate::config::config_dir().join("fx_chains.json")
 }
