@@ -8,7 +8,10 @@
 //!
 //! - `portable.txt`, written into the ZIP by the release workflow's
 //!   "Assemble portable ZIP" step. This is the deliberate marker and is checked
-//!   first, so a portable copy is never mistaken for an install.
+//!   first, so a portable copy is never mistaken for an install. The same file
+//!   is what `data_dir` reads to decide that this copy keeps its settings in
+//!   `user_data\` beside the executable — one marker, both answers, so the copy
+//!   that overwrites its own folder is always the copy that stores data in it.
 //! - `uninstall.exe`, which NSIS writes into `$INSTDIR` and which nothing else
 //!   produces (verified by listing the built installer: it is the last entry in
 //!   the archive, alongside the four binaries and the two HTML docs). This
@@ -27,9 +30,9 @@
 
 use std::path::{Path, PathBuf};
 
-/// The marker the release workflow writes into the portable ZIP.
-pub const PORTABLE_MARKER: &str = "portable.txt";
-/// What NSIS leaves in `$INSTDIR`.
+/// What NSIS leaves in `$INSTDIR`. The portable marker it is weighed against
+/// lives in `data_dir`, which reads the same file to decide where a portable
+/// copy keeps its data — one constant, so the two answers cannot disagree.
 pub const UNINSTALLER: &str = "uninstall.exe";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,7 +76,7 @@ pub fn detect() -> Option<Install> {
 /// signal, so a portable ZIP that somehow also carries an `uninstall.exe` still
 /// reads as portable.
 pub fn classify(dir: &Path) -> InstallKind {
-    if dir.join(PORTABLE_MARKER).is_file() {
+    if crate::data_dir::is_portable_dir(dir) {
         InstallKind::Portable
     } else if dir.join(UNINSTALLER).is_file() {
         InstallKind::Installed
@@ -85,6 +88,7 @@ pub fn classify(dir: &Path) -> InstallKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_dir::PORTABLE_MARKER;
 
     /// A scratch directory that cleans itself up, so these tests leave nothing
     /// in the temp folder even when one fails.

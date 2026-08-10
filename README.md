@@ -16,12 +16,24 @@ You need:
 
 Download the newest release from the [GitHub releases page](https://github.com/ironcross32/pubsplash/releases).
 
-- [Installer](https://github.com/ironcross32/pubsplash/releases/latest/download/pubsplash-setup.exe) - the usual choice; it adds Pubsplash to the Start menu and lets you choose per-user or per-machine installation.
-- [Portable ZIP](https://github.com/ironcross32/pubsplash/releases/latest/download/pubsplash-portable.zip) - unzip it and run pubsplash.exe; nothing is installed.
+These two links always point at the newest release, so they never go stale:
+
+- [**Installer**](https://github.com/ironcross32/pubsplash/releases/latest/download/pubsplash-setup.exe)
+- [**Portable ZIP**](https://github.com/ironcross32/pubsplash/releases/latest/download/pubsplash-portable.zip)
+
+The two keep their data in different places. The installed copy uses `%LOCALAPPDATA%\pubsplash`. The portable copy uses a `user_data` folder inside the folder you unzipped. This allows Pubsplash and your user data to travel with you. Updates leave `user_data` alone.
+
+One thing does not travel with a portable copy: saved passwords and API keys are encrypted for the Windows account that entered them, so on a different machine or a different user account they read as blank and have to be entered again. Everything else will still work.
+
+Both kinds keep themselves up to date — see [Automatic updates](#automatic-updates). Every release is also on the [releases page](https://github.com/ironcross32/pubsplash/releases) under its version number, along with debug symbols.
+
+## Automatic updates
+
+Pubsplash checks for a newer version once each time it starts. This is controlled by **Check for updates when Pubsplash starts** under the **General** tab of preferences. You can also perform a check manually under the same tab.
 
 ## Getting started
 
-### 1. Connect a service
+### Connecting to a service
 
 1. Open **File > Setup streaming services**.
 2. Select the built-in **Audiopub** service, or choose **Add** for a self-hosted Audiopub instance or Icecast.
@@ -112,14 +124,6 @@ Pubsplash checks for updates at startup by default. Change this on Preferences' 
 If a source is silent, check its device or application selection and look for "(reconnecting)" in the mixer. For connection problems, verify the service credentials and consult the log.
 
 Open **Go to > Go to Pubsplash data directory** to find the data folder. Logs are in %LOCALAPPDATA%\pubsplash\logs\. On Preferences' **Logging & debugging** tab, increase the log level temporarily or choose **Compress logs** to create a ZIP containing logs and crash dumps for a bug report. The archive does not include settings, passwords, or API keys.
-
-## Building from source
-
-Install Rust stable, Visual Studio 2019 or later with the Windows SDK, CMake, and Ninja. Then run:
-
-    cargo build --release
-
-The first build downloads the required prebuilt wxWidgets libraries.
 
 ## License
 

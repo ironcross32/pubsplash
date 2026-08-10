@@ -12,6 +12,12 @@
 
 ### Fixes
 
+- The portable build is now genuinely portable. It kept its settings, logs, crash dumps and caches in `%LOCALAPPDATA%\pubsplash` exactly as an installed copy does, which left a trail on every machine it was run on and meant that carrying the folder to another machine carried none of the setup with it. It now keeps everything in a `user_data` folder beside `pubsplash.exe`, so the folder is the whole installation. Updates replace the program files and leave `user_data` alone.
+
+- An existing portable copy brings its settings across the first time it starts: whatever is in `%LOCALAPPDATA%\pubsplash` is copied into `user_data`, minus the logs and crash dumps, which belong to the machine rather than to you. The old folder is left where it is, so an installed Pubsplash on the same machine is unaffected. Note that saved passwords and API keys are encrypted for the Windows account that entered them, so they survive the move but not a move to a different machine or user account.
+
+- The portable build's default recording folder is now `recordings` inside `user_data`, so recordings stay with the copy that made them instead of going to the Music library of whichever machine it happened to be run on. An installed copy still defaults to the Music library, and a recording folder you have chosen yourself is left alone in both.
+
 ### Changes
 - **Sends is now one list of every destination.** The Sends dialog on Scenes and Sources shows master output and every bus as checkable rows: arrow to one and press SPACE to switch it on or off. Each row also says whether it is on, so screen readers announce the change. The separate Send directly to master checkbox is gone — master is the first row — and so are the Add send and Remove send buttons.
 
@@ -28,6 +34,8 @@
 - **Test** in the Sound Pack Manager now plays the file itself rather than handing it to Windows' built-in WAV player, so previewing an Opus file works and previewing anything else no longer briefly opens a background PowerShell.
 
 - Only one copy of Pubsplash can run at a time. Starting a second one now explains that Pubsplash is already running and closes, instead of quietly opening a copy that fights the first for the microphone, the settings file and the stream itself. This holds across installations: an installed copy and a portable copy on the same computer count as the same app. Other people signed in to the same computer are unaffected and can each run their own.
+
+- A fresh settings file no longer writes the default recording folder out as a fixed path, so the default follows a portable copy from one machine to the next instead of pinning it to the drive letter it was first run from. Preferences shows the folder that is actually in use either way.
 
 ## 0.1.6
 

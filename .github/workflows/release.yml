@@ -108,21 +108,31 @@ jobs:
           cp target/release/soundpack.exe bundle/
           cp readme.html bundle/
           cp changelog.html bundle/
-          # How Pubsplash knows it is the portable build and must replace its
-          # own folder rather than run the installer. The installer's $INSTDIR
-          # has an uninstall.exe and no marker; this has the marker and no
-          # uninstaller. See src/update/install_kind.rs, which reads this file's
-          # presence only -- the text is for whoever opens it.
+          # How Pubsplash knows it is the portable build: it must replace its
+          # own folder rather than run the installer, and keep its data in
+          # user_data\ here rather than in %LOCALAPPDATA%. The installer's
+          # $INSTDIR has an uninstall.exe and no marker; this has the marker and
+          # no uninstaller. See src/update/install_kind.rs and src/data_dir.rs,
+          # both of which read this file's presence only -- the text is for
+          # whoever opens it.
           cat > bundle/portable.txt <<'EOF'
           This is the portable build of Pubsplash. Everything it needs is in this
           folder; nothing is installed and nothing is written to the registry.
 
           Move the whole folder wherever you like and run pubsplash.exe. Your
-          settings, logs and crash dumps live in %LOCALAPPDATA%\pubsplash, not
-          here, so they survive an update.
+          settings, logs, crash dumps and recordings go in the user_data folder
+          beside it, so the folder is the whole installation: carry it on a USB
+          stick, copy it to another machine, or delete it, and nothing is left
+          behind anywhere else. Updates replace the program files here and leave
+          user_data alone.
+
+          Saved passwords and API keys are the one exception. Windows encrypts
+          them for the account that entered them, so on another machine or user
+          account they read as blank and have to be entered again.
 
           Do not delete this file: Pubsplash reads it to tell a portable copy
-          from an installed one when it updates itself.
+          from an installed one, both when it updates itself and when it decides
+          where to keep your settings.
           EOF
 
       - name: Zip bundle

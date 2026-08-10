@@ -2,9 +2,9 @@
 //!
 //! Three things: the log level, a way to reach the log files, and a way to
 //! package them up. The last is the point of the tab — a bug report is only as
-//! good as the log attached to it, and asking a screen-reader user to find a
-//! folder under `%LOCALAPPDATA%`, select the right six files and zip them by
-//! hand is asking for a report with the wrong files in it.
+//! good as the log attached to it, and asking a screen-reader user to find the
+//! data folder, select the right six files and zip them by hand is asking for a
+//! report with the wrong files in it.
 //!
 //! The capture runs inline on the UI thread. Rotation caps the logs at 5 MiB
 //! each and five files, so the worst case is around 30 MB of deflate — about a
