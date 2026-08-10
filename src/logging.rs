@@ -2,8 +2,8 @@
 //!
 //! Precedence: `PUBSPLASH_LOG_<LEVEL>` environment variable (e.g.
 //! `PUBSPLASH_LOG_TRACE=1` or simply defining `PUBSPLASH_LOG_DEBUG`)
-//! supersedes the level stored in the config file. Logs go to
-//! `%LOCALAPPDATA%\pubsplash\logs\` and, in debug builds, to stderr.
+//! supersedes the level stored in the config file. Logs go to `logs\` in the
+//! data directory (`config::config_dir`) and, in debug builds, to stderr.
 //!
 //! The handle lives in a process-global rather than in `main`, in the shape of
 //! `tts::usage` and `tts::catalog`: the Preferences window changes the level and
@@ -137,12 +137,12 @@ pub fn shutdown() {
     });
 }
 
-/// `%LOCALAPPDATA%\pubsplash\logs`
+/// `logs\` in the data directory.
 pub fn logs_dir() -> PathBuf {
     crate::config::config_dir().join("logs")
 }
 
-/// `%LOCALAPPDATA%\pubsplash\crashes` — the minidumps `crash.rs` writes.
+/// `crashes\` in the data directory — the minidumps `crash.rs` writes.
 pub fn crash_dir() -> PathBuf {
     crate::config::config_dir().join("crashes")
 }

@@ -52,7 +52,7 @@ pub struct RejectedEntry {
     pub reason: String,
 }
 
-/// The plugin cache persisted at `%LOCALAPPDATA%\pubsplash\vst_plugins.json`.
+/// The plugin cache persisted as `vst_plugins.json` in the data directory.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PluginCache {

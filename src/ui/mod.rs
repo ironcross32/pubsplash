@@ -2433,7 +2433,7 @@ fn open_doc(name: &str, fallback_url: &str) -> Result<(), String> {
     shell_open(fallback_url).map_err(|e| format!("Could not open {fallback_url}: {e}"))
 }
 
-/// Opens `%LOCALAPPDATA%\pubsplash` — settings, logs, crash dumps — in Explorer.
+/// Opens the data directory — settings, logs, crash dumps — in Explorer.
 ///
 /// Created first: on a first run that has never saved anything the directory may
 /// not exist yet, and `ShellExecuteW` on a missing path only reports a number.

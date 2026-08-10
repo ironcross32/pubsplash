@@ -4,11 +4,13 @@
 //! wants Pubsplash gone before it writes — so neither half of an update can be
 //! done by the process being updated. This is that second process.
 //!
-//! **It is always run from a copy in `%LOCALAPPDATA%\pubsplash\update\runner\`,
-//! never from the install directory.** Two things depend on that. A portable
-//! update overwrites the install directory, which would include this binary if
-//! it were running from there; and the installer must not be a child of a
-//! process that is about to exit. Nothing here deletes the copy — a process
+//! **It is always run from a copy in the data directory's `update\runner\`,
+//! never from the install directory itself.** Two things depend on that. A
+//! portable update replaces the files at the top of the install directory,
+//! which would include this binary if it were running from there — a portable
+//! copy's data directory is a *subfolder* of the install, which `apply_portable`
+//! never touches. And the installer must not be a child of a process that is
+//! about to exit. Nothing here deletes the copy — a process
 //! cannot unmap its own image — so Pubsplash clears the whole work directory at
 //! its next start (`update::cleanup_leftovers`).
 //!
@@ -534,6 +536,24 @@ mod tests {
         apply_portable(&staging, &target, None).expect("the update applies");
 
         assert_eq!(read(&target, "pubsplash-update.exe"), "brand new");
+    }
+
+    /// Subfolders survive an update untouched, which is what lets a portable
+    /// copy keep its settings in `user_data\` inside the folder being replaced:
+    /// the staged download and this very binary are running from in there.
+    #[test]
+    fn leaves_subfolders_alone() {
+        let scratch = Scratch::new("subfolders");
+        let staging = scratch.sub("staging");
+        let target = scratch.sub("target");
+        write(&staging, "pubsplash.exe", "new");
+        write(&target, "pubsplash.exe", "old");
+        let data = scratch.sub("target/user_data");
+        write(&data, "config.json", "settings");
+
+        apply_portable(&staging, &target, None).expect("the update applies");
+
+        assert_eq!(read(&data, "config.json"), "settings");
     }
 
     /// Someone's own files sitting beside a portable copy must survive. This is

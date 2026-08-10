@@ -262,12 +262,17 @@ pub const MAIN_BINARY: &str = "pubsplash.exe";
 /// The helper that applies an update once Pubsplash has exited.
 pub const HELPER_BINARY: &str = "pubsplash-update.exe";
 
-/// `%LOCALAPPDATA%\pubsplash\update` — downloads, staging, and the helper copy.
+/// Downloads, staging, and the helper copy: `%LOCALAPPDATA%\pubsplash\update`,
+/// or `user_data\update` inside a portable copy.
 ///
-/// Under the data directory rather than the install directory on purpose: a
-/// per-machine install lives in Program Files, which an unelevated Pubsplash
-/// cannot write to, and a portable update must not stage into the very folder it
-/// is about to overwrite.
+/// Under the data directory rather than the install directory on purpose, and
+/// for two different reasons. A per-machine install lives in Program Files,
+/// which an unelevated Pubsplash cannot write to. A portable update overwrites
+/// its install directory, so nothing it is still using may be among the files
+/// being replaced — which a portable copy's data directory satisfies by being a
+/// *subfolder*: `apply_portable` replaces the top-level files the release ships
+/// and touches nothing else, so the staged download and the running helper are
+/// out of its way (`updater::tests::leaves_subfolders_alone`).
 pub fn work_dir() -> PathBuf {
     crate::config::config_dir().join("update")
 }
@@ -375,10 +380,12 @@ mod tests {
         assert!(runner_dir().starts_with(&work));
     }
 
-    /// A portable update stages into the data directory, never into the folder
-    /// it is about to overwrite.
+    /// The test binary is not a portable copy, so this is the installed layout:
+    /// its data directory is under `%LOCALAPPDATA%`, and an update therefore
+    /// never stages into a Program Files install it cannot write to.
     #[test]
-    fn staging_never_lands_inside_an_install() {
+    fn an_installed_copy_never_stages_into_its_install_directory() {
+        assert!(!crate::data_dir::is_portable());
         let install = PathBuf::from(r"C:\Program Files\Pubsplash");
         assert!(!work_dir().starts_with(&install));
     }
