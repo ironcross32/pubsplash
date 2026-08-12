@@ -278,7 +278,8 @@ pub struct SiteConfig {
     pub email: String,
     /// Audiopub login password.
     pub password: Secret,
-    /// Raw Icecast server host or address, without the port.
+    /// Raw Icecast server host or address, without the port. Used by both
+    /// Audiopub and direct Icecast services.
     pub icecast_server: String,
     pub icecast_port: u16,
     /// Raw Icecast mount point, with or without a leading slash.
@@ -297,7 +298,7 @@ impl Default for SiteConfig {
             email: String::new(),
             password: Secret::default(),
             icecast_server: String::new(),
-            icecast_port: 8000,
+            icecast_port: 0,
             icecast_mount: String::new(),
             icecast_username: "source".to_string(),
             icecast_password: Secret::default(),
@@ -330,6 +331,7 @@ impl SiteConfig {
             id,
             nickname,
             service_type: StreamingServiceType::Icecast,
+            icecast_port: 8000,
             ..Default::default()
         }
     }
@@ -381,8 +383,15 @@ impl SiteConfig {
         if self.nickname.trim().is_empty() {
             self.nickname = self.display_name();
         }
-        if self.icecast_port == 0 {
+        if self.service_type == StreamingServiceType::Icecast && self.icecast_port == 0 {
             self.icecast_port = 8000;
+        } else if self.service_type == StreamingServiceType::Audiopub
+            && self.icecast_server.trim().is_empty()
+        {
+            // Audiopub profiles written before the server field was exposed
+            // inherited the old hidden 8000 default. Clear it so both endpoint
+            // values are explicitly entered together.
+            self.icecast_port = 0;
         }
     }
 }
@@ -1445,6 +1454,8 @@ mod tests {
         assert_eq!(service.nickname, "https://example.org/");
         assert_eq!(service.email, "dj@example.org");
         assert_eq!(service.password.as_str(), "secret");
+        assert_eq!(service.icecast_server, "");
+        assert_eq!(service.icecast_port, 0);
     }
 
     #[test]

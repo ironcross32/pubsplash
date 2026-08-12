@@ -6,6 +6,10 @@
 
 ### Fixes
 
+- Audiopub services now use user-configured Icecast servers and ports.
+
+- Direct Icecast services now accept `/` as the mount point.
+
 ### Changes
 
 ## 0.1.6

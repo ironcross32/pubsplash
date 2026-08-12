@@ -1609,6 +1609,12 @@ pub fn service_profile_from_site(site: &SiteConfig) -> Result<ServiceProfile, St
     match site.service_type {
         StreamingServiceType::Audiopub => {
             let site_url = validate_site_url(&site.url)?;
+            if site.icecast_server.trim().is_empty() {
+                return Err("Enter the Audiopub Icecast server.".to_string());
+            }
+            if site.icecast_port == 0 {
+                return Err("Enter a valid Audiopub Icecast port.".to_string());
+            }
             if site.email.trim().is_empty() || site.password.is_empty() {
                 return Err("Enter your email and password first.".to_string());
             }
@@ -1616,6 +1622,8 @@ pub fn service_profile_from_site(site: &SiteConfig) -> Result<ServiceProfile, St
                 id: site.id.clone(),
                 nickname,
                 site_url,
+                server: site.icecast_server.trim().to_string(),
+                port: site.icecast_port,
                 email: site.email.trim().to_string(),
                 password: site.password.clone(),
             })
@@ -1627,7 +1635,7 @@ pub fn service_profile_from_site(site: &SiteConfig) -> Result<ServiceProfile, St
             if site.icecast_port == 0 {
                 return Err("Enter a valid Icecast port.".to_string());
             }
-            if site.icecast_mount.trim().trim_start_matches('/').is_empty() {
+            if site.icecast_mount.trim().is_empty() {
                 return Err("Enter the Icecast mount point.".to_string());
             }
             if site.icecast_password.is_empty() {

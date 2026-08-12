@@ -48,7 +48,7 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct IcecastTarget {
     /// Host and port, e.g. `live.audiopub.site:8000`.
     pub host: String,
-    /// Mount without leading slash (the Audio Pub user id).
+    /// Mount without a leading slash, or `/` for the server root.
     pub mount: String,
     /// Source username, usually `source`.
     pub username: String,
@@ -257,8 +257,13 @@ impl IcecastConnection {
             target.username.trim()
         };
         let auth = authorization_header(username, target.password.as_str());
+        let mount_path = if target.mount == "/" {
+            "/".to_string()
+        } else {
+            format!("/{}", target.mount)
+        };
         let request = format!(
-            "PUT /{mount} HTTP/1.1\r\n\
+            "PUT {mount_path} HTTP/1.1\r\n\
              Host: {host}\r\n\
              Authorization: Basic {auth}\r\n\
              User-Agent: pubsplash/{version}\r\n\
@@ -266,7 +271,7 @@ impl IcecastConnection {
              Expect: 100-continue\r\n\
              Ice-Public: 0\r\n\
              \r\n",
-            mount = target.mount,
+            mount_path = mount_path,
             host = target.host,
             auth = auth,
             version = env!("CARGO_PKG_VERSION"),
@@ -386,6 +391,39 @@ mod tests {
         assert!(req.contains("Authorization: Basic c291cmNlOmtleQ=="));
         assert!(req.contains("Content-Type: audio/mpeg"));
         assert_eq!(audio, b"MP3!");
+    }
+
+    #[tokio::test]
+    async fn root_mount_uses_the_server_root_path() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let n = sock.read(&mut buf).await.unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            sock.write_all(b"HTTP/1.1 100 Continue\r\n\r\n")
+                .await
+                .unwrap();
+            req
+        });
+
+        let target = IcecastTarget {
+            host: addr.to_string(),
+            mount: "/".into(),
+            username: "source".into(),
+            password: Secret::new("key"),
+            content_type: "audio/mpeg".into(),
+        };
+        IcecastConnection::connect(&target)
+            .await
+            .unwrap()
+            .close()
+            .await;
+
+        let req = server.await.unwrap();
+        assert!(req.starts_with("PUT / HTTP/1.1\r\n"));
+        assert!(!req.starts_with("PUT //"));
     }
 
     #[tokio::test]
