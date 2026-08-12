@@ -956,7 +956,7 @@ pub struct SpeechConfig {
     pub google_api_key: Secret,
     /// Legacy fallback for sources without per-source provider settings.
     pub google_language_code: String,
-    /// WebSocket URL of a Star coagulator, e.g. `ws://localhost:4567`.
+    /// WebSocket URL of a Star coagulator, e.g. `ws://localhost:7774`.
     pub star_host: String,
     /// Longest message a network engine will synthesize. Chat can carry a wall
     /// of text, and the paid engines bill by the character, so messages are
@@ -988,7 +988,7 @@ impl Default for SpeechConfig {
             aws_engine: "neural".into(),
             google_api_key: Secret::default(),
             google_language_code: "en-US".into(),
-            star_host: "ws://localhost:4567".into(),
+            star_host: "ws://localhost:7774".into(),
             max_chars: Self::DEFAULT_MAX_CHARS,
             min_request_interval_ms: Self::DEFAULT_MIN_INTERVAL_MS,
             last_engine: String::new(),
@@ -999,6 +999,15 @@ impl Default for SpeechConfig {
 impl SpeechConfig {
     pub const DEFAULT_MAX_CHARS: usize = 500;
     pub const DEFAULT_MIN_INTERVAL_MS: u64 = 750;
+
+    fn fix_up(&mut self) {
+        // STAR has used 7774 since its first public implementation. Pubsplash
+        // previously supplied 4567 itself, so that exact old built-in value is
+        // safe to migrate while every user-entered endpoint remains untouched.
+        if self.star_host.trim() == "ws://localhost:4567" {
+            self.star_host = "ws://localhost:7774".into();
+        }
+    }
 
     /// The effective character cap; 0 in the file means "use the default".
     pub fn max_chars(&self) -> usize {
@@ -1049,6 +1058,7 @@ pub fn load_from(path: &Path) -> Config {
             config.scenes.ensure_default_scene();
             config.fix_up_routing();
             config.fix_up_tts_profiles();
+            config.speech.fix_up();
             config.keybinds.fix_up();
             config.mastodon.fix_up();
             config
@@ -1114,6 +1124,28 @@ mod tests {
         save_to(&config, &path);
         assert_eq!(load_from(&path).audio.master_volume, 7);
         assert!(!temp.exists(), "temp file should be renamed away, not left");
+    }
+
+    #[test]
+    fn the_old_builtin_star_port_is_migrated_without_touching_custom_hosts() {
+        let old_path = temp_path("old_star_port.json");
+        std::fs::write(
+            &old_path,
+            r#"{"speech":{"star_host":"ws://localhost:4567"}}"#,
+        )
+        .unwrap();
+        assert_eq!(load_from(&old_path).speech.star_host, "ws://localhost:7774");
+
+        let custom_path = temp_path("custom_star_port.json");
+        std::fs::write(
+            &custom_path,
+            r#"{"speech":{"star_host":"ws://localhost:4568"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_from(&custom_path).speech.star_host,
+            "ws://localhost:4568"
+        );
     }
 
     #[test]

@@ -6,6 +6,10 @@
 
 ### Fixes
 
+- STAR voices now populate the voice dropdown from the configured coagulator.
+
+- STAR now defaults to the coagulator's standard port 7774.
+
 ### Changes
 
 ## 0.1.6
