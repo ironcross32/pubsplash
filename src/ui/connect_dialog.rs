@@ -166,14 +166,14 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     sizer.add(&service_type, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&url_label, 0, SizerFlag::All, 4);
     sizer.add(&url_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
-    sizer.add(&email_label, 0, SizerFlag::All, 4);
-    sizer.add(&email_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
-    sizer.add(&password_label, 0, SizerFlag::All, 4);
-    sizer.add(&password_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&server_label, 0, SizerFlag::All, 4);
     sizer.add(&server_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&port_label, 0, SizerFlag::All, 4);
     sizer.add(&port_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&email_label, 0, SizerFlag::All, 4);
+    sizer.add(&email_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    sizer.add(&password_label, 0, SizerFlag::All, 4);
+    sizer.add(&password_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&mount_label, 0, SizerFlag::All, 4);
     sizer.add(&mount_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&username_label, 0, SizerFlag::All, 4);
@@ -197,14 +197,32 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
             let audiopub = service_type.get_selection() != 1;
             url_label.show(audiopub);
             url_input.show(audiopub);
+            // These two fields serve both service types, so their wording
+            // changes with the type - and the accessible name has to be re-set
+            // alongside the visible label, or a screen reader goes on reading
+            // the wording the field had when the dialog was built.
+            let server_name = if audiopub {
+                "Audiopub Icecast server"
+            } else {
+                "Icecast server"
+            };
+            let port_name = if audiopub {
+                "Audiopub Icecast port"
+            } else {
+                "Icecast port"
+            };
+            server_label.set_label(server_name);
+            super::set_accessible_name(&server_input, server_name);
+            port_label.set_label(port_name);
+            super::set_accessible_name(&port_input, port_name);
             email_label.show(audiopub);
             email_input.show(audiopub);
             password_label.show(audiopub);
             password_input.show(audiopub);
-            server_label.show(!audiopub);
-            server_input.show(!audiopub);
-            port_label.show(!audiopub);
-            port_input.show(!audiopub);
+            server_label.show(true);
+            server_input.show(true);
+            port_label.show(true);
+            port_input.show(true);
             mount_label.show(!audiopub);
             mount_input.show(!audiopub);
             username_label.show(!audiopub);
@@ -321,8 +339,13 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
                 url_input.set_value(&service.url);
                 email_input.set_value(&service.email);
                 password_input.set_value(service.password.as_str());
-                server_input.set_value(&service.icecast_server);
-                port_input.set_value(&service.icecast_port.to_string());
+                // The effective endpoint, not the raw fields: an Audiopub
+                // service that has never had one typed in publishes to the
+                // site's usual host, and the dialog shows what will actually be
+                // dialled rather than a blank the user has to guess at.
+                let (server, port) = service.icecast_endpoint();
+                server_input.set_value(&server);
+                port_input.set_value(&port.to_string());
                 mount_input.set_value(&service.icecast_mount);
                 username_input.set_value(&service.icecast_username);
                 icecast_password_input.set_value(service.icecast_password.as_str());

@@ -35,7 +35,9 @@ Both kinds keep themselves up to date — see [Automatic updates](#automatic-upd
 2. Select the built-in **Audiopub** service, or choose **Add** for a self-hosted Audiopub instance or Icecast.
 3. Enter the requested details and choose **Connect**.
 
-For Icecast, you normally need the server, port, mount point, username, and source password. The username defaults to source. Icecast does not provide Audiopub chat, listener counts, archiving, or an Audiopub stream page.
+For Audiopub, you need the site address, your email, and your password. The Icecast server and port are filled in for you from the site address and only need changing if the instance publishes somewhere other than the usual `live.` host on port 8000.
+
+For Icecast, you normally need the server, port, mount point, username, and source password. The username defaults to source; the mount point may be `/` for the server root. Icecast does not provide Audiopub chat, listener counts, archiving, or an Audiopub stream page.
 
 ### 2. Add audio
 
