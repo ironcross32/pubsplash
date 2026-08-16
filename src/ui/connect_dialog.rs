@@ -215,6 +215,10 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         }
     };
 
+    // Refills the service list. `select_id` names the service the selection
+    // should land on and is what marks the call a deliberate edit; `None`
+    // relabels in place and leaves the selection where the user put it, which is
+    // what the connection-state refreshes want - see `super::list`.
     let refresh_services = {
         let app = app.clone();
         move |select_id: Option<&str>| {
@@ -242,17 +246,32 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
                     label
                 })
                 .collect();
-            super::list::fill(&services_list, &labels, NO_SERVICES);
-            if !services.is_empty() {
-                let select_index = services
-                    .iter()
-                    .position(|service| {
-                        Some(service.id.as_str()) == select_id
-                            || Some(service.url.as_str()) == select_id
-                    })
-                    .unwrap_or(0);
-                services_list.set_selection(select_index as u32, true);
+            let synced = super::list::sync(&services_list, &labels, NO_SERVICES);
+            if services.is_empty() {
+                return;
             }
+            if select_id.is_none() && synced == super::list::Synced::Kept {
+                return;
+            }
+            let select_index = services
+                .iter()
+                .position(|service| {
+                    Some(service.id.as_str()) == select_id
+                        || Some(service.url.as_str()) == select_id
+                })
+                .unwrap_or(0);
+            services_list.set_selection(select_index as u32, true);
+        }
+    };
+
+    // The id of the highlighted service, which is what the Connect button acts
+    // on. `None` only for the placeholder row.
+    let selected_service_id = {
+        let app = app.clone();
+        move || -> Option<String> {
+            let config = app.config.borrow();
+            let index = super::list::selection(&services_list, config.connection.sites.len())?;
+            Some(config.connection.sites.get(index)?.id.clone())
         }
     };
 
@@ -314,14 +333,35 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         }
     };
 
+    // The button acts on the *highlighted* service, so it says which. It used
+    // to read Disconnect whenever any connection existed, which made pressing
+    // it on a service you had just selected disconnect the other one - and
+    // since nothing refreshed the list either, the service you had left behind
+    // went on claiming to be connected.
     let update_connect_label = {
         let app = app.clone();
+        let selected_service_id = selected_service_id.clone();
         move || {
-            // While any connection exists the button reads Disconnect, even
-            // if a different service is highlighted.
-            let connected = app.run.borrow().connected_service.is_some();
-            connect_button.set_label(if connected { "Disconnect" } else { "Connect" });
+            let connected = app.run.borrow().connected_service.clone();
+            let disconnects = connected.is_some() && connected == selected_service_id();
+            connect_button.set_label(if disconnects {
+                "Dis&connect"
+            } else {
+                "&Connect"
+            });
         }
+    };
+
+    // Everything the connection state decides, in one call: the pump holds a
+    // handle to this so a result arriving from the network thread updates the
+    // dialog the same way pressing the button does.
+    let sync_connection_ui: std::rc::Rc<dyn Fn()> = {
+        let refresh_services = refresh_services.clone();
+        let update_connect_label = update_connect_label.clone();
+        std::rc::Rc::new(move || {
+            refresh_services(None);
+            update_connect_label();
+        })
     };
 
     let initial_service = {
@@ -338,9 +378,12 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
 
     {
         let load_fields = load_fields.clone();
-        services_list
-            .clone()
-            .on_selection_changed(move |_| load_fields());
+        let update_connect_label = update_connect_label.clone();
+        services_list.clone().on_selection_changed(move |_| {
+            load_fields();
+            // Moving to another service changes what the button will do.
+            update_connect_label();
+        });
     }
 
     {
@@ -374,13 +417,32 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
             }
             service.email = email_input.get_value().trim().to_string();
             service.password = Secret::new(password_input.get_value());
-            service.icecast_server = server_input.get_value().trim().to_string();
-            service.icecast_port = port_input.get_value().trim().parse().unwrap_or(0);
+            // A `host:port`, or a listen URL pasted whole, is unpacked into the
+            // two fields it belongs in - so what is stored, and what the dialog
+            // shows next time, is what will actually be dialled. Anything that
+            // will not parse is kept verbatim for `service_profile_from_site` to
+            // refuse with a message rather than being silently mangled here.
+            let typed_server = server_input.get_value().trim().to_string();
+            let typed_port: u16 = port_input.get_value().trim().parse().unwrap_or(0);
+            let (server, port) = match crate::net::icecast::split_host_port(&typed_server) {
+                Ok((host, embedded)) => (host, embedded.unwrap_or(typed_port)),
+                Err(_) => (typed_server.clone(), typed_port),
+            };
+            service.icecast_server = server.clone();
+            service.icecast_port = port;
             service.icecast_mount = mount_input.get_value().trim().to_string();
             service.icecast_username = username_input.get_value().trim().to_string();
             service.icecast_password = Secret::new(icecast_password_input.get_value());
             let id = service.id.clone();
             drop(config);
+            // After the borrow, not during it: writing to a widget is a call out
+            // into wx, and nothing in this closure may hold `config` across one.
+            if server != typed_server {
+                server_input.set_value(&server);
+            }
+            if port != typed_port {
+                port_input.set_value(&port.to_string());
+            }
             app.save_config();
             Some(id)
         }
@@ -495,15 +557,23 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
 
     {
         let app = app.clone();
-        let update_connect_label = update_connect_label.clone();
+        let selected_service_id = selected_service_id.clone();
         let save_fields = save_fields.clone();
         let dialog_for_connect = dialog;
         connect_button.on_click(move |_| {
-            let connected = app.run.borrow().connected_service.is_some();
-            if connected {
+            let connected = app.run.borrow().connected_service.clone();
+            // Only the connected service's own row disconnects. Pressing this
+            // on any other service connects to that one instead, which the
+            // network thread handles as a switch: it ends whatever stream is
+            // live and replaces the connection.
+            if connected.is_some() && connected == selected_service_id() {
+                // Saved on the way out for the same reason Close saves: what is
+                // typed in these fields is not lost by pressing a button.
+                let _ = save_fields();
                 app.net.send(NetCommand::Disconnect);
-                app.run.borrow_mut().connected_service = None;
-                update_connect_label();
+                // `connected_service`, the button label and the list's
+                // "(connected)" marker are all left to the pump's `Disconnected`
+                // arm, so one place decides what the dialog says.
                 return;
             }
             let Some(id) = save_fields() else { return };
@@ -542,6 +612,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     *app.connect_ui.borrow_mut() = Some(super::ConnectUi {
         dialog,
         connect_button,
+        sync: sync_connection_ui,
     });
     dialog.show_modal();
     *app.connect_ui.borrow_mut() = None;

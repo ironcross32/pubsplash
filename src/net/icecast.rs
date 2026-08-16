@@ -44,6 +44,74 @@ pub const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// up the whole teardown.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Splits what someone typed into a "server" field into a host and, when they
+/// included one, a port.
+///
+/// Every other source client takes `host:port` in a single box, so that is what
+/// gets typed into ours — and the port field then appended a second one, making
+/// `gomsen.com:8000:8000`. Nothing resolves that, so it surfaced as
+/// `unknown host (os error 11001)` from **Start streaming**, minutes after the
+/// field that was actually wrong had been left behind. A scheme (`http://`) and
+/// a trailing mount get pasted in for the same reason, out of the listen URL,
+/// and are dropped here too — the mount has its own field.
+///
+/// The returned host is ready to have `:port` appended: an IPv6 literal keeps
+/// its brackets, because that is the form both `TcpStream::connect` and the
+/// `Host` header need.
+pub fn split_host_port(input: &str) -> Result<(String, Option<u16>), String> {
+    let mut rest = input.trim();
+    if let Some((_, after)) = rest.split_once("://") {
+        rest = after;
+    }
+    // Credentials in the authority are never ours to use: the username and
+    // password fields are.
+    if let Some((_, after)) = rest.rsplit_once('@') {
+        rest = after;
+    }
+    // From the first slash on it is a path, i.e. the mount point.
+    if let Some((before, _)) = rest.split_once('/') {
+        rest = before;
+    }
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Err("Enter the Icecast server.".to_string());
+    }
+    // An IPv6 literal is bracketed and full of colons; only a colon *after* the
+    // closing bracket separates a port.
+    let (host, port_text) = if rest.starts_with('[') {
+        let end = rest
+            .find(']')
+            .ok_or_else(|| format!("{rest:?} is missing its closing ']'."))?;
+        let tail = &rest[end + 1..];
+        if !tail.is_empty() && !tail.starts_with(':') {
+            return Err(format!("{rest:?} is not a server address."));
+        }
+        (&rest[..=end], tail.strip_prefix(':'))
+    } else {
+        match rest.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (rest, None),
+        }
+    };
+    let host = host.trim();
+    if host.is_empty() || host == "[]" {
+        return Err("Enter the Icecast server.".to_string());
+    }
+    if host.contains(char::is_whitespace) || (!host.starts_with('[') && host.contains(':')) {
+        return Err(format!("{host:?} is not a server address."));
+    }
+    let port = match port_text.map(str::trim) {
+        None => None,
+        Some(text) => Some(
+            text.parse::<u16>()
+                .ok()
+                .filter(|port| *port != 0)
+                .ok_or_else(|| format!("{text:?} is not a port number."))?,
+        ),
+    };
+    Ok((host.to_string(), port))
+}
+
 #[derive(Debug, Clone)]
 pub struct IcecastTarget {
     /// Host and port, e.g. `live.audiopub.site:8000`.
@@ -344,6 +412,66 @@ mod tests {
         assert_eq!(base64(b"fo"), "Zm8=");
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(b"source:abc123"), "c291cmNlOmFiYzEyMw==");
+    }
+
+    /// The bug this function exists for: `host:port` in the server field plus a
+    /// port field produced `gomsen.com:8000:8000`, which resolves to nothing.
+    #[test]
+    fn server_field_may_carry_its_own_port() {
+        assert_eq!(
+            split_host_port("gomsen.com:8000").unwrap(),
+            ("gomsen.com".to_string(), Some(8000))
+        );
+        assert_eq!(
+            split_host_port("gomsen.com").unwrap(),
+            ("gomsen.com".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn a_pasted_listen_url_is_reduced_to_its_host() {
+        for pasted in [
+            "http://ice.example.org:8000/live.mp3",
+            "https://ice.example.org:8000/live.mp3",
+            "  http://source:hunter2@ice.example.org:8000/  ",
+            "ice.example.org:8000/live.mp3",
+        ] {
+            assert_eq!(
+                split_host_port(pasted).unwrap(),
+                ("ice.example.org".to_string(), Some(8000)),
+                "{pasted}"
+            );
+        }
+    }
+
+    /// The brackets stay: `TcpStream::connect` and the `Host` header both need
+    /// them once a port is appended.
+    #[test]
+    fn ipv6_literals_keep_their_brackets_and_their_colons() {
+        assert_eq!(
+            split_host_port("[::1]:8000").unwrap(),
+            ("[::1]".to_string(), Some(8000))
+        );
+        assert_eq!(
+            split_host_port("[2001:db8::1]").unwrap(),
+            ("[2001:db8::1]".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn nonsense_is_refused_rather_than_handed_to_the_resolver() {
+        for bad in [
+            "",
+            "   ",
+            "http://",
+            "ice.example.org:",
+            "ice.example.org:0",
+        ] {
+            assert!(split_host_port(bad).is_err(), "{bad:?} should be refused");
+        }
+        assert!(split_host_port("ice.example.org:80000").is_err());
+        assert!(split_host_port("two hosts.example.org").is_err());
+        assert!(split_host_port("[::1:8000").is_err());
     }
 
     #[test]
