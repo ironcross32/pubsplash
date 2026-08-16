@@ -280,7 +280,8 @@ pub struct SiteConfig {
     pub email: String,
     /// Audiopub login password.
     pub password: Secret,
-    /// Raw Icecast server host or address, without the port.
+    /// Raw Icecast server host or address, without the port. Used by both
+    /// Audiopub and direct Icecast services.
     pub icecast_server: String,
     pub icecast_port: u16,
     /// Raw Icecast mount point, with or without a leading slash.
@@ -314,6 +315,10 @@ impl SiteConfig {
             nickname: "Audiopub".to_string(),
             service_type: StreamingServiceType::Audiopub,
             url: MAIN_SITE_URL.to_string(),
+            // Filled in here as well as by `repair_defaults`, so a config that
+            // has never been through a load already carries the endpoint the
+            // service actually uses and the dialog has something to show.
+            icecast_server: default_audiopub_server(MAIN_SITE_URL).unwrap_or_default(),
             ..Default::default()
         }
     }
@@ -383,10 +388,59 @@ impl SiteConfig {
         if self.nickname.trim().is_empty() {
             self.nickname = self.display_name();
         }
+        // Both service types now carry an editable endpoint, and both default
+        // to port 8000. An Audiopub service additionally fills its server in
+        // from the site URL when it is blank - which is every profile written
+        // before the field existed, the built-in Audiopub service included. The
+        // field is a default, not a requirement: leave it alone and the service
+        // goes on reaching the same host it always did.
         if self.icecast_port == 0 {
             self.icecast_port = 8000;
         }
+        if self.service_type == StreamingServiceType::Audiopub
+            && self.icecast_server.trim().is_empty()
+            && let Some(server) = default_audiopub_server(&self.url)
+        {
+            self.icecast_server = server;
+        }
     }
+
+    /// The endpoint to publish to, with the Audiopub defaults applied.
+    ///
+    /// [`repair_defaults`](Self::repair_defaults) fills these fields in on
+    /// load, so they are normally already set; this covers the service the user
+    /// has just blanked in the dialog, which reaches Connect without passing
+    /// through a load.
+    pub fn icecast_endpoint(&self) -> (String, u16) {
+        let server = self.icecast_server.trim();
+        let server = if server.is_empty() && self.service_type == StreamingServiceType::Audiopub {
+            default_audiopub_server(&self.url).unwrap_or_default()
+        } else {
+            server.to_string()
+        };
+        let port = if self.icecast_port == 0 {
+            8000
+        } else {
+            self.icecast_port
+        };
+        (server, port)
+    }
+}
+
+/// Audiopub's published convention: the `live.` subdomain of the site, which is
+/// what the app derived on every connect before the host became configurable.
+///
+/// `None` only when there is no site URL to derive from, which
+/// `validate_site_url` refuses before the endpoint is ever reached.
+pub fn default_audiopub_server(site_url: &str) -> Option<String> {
+    let host = site_url
+        .trim()
+        .trim_end_matches('/')
+        .rsplit("//")
+        .next()
+        .unwrap_or_default()
+        .trim();
+    (!host.is_empty()).then(|| format!("live.{host}"))
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1449,6 +1503,11 @@ mod tests {
         assert_eq!(service.nickname, "https://example.org/");
         assert_eq!(service.email, "dj@example.org");
         assert_eq!(service.password.as_str(), "secret");
+        // Written before the endpoint fields existed, so it inherits the host
+        // the app used to derive on every connect rather than a blank the user
+        // would have to fill in before the service worked again.
+        assert_eq!(service.icecast_server, "live.example.org");
+        assert_eq!(service.icecast_port, 8000);
     }
 
     #[test]
@@ -1466,6 +1525,45 @@ mod tests {
         assert_eq!(main.nickname, "Audiopub");
         assert_eq!(main.service_type, StreamingServiceType::Audiopub);
         assert_eq!(main.url, MAIN_SITE_URL);
+    }
+
+    #[test]
+    fn the_built_in_audiopub_service_keeps_working_without_an_endpoint_typed_in() {
+        let path = temp_path("main_site_endpoint.json");
+        save_to(&Config::default(), &path);
+        let loaded = load_from(&path);
+        let main = &loaded.connection.sites[0];
+        assert_eq!(main.icecast_server, "live.audiopub.site");
+        assert_eq!(main.icecast_endpoint(), ("live.audiopub.site".into(), 8000));
+    }
+
+    #[test]
+    fn a_typed_in_audiopub_endpoint_is_left_alone() {
+        let path = temp_path("audiopub_endpoint_kept.json");
+        let mut config = Config::default();
+        config.connection.sites.push(SiteConfig {
+            id: "audiopub-2".into(),
+            nickname: "Elsewhere".into(),
+            service_type: StreamingServiceType::Audiopub,
+            url: "https://example.org/".into(),
+            icecast_server: "ice.example.org".into(),
+            icecast_port: 9000,
+            ..Default::default()
+        });
+        save_to(&config, &path);
+        let loaded = load_from(&path);
+        let service = loaded.connection.site("audiopub-2").unwrap();
+        assert_eq!(service.icecast_endpoint(), ("ice.example.org".into(), 9000));
+    }
+
+    #[test]
+    fn a_site_url_with_no_host_derives_no_server() {
+        assert_eq!(default_audiopub_server(""), None);
+        assert_eq!(default_audiopub_server("   "), None);
+        assert_eq!(
+            default_audiopub_server("http://example.org"),
+            Some("live.example.org".to_string())
+        );
     }
 
     #[test]

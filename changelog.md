@@ -8,6 +8,8 @@
 
 - **Sound packs can hold Opus as well as WAV.** A pack's sounds may now be Ogg Opus files, mixed freely with WAV ones in the same pack, and an existing pack keeps working untouched. In the Sound Pack Manager, **Browse** accepts `.wav` and `.opus`, and the new **Encode sounds as Opus (96 kbps)** checkbox converts WAV sources to Opus as it saves them into the project — a pack of the same sounds ends up a small fraction of the size, with no audible difference on cues this short. A source that is already Opus is copied rather than re-encoded, so nothing is ever put through two lossy passes. Leave the box clear and saving behaves exactly as it did.
 
+- **An Audiopub service's Icecast server and port can now be set**, on the same two fields a direct Icecast service uses. Pubsplash worked out the publishing host from the site address — the `live.` subdomain, port 8000 — which is right for audiopub.site and for any instance that follows the same convention, but there was no way to say otherwise for one that does not. Leave the fields as you find them and nothing changes: they arrive already filled in with the host that was being used before, and an existing setup keeps working without being touched. As with a direct Icecast service, Connect now checks that the server you named can be found, rather than letting a typo wait until Start streaming to surface.
+
 - Pubsplash now reads **MP3, FLAC, Ogg Vorbis and Ogg Opus** wherever it reads audio, not just WAV. This covers what a speech service sends back as well as what a sound pack is built from.
 
 ### Fixes
@@ -17,6 +19,7 @@
 - An existing portable copy brings its settings across the first time it starts: whatever is in `%LOCALAPPDATA%\pubsplash` is copied into `user_data`, minus the logs and crash dumps, which belong to the machine rather than to you. The old folder is left where it is, so an installed Pubsplash on the same machine is unaffected. Note that saved passwords and API keys are encrypted for the Windows account that entered them, so they survive the move but not a move to a different machine or user account.
 
 - The portable build's default recording folder is now `recordings` inside `user_data`, so recordings stay with the copy that made them instead of going to the Music library of whichever machine it happened to be run on. An installed copy still defaults to the Music library, and a recording folder you have chosen yourself is left alone in both.
+
 - An Icecast server entered as `host:port` now works. The port field was appended to whatever was in the server field, so `ice.example.org:8000` became `ice.example.org:8000:8000` and streaming failed with "connection failed: unknown host (os error 11001)". A whole listen URL pasted into the field — scheme, credentials, port and mount and all — is understood too, and its parts are moved into the fields they belong in, so the dialog shows what will actually be dialled.
 
 - Connecting to an Icecast service now checks that the address it was given exists, and reports it on the spot. It used to be pure field validation, so a mistyped server said "Connected" and then failed as a "Streaming problem" the next time Start streaming was pressed. The mount point is not touched by the check.
@@ -30,6 +33,8 @@
 - Disconnecting from a service while a stream is live now ends the stream in Pubsplash too. The broadcast stopped, but the app stayed on "Streaming" and kept encoding.
 
 - A stream that fails to start now says why in the log. The reason only ever appeared in the modal, which is gone as soon as it is dismissed.
+
+- Direct Icecast services now accept `/` as the mount point. A station that publishes to the server root had no way to say so: the mount field refused to be just a slash, and the request went out as `PUT //`.
 
 ### Changes
 - **Sends is now one list of every destination.** The Sends dialog on Scenes and Sources shows master output and every bus as checkable rows: arrow to one and press SPACE to switch it on or off. Each row also says whether it is on, so screen readers announce the change. The separate Send directly to master checkbox is gone — master is the first row — and so are the Add send and Remove send buttons.

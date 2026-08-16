@@ -22,6 +22,8 @@ pub enum ServiceProfile {
         id: String,
         nickname: String,
         site_url: String,
+        server: String,
+        port: u16,
         email: String,
         password: Secret,
     },
@@ -195,7 +197,8 @@ enum Connection {
         /// the cookie store to outlive any one request.
         client: Arc<AudioPubClient>,
         identity: StreamIdentity,
-        site_url: String,
+        server: String,
+        port: u16,
     },
     Icecast {
         server: String,
@@ -237,34 +240,35 @@ impl ActiveStream {
     }
 }
 
-/// Derives the Icecast host from a site URL: Audiopub convention is the
-/// `live.` subdomain on port 8000 (matches audiopub.site's published
-/// connection details).
-fn icecast_host_for(site_url: &str) -> String {
-    let host = site_url
-        .trim_end_matches('/')
-        .rsplit("//")
-        .next()
-        .unwrap_or(site_url);
-    format!("live.{host}:8000")
-}
-
 fn normalize_mount(mount: &str) -> String {
-    mount.trim().trim_start_matches('/').to_string()
+    let mount = mount.trim();
+    if !mount.is_empty() && mount.chars().all(|c| c == '/') {
+        "/".to_string()
+    } else {
+        mount.trim_start_matches('/').to_string()
+    }
 }
 
 fn audiopub_target_for(
-    site_url: &str,
+    server: &str,
+    port: u16,
     identity: &StreamIdentity,
     content_type: &str,
-) -> IcecastTarget {
-    IcecastTarget {
-        host: icecast_host_for(site_url),
+) -> Result<IcecastTarget, String> {
+    let server = server.trim();
+    if server.is_empty() {
+        return Err("Enter the Audiopub Icecast server.".to_string());
+    }
+    if port == 0 {
+        return Err("Enter a valid Audiopub Icecast port.".to_string());
+    }
+    Ok(IcecastTarget {
+        host: format!("{server}:{port}"),
         mount: identity.user_id.clone(),
         username: "source".to_string(),
         password: identity.stream_key.clone(),
         content_type: content_type.to_string(),
-    }
+    })
 }
 
 fn direct_icecast_target(
@@ -375,6 +379,8 @@ async fn net_loop(mut commands: tokio_mpsc::UnboundedReceiver<NetCommand>, event
                         id,
                         nickname,
                         site_url,
+                        server,
+                        port,
                         email,
                         password,
                     } => {
@@ -387,14 +393,29 @@ async fn net_loop(mut commands: tokio_mpsc::UnboundedReceiver<NetCommand>, event
                                 continue;
                             }
                         };
+                        // The publishing host is configurable here as well now,
+                        // so it is checked here as well: logging in proves the
+                        // *site* is reachable and says nothing about the Icecast
+                        // host beside it, which is not dialled until Start
+                        // streaming. Same lookup, same reason, as the direct
+                        // Icecast arm below.
+                        let host = format!("{server}:{port}");
+                        if let Err(message) = resolve_icecast_host(&host).await {
+                            let _ = events.send(NetEvent::ConnectFailed { message });
+                            continue;
+                        }
                         match client.login(&email, password.as_str()).await {
                             Ok(()) => match client.stream_identity().await {
                                 Ok(identity) => {
                                     let display_name = nickname;
+                                    log::info!(
+                                        "Audiopub service {display_name:?} publishes to {host}"
+                                    );
                                     connection = Some(Connection::Audiopub {
                                         client: Arc::new(client),
                                         identity,
-                                        site_url,
+                                        server,
+                                        port,
                                     });
                                     let _ = events.send(NetEvent::Connected {
                                         service_id: id,
@@ -1062,7 +1083,8 @@ async fn start_stream(
         Connection::Audiopub {
             client,
             identity,
-            site_url,
+            server,
+            port,
             ..
         } => {
             let stream_id = client
@@ -1070,7 +1092,7 @@ async fn start_stream(
                 .await
                 .map_err(|e| e.to_string())?;
 
-            let target = audiopub_target_for(site_url, identity, content_type);
+            let target = audiopub_target_for(server, *port, identity, content_type)?;
             // The first connect stays here, and inline, so a wrong stream key or
             // a banned account fails `Start streaming` at once with a reason.
             // Every *later* connect happens inside the sender task.
@@ -1411,25 +1433,14 @@ mod host_tests {
     use super::*;
 
     #[test]
-    fn icecast_host_derivation() {
-        assert_eq!(
-            super::icecast_host_for("https://audiopub.site/"),
-            "live.audiopub.site:8000"
-        );
-        assert_eq!(
-            super::icecast_host_for("http://example.org"),
-            "live.example.org:8000"
-        );
-    }
-
-    #[test]
-    fn audiopub_target_uses_site_identity() {
+    fn audiopub_target_uses_configured_server_and_site_identity() {
         let identity = StreamIdentity {
             user_id: "user-123".to_string(),
             stream_key: Secret::new("stream-key"),
         };
-        let target = audiopub_target_for("https://example.org/", &identity, "audio/mpeg");
-        assert_eq!(target.host, "live.example.org:8000");
+        let target =
+            audiopub_target_for("stream.example.org", 9000, &identity, "audio/mpeg").unwrap();
+        assert_eq!(target.host, "stream.example.org:9000");
         assert_eq!(target.mount, "user-123");
         assert_eq!(target.username, "source");
         assert_eq!(target.password.as_str(), "stream-key");
@@ -1496,5 +1507,18 @@ mod host_tests {
         };
         let target = direct_icecast_target(&conn, "audio/mpeg").unwrap();
         assert_eq!(target.username, "source");
+    }
+
+    #[test]
+    fn direct_icecast_target_accepts_the_root_mount() {
+        let conn = Connection::Icecast {
+            server: "radio.example.org".to_string(),
+            port: 8000,
+            mount: "/".to_string(),
+            username: "source".to_string(),
+            password: Secret::new("secret"),
+        };
+        let target = direct_icecast_target(&conn, "audio/mpeg").unwrap();
+        assert_eq!(target.mount, "/");
     }
 }
