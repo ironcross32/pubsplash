@@ -35,6 +35,9 @@
 - A stream that fails to start now says why in the log. The reason only ever appeared in the modal, which is gone as soon as it is dismissed.
 
 - Direct Icecast services now accept `/` as the mount point. A station that publishes to the server root had no way to say so: the mount field refused to be just a slash, and the request went out as `PUT //`.
+- STAR voices now populate the voice dropdown from the configured coagulator.
+
+- STAR now defaults to the coagulator's standard port 7774.
 
 ### Changes
 - **Sends is now one list of every destination.** The Sends dialog on Scenes and Sources shows master output and every bus as checkable rows: arrow to one and press SPACE to switch it on or off. Each row also says whether it is on, so screen readers announce the change. The separate Send directly to master checkbox is gone — master is the first row — and so are the Add send and Remove send buttons.
