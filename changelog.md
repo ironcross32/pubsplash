@@ -10,6 +10,8 @@
 
 ### Fixes
 
+- Google Translate TTS voices now populate the voice picker.
+
 ### Changes
 
 - Source settings are now one dialog per source with the kind's own settings on the first tab, replacing the five separate dialogs. Microphone sources have a real settings window for the first time.
