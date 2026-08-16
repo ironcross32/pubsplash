@@ -108,20 +108,11 @@ impl SpeechEngine for Star {
         let payload = serde_json::json!({ "user": USER }).to_string();
         let message = block_on(self.exchange(payload))?;
         let Message::Text(text) = message else {
-            return Ok(Vec::new());
+            return Err(TtsError::Network(
+                "the server returned an unexpected voice-list reply".into(),
+            ));
         };
-        let body: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| TtsError::Other(e.to_string()))?;
-        Ok(body
-            .get("voices")
-            .and_then(|v| v.as_array())
-            .map(|list| {
-                list.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(Voice::plain)
-                    .collect()
-            })
-            .unwrap_or_default())
+        parse_voices(&text)
     }
 
     // No `usage_model`: Star is self-hosted and has neither models nor billing.
@@ -130,6 +121,28 @@ impl SpeechEngine for Star {
         // Empty means the server's own default, which it never names back.
         (!request.voice.is_empty()).then(|| request.voice.clone())
     }
+}
+
+/// Parses the coagulator's response to `{"user": 4}`.
+fn parse_voices(text: &str) -> Result<Vec<Voice>, TtsError> {
+    let body: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| TtsError::Other(e.to_string()))?;
+    if let Some(detail) = body.get("error").and_then(|value| value.as_str()) {
+        return Err(TtsError::Service {
+            service: SERVICE,
+            status: 0,
+            detail: detail.to_string(),
+        });
+    }
+    let list = body
+        .get("voices")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| TtsError::Other("Star returned no voice list".into()))?;
+    Ok(list
+        .iter()
+        .filter_map(|value| value.as_str())
+        .map(Voice::plain)
+        .collect())
 }
 
 /// Splits a reply frame into its declared file extension and the audio bytes.
@@ -204,5 +217,20 @@ mod tests {
             engine.voices().unwrap_err(),
             TtsError::NotConfigured(_)
         ));
+    }
+
+    #[test]
+    fn the_upstream_voice_list_shape_is_parsed() {
+        let voices = parse_voices(r#"{"voices":["Microsoft Sam","Alex"]}"#).unwrap();
+        assert_eq!(voices.len(), 2);
+        assert_eq!(voices[0].id, "Microsoft Sam");
+        assert_eq!(voices[1].label, "Alex");
+    }
+
+    #[test]
+    fn a_protocol_error_is_not_mistaken_for_an_empty_voice_list() {
+        let error = parse_voices(r#"{"error":"must be revision 5 or higher"}"#).unwrap_err();
+        assert!(error.to_string().contains("revision 5"));
+        assert!(parse_voices("{}").is_err());
     }
 }

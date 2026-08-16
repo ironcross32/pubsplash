@@ -174,6 +174,7 @@ impl TtsCatalog {
                     | super::engines::ELEVENLABS
                     | super::engines::GOOGLE
                     | super::engines::OPENAI
+                    | super::engines::STAR
             )
         });
     }
@@ -368,7 +369,7 @@ pub fn discover(engine: &str, speech: &SpeechConfig) -> Result<EngineCatalog, Tt
         ),
         engines::OPENAI => engines::openai::discover(speech)?,
         engines::ELEVENLABS => engines::elevenlabs::discover(speech)?,
-        engines::AZURE | engines::GOOGLE => EngineCatalog::from_voices(
+        engines::AZURE | engines::GOOGLE | engines::STAR => EngineCatalog::from_voices(
             Vec::new(),
             engines::build(engine, speech)
                 .expect("engine is registered")
@@ -388,6 +389,9 @@ pub fn discover(engine: &str, speech: &SpeechConfig) -> Result<EngineCatalog, Tt
 pub fn startup_engines(speech: &SpeechConfig) -> Vec<&'static str> {
     use super::engines;
     let mut selected = vec![engines::SAPI, engines::EDGE];
+    if !speech.star_host.trim().is_empty() {
+        selected.push(engines::STAR);
+    }
     if !speech.openai_api_key.as_str().trim().is_empty() {
         selected.push(engines::OPENAI);
     }
@@ -612,12 +616,26 @@ mod tests {
     fn startup_refresh_requires_complete_credentials() {
         let mut speech = SpeechConfig {
             aws_access_key_id: "id".into(),
+            star_host: String::new(),
             ..Default::default()
         };
         assert!(!startup_engines(&speech).contains(&super::super::engines::AWS));
         speech.aws_secret_access_key = crate::secret::Secret::new("secret");
         assert!(startup_engines(&speech).contains(&super::super::engines::AWS));
         assert!(!startup_engines(&speech).contains(&super::super::engines::STAR));
+        speech.star_host = "ws://localhost:7774".into();
+        assert!(startup_engines(&speech).contains(&super::super::engines::STAR));
         assert!(!startup_engines(&speech).contains(&super::super::engines::GTTS));
+    }
+
+    #[test]
+    fn star_voices_survive_catalog_normalization() {
+        let mut catalog = TtsCatalog::default();
+        catalog.engines.insert(
+            super::super::engines::STAR.into(),
+            EngineCatalog::from_voices(Vec::new(), vec![Voice::plain("Microsoft Sam")]),
+        );
+        catalog.normalize();
+        assert_eq!(catalog.engines[super::super::engines::STAR].voices.len(), 1);
     }
 }

@@ -604,6 +604,10 @@ fn build_engine_page(
                 "dialog.preferences.speech.starHost",
                 "Star server URL",
             );
+            let draft_host = host;
+            validation_button(app, page, sizer, engines::STAR, alive, move |speech| {
+                speech.star_host = draft_host.get_value().trim().to_string();
+            });
         }
         // SAPI, Microsoft Edge and Google Translate. Nothing focusable here, so
         // the tab order runs straight from the picker to the limits below —
@@ -626,12 +630,12 @@ fn validation_button(
     alive: &Rc<std::cell::Cell<bool>>,
     apply_draft: impl Fn(&mut crate::config::SpeechConfig) + 'static,
 ) {
-    let button = Button::builder(page).with_label("Validate").build();
-    super::set_accessible_name(&button, "Validate credentials");
+    let button = Button::builder(page).with_label("&Validate").build();
+    super::set_accessible_name(&button, "Validate settings");
     let status = StaticText::builder(page)
-        .with_label("Credentials not yet validated.")
+        .with_label("Settings not yet validated.")
         .build();
-    super::set_accessible_name(&status, "Credential validation status: not yet validated");
+    super::set_accessible_name(&status, "Settings validation status: not yet validated");
     sizer.add(&button, 0, SizerFlag::All, 4);
     sizer.add(&status, 0, SizerFlag::All, 4);
     let apply_draft = Rc::new(apply_draft);
@@ -645,12 +649,9 @@ fn validation_button(
             apply_draft(&mut draft);
             button_for_click.enable(false);
             button_for_click.set_label("Validating…");
-            super::set_accessible_name(&button_for_click, "Validating credentials");
-            status_for_click.set_label("Validating credentials…");
-            super::set_accessible_name(
-                &status_for_click,
-                "Credential validation status: validating",
-            );
+            super::set_accessible_name(&button_for_click, "Validating settings");
+            status_for_click.set_label("Validating settings…");
+            super::set_accessible_name(&status_for_click, "Settings validation status: validating");
             let (sender, receiver) = crossbeam_channel::bounded(1);
             std::thread::Builder::new()
                 .name(format!("tts-validate-{engine}"))
@@ -673,8 +674,8 @@ fn validation_button(
                     return false;
                 };
                 button.enable(true);
-                button.set_label("Validate");
-                super::set_accessible_name(&button, "Validate credentials");
+                button.set_label("&Validate");
+                super::set_accessible_name(&button, "Validate settings");
                 match result {
                     Ok((draft, catalog)) => {
                         commit_validated_credentials(
@@ -685,17 +686,17 @@ fn validation_button(
                         crate::tts::catalog::commit_engine(engine, catalog);
                         app.save_config();
                         app.flush_config();
-                        status.set_label("Credentials validated and saved.");
+                        status.set_label("Settings validated and saved.");
                         super::set_accessible_name(
                             &status,
-                            "Credential validation succeeded; credentials saved",
+                            "Settings validation succeeded; settings saved",
                         );
                     }
                     Err(error) => {
                         status.set_label(&format!("Validation failed: {error}"));
                         super::set_accessible_name(
                             &status,
-                            &format!("Credential validation failed: {error}"),
+                            &format!("Settings validation failed: {error}"),
                         );
                     }
                 }
@@ -724,6 +725,7 @@ fn commit_validated_credentials(
             saved.aws_region = draft.aws_region.clone();
         }
         engines::GOOGLE => saved.google_api_key = draft.google_api_key.clone(),
+        engines::STAR => saved.star_host = draft.star_host.clone(),
         _ => {}
     }
 }
@@ -753,7 +755,7 @@ fn text_row(
     speech_row(app, panel, sizer, label, engine, false, read, write)
 }
 
-/// Builds one setting row and wires it to save as the user types.
+/// Builds one setting row.
 ///
 /// The caller tags the returned control for context help, because `gen-help`
 /// needs those arguments to be literals at the call site.
@@ -763,10 +765,10 @@ fn speech_row(
     panel: &Panel,
     sizer: &BoxSizer,
     label: &str,
-    engine: &'static str,
+    _engine: &'static str,
     secret: bool,
     read: fn(&crate::config::SpeechConfig) -> String,
-    write: fn(&mut crate::config::SpeechConfig, String),
+    _write: fn(&mut crate::config::SpeechConfig, String),
 ) -> TextCtrl {
     let caption = StaticText::builder(panel).with_label(label).build();
     let mut builder = TextCtrl::builder(panel).with_value(&read(&app.config.borrow().speech));
@@ -778,20 +780,6 @@ fn speech_row(
     super::set_accessible_name(&input, label);
     sizer.add(&caption, 0, SizerFlag::All, 2);
     sizer.add(&input, 0, SizerFlag::Expand | SizerFlag::All, 2);
-    // Star has no enumerable catalog and therefore no Validate button. Its URL
-    // remains an ordinary setting; credential-bearing providers stay local to
-    // their widgets until validation succeeds.
-    if engine == crate::tts::engines::STAR {
-        let app = app.clone();
-        let input_for_update = input;
-        input.clone().on_text_updated(move |_| {
-            write(
-                &mut app.config.borrow_mut().speech,
-                input_for_update.get_value().trim().to_string(),
-            );
-            app.save_config();
-        });
-    }
     input
 }
 
@@ -1374,13 +1362,20 @@ mod speech_validation_tests {
     fn validation_commits_only_the_selected_provider() {
         let mut saved = crate::config::SpeechConfig {
             google_api_key: Secret::new("old-google"),
+            star_host: "ws://old.example:7774".into(),
             ..Default::default()
         };
         let mut draft = saved.clone();
         draft.openai_api_key = Secret::new("new-openai");
         draft.google_api_key = Secret::new("draft-google");
+        draft.star_host = "ws://new.example:7774".into();
         commit_validated_credentials(crate::tts::engines::OPENAI, &mut saved, &draft);
         assert_eq!(saved.openai_api_key.as_str(), "new-openai");
+        assert_eq!(saved.google_api_key.as_str(), "old-google");
+        assert_eq!(saved.star_host, "ws://old.example:7774");
+
+        commit_validated_credentials(crate::tts::engines::STAR, &mut saved, &draft);
+        assert_eq!(saved.star_host, "ws://new.example:7774");
         assert_eq!(saved.google_api_key.as_str(), "old-google");
     }
 }
