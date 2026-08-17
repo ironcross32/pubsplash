@@ -1,7 +1,7 @@
-//! Preferences dialog. Tabbed: "General", "Archiving", "Mastodon" (whose body
-//! lives in `ui/mastodon_prefs.rs`), "Speech", "Sound packs", "VST plugins",
-//! "Keybinds" (whose body lives in `ui/keybinds_ui.rs`), and
-//! "Logging & debugging" (`ui/logging_ui.rs`).
+//! Preferences dialog. Tabbed: "General", "Audio" (whose body lives in
+//! `ui/audio_prefs.rs`), "Archiving", "Mastodon" (`ui/mastodon_prefs.rs`),
+//! "Speech", "Sound packs", "VST plugins", "Keybinds"
+//! (`ui/keybinds_ui.rs`), and "Logging & debugging" (`ui/logging_ui.rs`).
 //! The VST tab manages the plugin folder list and starts scans; scan progress
 //! arrives on the pump (see `pump_scan_events` in `ui/mod.rs`). Every tab saves
 //! as the user changes a control, so the dialog only needs a Close button.
@@ -19,8 +19,9 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         // Wide enough for every tab label to fit on one row. At 560 the eighth
         // tab pushed the row over and wx grew a pair of scroll arrows, which
-        // hides whichever tabs are off the end until you press them.
-        .with_size(700, 480)
+        // hides whichever tabs are off the end until you press them. "Audio"
+        // was the ninth; check this again if a tenth is added.
+        .with_size(780, 480)
         .build();
 
     // An update check answers on the pump, not in the click handler, so the
@@ -33,6 +34,9 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     let general_panel = Panel::builder(&notebook).build();
     notebook.add_page(&general_panel, "General", true, None);
     build_general_tab(app, &general_panel);
+    let audio_panel = Panel::builder(&notebook).build();
+    notebook.add_page(&audio_panel, "Audio", false, None);
+    super::audio_prefs::build_tab(app, &dialog, &audio_panel);
     let archiving_panel = Panel::builder(&notebook).build();
     notebook.add_page(&archiving_panel, "Archiving", false, None);
     build_archiving_tab(app, &dialog, &archiving_panel);

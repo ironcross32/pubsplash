@@ -146,6 +146,15 @@ pub enum EngineCommand {
     /// See [`EngineCommand::SetSourceMonitor`]. The master tap is taken after
     /// the master FX chain and fader, so it is exactly what goes out.
     SetMasterMonitor(bool),
+    /// Drop the monitoring output so it is reopened on the next block, picking
+    /// up a change to the playback device chosen in Preferences.
+    ///
+    /// Nothing more is needed because the engine already re-evaluates whether
+    /// the device should be open on every block: dropping `MonitorOutput` sets
+    /// the render thread's stop flag, and the `wanted` check spawns a fresh one
+    /// against whatever `audio::render::output_render_device` now answers. The
+    /// gap is one block, and only for a user who is monitoring at the time.
+    ReopenMonitor,
     /// Begin encoding; encoded MP3 chunks flow into the sender (consumed by
     /// the Icecast task on the network runtime).
     StartEncoding {
@@ -724,6 +733,10 @@ fn engine_loop(
                 Ok(EngineCommand::SetMasterVolume(v)) => master.set_volume(v),
                 Ok(EngineCommand::SetMasterMute(m)) => master.set_muted(m),
                 Ok(EngineCommand::SetMasterMonitor(m)) => master_monitor = m,
+                // `Drop` sets the render thread's stop flag; the `wanted` check
+                // below reopens against the newly chosen device on this same
+                // block if anything is still being monitored.
+                Ok(EngineCommand::ReopenMonitor) => monitor_out = None,
                 Ok(EngineCommand::StartEncoding { bitrate_kbps, out }) => {
                     match encoder::Mp3Encoder::new(bitrate_kbps) {
                         Ok(enc) => {

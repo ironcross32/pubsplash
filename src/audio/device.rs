@@ -21,12 +21,25 @@ pub fn ensure_com_initialized() {
 
 /// Lists active capture devices (microphones).
 pub fn capture_devices() -> Vec<DeviceInfo> {
+    devices_for(&Direction::Capture)
+}
+
+/// Lists active render devices (speakers, headphones).
+///
+/// Two pickers want this: the output device in Preferences, and the endpoint a
+/// Desktop Audio source captures. They are the two halves of one rule — see
+/// [`effective_output_device_id`].
+pub fn render_devices() -> Vec<DeviceInfo> {
+    devices_for(&Direction::Render)
+}
+
+fn devices_for(direction: &Direction) -> Vec<DeviceInfo> {
     ensure_com_initialized();
     let mut devices = Vec::new();
     let Ok(enumerator) = DeviceEnumerator::new() else {
         return devices;
     };
-    let Ok(collection) = enumerator.get_device_collection(&Direction::Capture) else {
+    let Ok(collection) = enumerator.get_device_collection(direction) else {
         return devices;
     };
     for device in &collection {
@@ -72,13 +85,49 @@ pub fn capture_device(id: Option<&str>) -> Result<wasapi::Device, String> {
     }
 }
 
-/// The default render device, used by the monitoring output.
-pub fn default_render_device() -> Result<wasapi::Device, String> {
+/// Resolves a configured render device id to a WASAPI device, for a Desktop
+/// Audio source pinned to one endpoint. [`capture_device`]'s rules exactly,
+/// including the `Active` state check and its reasons.
+pub fn render_device(id: &str) -> Result<wasapi::Device, String> {
     ensure_com_initialized();
     let enumerator = DeviceEnumerator::new().map_err(|e| e.to_string())?;
-    enumerator
+    let device = enumerator
+        .get_device(id)
+        .map_err(|e| format!("looking up the configured output device: {e}"))?;
+    match device.get_state() {
+        Ok(DeviceState::Active) => Ok(device),
+        Ok(state) => Err(format!("the configured output device is {state:?}")),
+        Err(e) => Err(format!("reading the configured output device's state: {e}")),
+    }
+}
+
+/// The endpoint Pubsplash is really playing out of at this moment, with a
+/// `None` setting resolved through the system default.
+///
+/// The one place the feedback check asks its question. Windows' process
+/// loopback (what a `device_id: None` Desktop Audio source uses) carries no
+/// endpoint id and is inherently all-endpoints, so pinning a Desktop Audio
+/// source to one device means *endpoint* loopback — which captures everything
+/// on that endpoint, Pubsplash's own speech and cues included. Since every
+/// sound Pubsplash makes leaves through this one device, keeping the two apart
+/// is a single comparison; it is made twice, once by the Desktop Audio dialog
+/// so the user is told, and once in `capture::run` so a setting that collided
+/// later still cannot feed back.
+///
+/// `None` here means the answer is unknown — no default device, or the
+/// enumeration failed — and a caller must read that as "cannot rule out a
+/// collision", not as "no collision".
+pub fn effective_output_device_id() -> Option<String> {
+    if let Some(id) = crate::audio::render::output_device_id() {
+        return Some(id);
+    }
+    ensure_com_initialized();
+    DeviceEnumerator::new()
+        .ok()?
         .get_default_device(&Direction::Render)
-        .map_err(|e| e.to_string())
+        .ok()?
+        .get_id()
+        .ok()
 }
 
 /// A running process matched to an Application source's configured name.
@@ -875,6 +924,52 @@ mod tests {
             assert!(!app.display_name.contains('\0'), "{:?}", app.display_name);
             assert!(!app.exe.contains('\0'), "{:?}", app.exe);
         }
+    }
+
+    /// Every name here reaches a wx `Choice`, and `append` panics on a string
+    /// it cannot turn into a `CString` — inside an event handler, where
+    /// wxdragon swallows the panic and the list simply stops halfway. Same rule
+    /// as `resolved_names_are_safe_to_hand_to_wx`, for the endpoint pickers.
+    #[test]
+    fn endpoint_names_are_safe_to_hand_to_wx() {
+        for device in capture_devices().into_iter().chain(render_devices()) {
+            assert!(!device.name.contains('\0'), "{:?}", device.name);
+            assert!(!device.id.is_empty());
+        }
+    }
+
+    /// With nothing configured the answer is the system default, which is what
+    /// makes the collision check meaningful for the great majority of users —
+    /// they never open the output picker at all.
+    #[test]
+    fn the_effective_output_device_falls_back_to_the_system_default() {
+        let previous = crate::audio::render::output_device_id();
+        crate::audio::render::set_output_device(None);
+
+        let effective = effective_output_device_id();
+
+        crate::audio::render::set_output_device(previous);
+        // A session with no playback device at all answers `None`; anything
+        // else must name a real, enumerable endpoint.
+        if let Some(id) = effective {
+            assert!(
+                render_devices().iter().any(|d| d.id == id),
+                "the default playback device {id:?} is not among the active ones"
+            );
+        }
+    }
+
+    /// A configured id wins outright, so the check asks about the endpoint
+    /// Pubsplash is really using rather than the one Windows would pick.
+    #[test]
+    fn a_configured_output_device_is_what_the_check_sees() {
+        let previous = crate::audio::render::output_device_id();
+        crate::audio::render::set_output_device(Some("{chosen}".to_string()));
+
+        let effective = effective_output_device_id();
+
+        crate::audio::render::set_output_device(previous);
+        assert_eq!(effective.as_deref(), Some("{chosen}"));
     }
 
     #[test]

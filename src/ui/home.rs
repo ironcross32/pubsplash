@@ -279,6 +279,10 @@ pub struct OverviewState {
     /// Whether outgoing audio is currently interrupted and being retried. A
     /// separate axis from `stream`, because the stream survives the outage.
     pub audio_link: super::AudioLink,
+    /// What the server says about the stream. See `Runtime::server_stream`: a
+    /// third axis again, because our socket being healthy and listeners being
+    /// able to hear anything are different questions.
+    pub server_stream: super::ServerStream,
     /// Whether a recording is running — either standalone or alongside the
     /// stream. See `Runtime::recording_started`.
     pub recording: bool,
@@ -335,10 +339,31 @@ fn overview_rows(state: &OverviewState) -> Vec<(OverviewRow, String)> {
             // reconnect: a reconnect is the network dropping a stream it will
             // get back, while a dead encoder means there is nothing to send in
             // the first place and no amount of waiting will change that.
+            //
+            // The two server answers come last, and `Reconnecting` outranks
+            // `Lost` on purpose: when our link is down those are the same fact
+            // seen from both ends, and "(reconnecting)" is the more useful of
+            // the two because it says something is being done about it.
+            //
+            // Both are also confined to `Live`. "Starting" already says nothing
+            // has been accepted, so adding the note there is noise, and
+            // "Stopping" is on its way out and owes no report on the server's
+            // opinion of a stream that is ending anyway.
+            let live = matches!(phase, StreamState::Live { .. });
             if state.encoder_failed {
                 format!("{base} (encoder failed, not sending audio)")
             } else if state.audio_link == super::AudioLink::Reconnecting {
                 format!("{base} (reconnecting)")
+            } else if !live {
+                base
+            } else if state.server_stream == super::ServerStream::Lost {
+                format!("{base} (the server has lost the source)")
+            } else if state.server_stream == super::ServerStream::Pending {
+                // Said plainly for the same reason the two above are: without
+                // it the Home tab claims a healthy broadcast for the whole
+                // window in which the server has not accepted the source and
+                // listeners hear silence.
+                format!("{base} (waiting for the server to accept the stream)")
             } else {
                 base
             }
@@ -413,6 +438,7 @@ fn refresh(app: &App, selected_rows: Selected) {
         OverviewState {
             stream: run.stream.clone(),
             audio_link: run.audio_link,
+            server_stream: run.server_stream,
             recording: run.recording_started.is_some(),
             recording_pending: run.recording_pending,
             encoder_failed: run.encoder_failed,
@@ -1221,6 +1247,9 @@ mod tests {
         OverviewState {
             stream,
             audio_link: super::super::AudioLink::Ok,
+            // A healthy, accepted stream, so the suffix tests below each turn on
+            // exactly the one thing they set.
+            server_stream: super::super::ServerStream::Accepted,
             recording,
             recording_pending: false,
             encoder_failed: false,
@@ -1296,6 +1325,126 @@ mod tests {
         assert_eq!(
             overview_rows(&s)[0].1,
             "Status: Streaming and recording (encoder failed, not sending audio)"
+        );
+    }
+
+    /// The whole point of the `ServerStream` axis: our Icecast socket being open
+    /// is not the same thing as anyone being able to hear the broadcast, and
+    /// during Audio Pub's mount validation the difference is the entire stream.
+    #[test]
+    fn a_stream_the_server_has_not_accepted_does_not_claim_to_be_heard() {
+        let mut s = state(
+            StreamState::Live {
+                stream_id: "abc".into(),
+            },
+            false,
+            Some(5),
+        );
+        s.server_stream = super::super::ServerStream::Pending;
+        assert_eq!(
+            overview_rows(&s)[0].1,
+            "Status: Streaming (waiting for the server to accept the stream)"
+        );
+    }
+
+    /// Once the server says `active` the suffix has to go entirely, or it reads
+    /// as a permanent fault rather than a startup wait.
+    #[test]
+    fn an_accepted_stream_reads_as_a_plain_healthy_stream() {
+        let s = state(
+            StreamState::Live {
+                stream_id: "abc".into(),
+            },
+            false,
+            Some(5),
+        );
+        assert_eq!(overview_rows(&s)[0].1, "Status: Streaming");
+    }
+
+    /// A direct Icecast mount has no live-events feed, so this axis can never be
+    /// answered there. It must stay silent rather than mark every such stream
+    /// unaccepted for its whole life.
+    #[test]
+    fn a_direct_icecast_stream_gets_no_server_suffix() {
+        let mut s = state(
+            StreamState::Live {
+                stream_id: "icecast:/live".into(),
+            },
+            false,
+            Some(5),
+        );
+        s.server_stream = super::super::ServerStream::Unknown;
+        assert_eq!(overview_rows(&s)[0].1, "Status: Streaming");
+    }
+
+    /// "Starting" already means nothing has been accepted, so repeating it as a
+    /// suffix is noise — and "Stopping" owes no report on the server's opinion
+    /// of a stream that is ending anyway.
+    #[test]
+    fn only_a_live_stream_carries_a_server_suffix() {
+        for phase in [StreamState::Starting, StreamState::Stopping] {
+            let mut s = state(phase.clone(), false, None);
+            s.server_stream = super::super::ServerStream::Pending;
+            let status = overview_rows(&s)[0].1.clone();
+            assert!(!status.contains("waiting for the server"), "{status}");
+            s.server_stream = super::super::ServerStream::Lost;
+            let status = overview_rows(&s)[0].1.clone();
+            assert!(!status.contains("lost the source"), "{status}");
+        }
+    }
+
+    /// When our link is down and the server says it has lost the source, those
+    /// are one fact seen from both ends — and "(reconnecting)" is the half that
+    /// says something is being done about it.
+    #[test]
+    fn a_reconnect_outranks_the_servers_view_of_the_same_outage() {
+        let mut s = state(
+            StreamState::Live {
+                stream_id: "abc".into(),
+            },
+            false,
+            Some(30),
+        );
+        s.audio_link = super::super::AudioLink::Reconnecting;
+        s.server_stream = super::super::ServerStream::Lost;
+        assert_eq!(overview_rows(&s)[0].1, "Status: Streaming (reconnecting)");
+    }
+
+    /// The server can lose the source while our socket still looks perfectly
+    /// healthy — that is what `disconnected` means — so this must be reportable
+    /// on its own.
+    #[test]
+    fn a_lost_source_is_reported_even_with_a_healthy_socket() {
+        let mut s = state(
+            StreamState::Live {
+                stream_id: "abc".into(),
+            },
+            false,
+            Some(30),
+        );
+        s.server_stream = super::super::ServerStream::Lost;
+        assert_eq!(
+            overview_rows(&s)[0].1,
+            "Status: Streaming (the server has lost the source)"
+        );
+    }
+
+    /// A dead encoder is terminal and the server wait is not, so the worse one
+    /// wins the single line available.
+    #[test]
+    fn a_failed_encoder_outranks_an_unaccepted_stream() {
+        let mut s = state(
+            StreamState::Live {
+                stream_id: "abc".into(),
+            },
+            false,
+            Some(30),
+        );
+        s.encoder_failed = true;
+        s.server_stream = super::super::ServerStream::Pending;
+        assert_eq!(
+            overview_rows(&s)[0].1,
+            "Status: Streaming (encoder failed, not sending audio)"
         );
     }
 

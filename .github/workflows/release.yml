@@ -223,8 +223,51 @@ jobs:
             pubsplash-setup.exe
             latest.json
 
+      # The release page's "what's new" is the changelog section for this tag,
+      # not a list of commits: changelog.md is already written for users, and
+      # `notes_url` in latest.json above points the in-app update prompt at this
+      # very page, so whatever lands here is what an updating user reads.
+      #
+      # The heading pattern is the one the check step at the top of this file
+      # enforces, so a tag that got this far has a section to extract; the empty
+      # check below is for the case where the two drift apart anyway. The
+      # section ends at the next `## ` heading -- awk exits there rather than
+      # falling through to the older versions underneath.
+      - name: Extract the release notes from the changelog
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # Compared as a whole token rather than by regex: the version is
+          # interpolated from the tag, and `.` in a pattern would match anything
+          # (so `0.1.1` would also accept a `0x1y1` heading), while escaping it
+          # into an `awk -v` value runs into that assignment's own backslash
+          # handling. `$2` is the version token whether the heading is written
+          # `## 0.1.6` or `## [0.1.6]`.
+          awk -v want="$version" '
+            /^## / {
+              if (found) exit
+              h = $2
+              gsub(/^\[|\]$/, "", h)
+              found = (h == want)
+              next
+            }
+            found { print }
+          ' changelog.md > release-notes.md
+          if [[ ! -s release-notes.md ]]; then
+            echo "::error::changelog.md has no section body for $version"
+            exit 1
+          fi
+          cat release-notes.md
+
       # Guarded on the ref rather than the event so this can only ever publish
       # from a tag, however the workflow was started.
+      #
+      # `body_path` and `generate_release_notes` are not alternatives: the
+      # action appends the generated "What's Changed"/"New Contributors"/compare
+      # links *after* the body, so the release page reads as the changelog first
+      # and the commit-level detail second.
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -234,4 +277,5 @@ jobs:
             pubsplash-*.zip
             pubsplash-setup.exe
             latest.json
+          body_path: release-notes.md
           generate_release_notes: true

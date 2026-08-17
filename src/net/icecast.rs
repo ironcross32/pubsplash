@@ -33,10 +33,16 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 /// Windows' auto-tuned send buffer is typically 64 KB — so a socket that stops
 /// draining accepts ~4 s of audio before `write_all` pends at all. A write still
 /// outstanding 5 s later means roughly nine seconds of audio has not moved,
-/// which is far outside congestion jitter. It is also already past the point of
-/// user harm: the engine's outgoing channel holds ~2 s, so the mixer has been
-/// dropping audio for ~3 s and listeners have heard a gap. Detecting later buys
-/// nothing; detecting sooner would tear down a merely congested socket.
+/// which is far outside congestion jitter. Detecting later buys nothing;
+/// detecting sooner would tear down a merely congested socket.
+///
+/// This used to add that the mixer had been dropping for ~3 s by then, on the
+/// grounds that the engine's outgoing channel holds ~2 s. It does not: the
+/// channel is 200 *chunks*, and `Mp3Encoder::encode` returns nothing until LAME
+/// completes a 1152-sample frame, so a chunk is at least 24 ms and 200 of them
+/// is nearer **4.8 s**. The queue therefore only just begins dropping as this
+/// timeout fires, which is if anything the better place for it — but do not
+/// reason about either number from the 10 ms mixer block.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Bounds the shutdown handshake. This one is on the app-exit path, where

@@ -647,6 +647,13 @@ pub struct AudioConfig {
     /// Whether the master volume may exceed 100 (up to 500) for make-up gain.
     pub master_boost: bool,
     pub master_muted: bool,
+    /// Which WASAPI render endpoint Pubsplash plays out of — the mixer's
+    /// monitoring tap and local sound cues alike. `None` follows whatever
+    /// Windows currently calls the default playback device.
+    ///
+    /// Applied by handing it to `audio::render::set_output_device`, which owns
+    /// the live setting; this field is only where it is remembered.
+    pub output_device_id: Option<String>,
 }
 
 impl Default for AudioConfig {
@@ -657,6 +664,7 @@ impl Default for AudioConfig {
             master_volume: 100,
             master_boost: false,
             master_muted: false,
+            output_device_id: None,
         }
     }
 }
@@ -765,7 +773,22 @@ pub enum SourceKindConfig {
     Microphone {
         device_id: Option<String>,
     },
-    DesktopAudio,
+    /// `device_id: None` captures every endpoint at once through Windows'
+    /// process loopback, excluding Pubsplash's own process tree — the only
+    /// form that can exclude anything, since the process-loopback activation
+    /// carries no endpoint id.
+    ///
+    /// `Some(id)` is *endpoint* loopback on one render device, which captures
+    /// everything on it. So a pinned endpoint may never be the one Pubsplash
+    /// plays out of; see `audio::device::effective_output_device_id`.
+    ///
+    /// A struct variant with a defaulted field rather than the unit variant it
+    /// used to be, so a settings file written before this existed
+    /// (`{"type":"desktop_audio"}`) still loads.
+    DesktopAudio {
+        #[serde(default)]
+        device_id: Option<String>,
+    },
     Application {
         process_name: String,
     },
@@ -777,7 +800,7 @@ impl SourceKindConfig {
     pub fn type_display_name(&self) -> &'static str {
         match self {
             SourceKindConfig::Microphone { .. } => "Microphone",
-            SourceKindConfig::DesktopAudio => "Desktop Audio",
+            SourceKindConfig::DesktopAudio { .. } => "Desktop Audio",
             SourceKindConfig::Application { .. } => "Application",
             SourceKindConfig::Tts(_) => "Text-to-Speech",
             SourceKindConfig::SoundEvents(_) => "Sound Events",
@@ -1233,7 +1256,7 @@ mod tests {
                 name: "Desktop".into(),
                 volume: 80,
                 muted: true,
-                kind: SourceKindConfig::DesktopAudio,
+                kind: SourceKindConfig::DesktopAudio { device_id: None },
                 ..Default::default()
             }],
         });
@@ -1675,6 +1698,39 @@ mod tests {
                 .iter()
                 .any(|s| s.url == MAIN_SITE_URL)
         );
+    }
+
+    /// `DesktopAudio` was a unit variant until it gained an endpoint to
+    /// capture. Every settings file in the wild spells it `{"type":
+    /// "desktop_audio"}` with no `device_id`, and that must keep loading — and
+    /// keep meaning "every endpoint, Pubsplash excluded", which is the only
+    /// form that excludes anything.
+    #[test]
+    fn a_desktop_audio_source_saved_before_device_pinning_still_loads() {
+        let kind: SourceKindConfig = serde_json::from_str(r#"{"type":"desktop_audio"}"#).unwrap();
+        assert_eq!(kind, SourceKindConfig::DesktopAudio { device_id: None });
+    }
+
+    #[test]
+    fn a_pinned_desktop_audio_source_roundtrips() {
+        let kind = SourceKindConfig::DesktopAudio {
+            device_id: Some("{endpoint}".into()),
+        };
+        let json = serde_json::to_string(&kind).unwrap();
+        assert_eq!(
+            serde_json::from_str::<SourceKindConfig>(&json).unwrap(),
+            kind
+        );
+    }
+
+    /// A settings file written before the output picker existed carries no
+    /// `output_device_id`, and must come back following the system default
+    /// rather than failing to parse.
+    #[test]
+    fn audio_settings_without_an_output_device_follow_the_system_default() {
+        let audio: AudioConfig = serde_json::from_str(r#"{"bitrate_kbps":192}"#).unwrap();
+        assert_eq!(audio.bitrate_kbps, 192);
+        assert_eq!(audio.output_device_id, None);
     }
 
     #[test]

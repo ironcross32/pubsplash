@@ -55,6 +55,10 @@ fn main() {
         );
     }
     let config = config::load();
+    // Before anything can play: the startup cue below is spawned from this
+    // function, and a monitoring thread opens the device the moment a strip
+    // asks for it. Both read this setting rather than being handed it.
+    audio::render::set_output_device(config.audio.output_device_id.clone());
     logging::set_level(&config.logging.level);
     logging::install_panic_hook();
     // The panic hook only catches Rust panics. Hosted plugins fault in C++,

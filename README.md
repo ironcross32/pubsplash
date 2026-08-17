@@ -44,7 +44,7 @@ For Icecast, you normally need the server, port, mount point, username, and sour
 Open **Scenes and Sources**. A scene is a saved collection of sources; the default scene is ready to use. Select it, choose **Add source**, and select from one of the following:
 
 - **Microphone** - an input device.
-- **Desktop Audio** - system audio. Pubsplash excludes its own audio, preventing text-to-speech and sound cues from echoing into the stream unless you want them to (see below).
+- **Desktop Audio** - system audio. Pubsplash excludes its own audio, preventing text-to-speech and sound cues from echoing into the stream unless you want them to (see below). Press **Edit** to capture a single playback device instead of all of them; see [Choosing devices](#choosing-devices).
 - **Application** - one program, such as a browser, game, or music player. You can select a running program or type a name for one that will open later.
 - **Text-to-Speech** - reads incoming Audiopub chat aloud.
 - **Sound Events** - plays cues for listener and chat activity.
@@ -103,6 +103,12 @@ Use **Preferences > Keybinds** to add, change, or remove shortcuts. Global short
 
 Mixer sliders change by 1% with arrow keys and by 10% with Page Up or Page Down. Home and End move to maximum and minimum. A slider's context menu can enable volume boost up to 500%.
 
+## Choosing devices
+
+The **Audio** tab of Preferences chooses which playback device Pubsplash plays out of. Everything Pubsplash plays for you goes there - sources you are monitoring, text-to-speech, and sound cues - so you can monitor on headphones while the rest of the machine keeps using the speakers. It is not what your listeners hear. The default, **Default output device (follow system)**, uses whatever Windows is currently using, so it moves with you when you plug in a headset. **Play a test sound** checks your choice without starting a stream.
+
+A **Desktop Audio** source captures all of your playback devices at once by default, leaving out Pubsplash's own audio. Its **Edit** dialog can instead pin it to one device by name. There is one rule: that device cannot be the one Pubsplash plays out of. Capturing a single device captures *everything* on it with nothing left out, so aiming it at Pubsplash's own output would send your speech and sound cues straight back to your listeners. Pubsplash refuses that pairing and says so, leaving the dialog open so you can pick another - and if you later change the output device to one a Desktop Audio source is capturing, it tells you and that source falls back to capturing every device with Pubsplash excluded. Either way, Pubsplash's own audio never reaches your stream.
+
 ## Optional features
 
 ### Mastodon announcements
@@ -120,6 +126,8 @@ Pubsplash checks for updates at startup by default. Change this on Preferences' 
 ## Troubleshooting
 
 If a source is silent, check its device or application selection and look for "(reconnecting)" in the mixer. For connection problems, verify the service credentials and consult the log.
+
+If listeners hear nothing at the start of a broadcast, read the Status line on the **Home** tab. **"Streaming (waiting for the server to accept the stream)"** means your audio is going out but Audio Pub has not finished checking it yet, and a stream page will play silence until it does — this normally clears in a few seconds. **"Streaming (the server has lost the source)"** means the server has stopped receiving you even though your own connection looks healthy; it will end the stream in a few minutes if that does not recover. A stream that stays unaccepted for three quarters of a minute is explained in the log.
 
 Open **Go to > Go to Pubsplash data directory** to find the data folder. Logs are in %LOCALAPPDATA%\pubsplash\logs\. On Preferences' **Logging & debugging** tab, increase the log level temporarily or choose **Compress logs** to create a ZIP containing logs and crash dumps for a bug report. The archive does not include settings, passwords, or API keys.
 

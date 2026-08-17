@@ -145,6 +145,12 @@ file = "src/ui/connect_dialog.rs"
 message = "Type the full Audiopub service URL, starting with http or https. The main Audiopub service keeps its built-in URL."
 
 [[control]]
+id = "dialog.desktopAudioSource.device"
+label = "Capture from combo box"
+file = "src/ui/scenes.rs"
+message = """Chooses where this Desktop Audio source gets its sound from. "All output devices (Pubsplash excluded)" is the usual choice: it captures everything your computer plays, on every device at once, apart from Pubsplash's own speech, sound cues and monitoring. Picking a single output device instead captures only what is played to that one device, but it captures everything on it with nothing left out, so it cannot be the device Pubsplash itself plays out of. If you pick that one, Pubsplash will say so and leave this window open so you can choose another; you can change which device Pubsplash plays out of on the Audio tab in Preferences."""
+
+[[control]]
 id = "dialog.fxEditor.bypass"
 label = "Bypass this plugin checkbox"
 file = "src/ui/fx_editor.rs"
@@ -323,6 +329,18 @@ id = "dialog.preferences.archive.recordingFolder"
 label = "Recording folder path input"
 file = "src/ui/preferences.rs"
 message = "Type the path where you'd like your local recordings to be saved to, or use the browse button to pick a folder using a standard Windows folder picker."
+
+[[control]]
+id = "dialog.preferences.audio.outputDevice"
+label = "Output device combo box"
+file = "src/ui/audio_prefs.rs"
+message = 'Chooses which playback device Pubsplash plays out of. Everything Pubsplash plays for you goes here: sources you are monitoring, text-to-speech, and sound cues such as the startup sound. It is not what your listeners hear, and changing it does not affect your stream. "Default output device (follow system)" uses whatever Windows is currently using, so it moves when you plug in a headset; picking a device by name keeps Pubsplash on that one. If a Desktop Audio source captures the device you choose here, Pubsplash tells you and that source falls back to capturing every device, so its own audio can never end up in your stream.'
+
+[[control]]
+id = "dialog.preferences.audio.testSound"
+label = "Play a test sound button"
+file = "src/ui/audio_prefs.rs"
+message = "Plays the startup sound once out of the device selected above, so you can check you have picked the right one without starting a stream. Nothing is recorded or sent to listeners."
 
 [[control]]
 id = "dialog.preferences.general.checkNow"

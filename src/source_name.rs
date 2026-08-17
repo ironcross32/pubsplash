@@ -22,6 +22,10 @@ use std::collections::{HashMap, HashSet};
 pub struct NameContext {
     /// Capture devices, for resolving a microphone's `device_id`.
     pub devices: Vec<DeviceInfo>,
+    /// Render devices, for resolving the endpoint a Desktop Audio source is
+    /// pinned to. Separate from `devices` because the two id spaces are
+    /// unrelated and a lookup must never cross them.
+    pub render_devices: Vec<DeviceInfo>,
     /// Running applications, keyed by the configured process name, lowercased
     /// and trimmed. Absent means "not running right now".
     pub apps: HashMap<String, AppProcess>,
@@ -47,9 +51,20 @@ impl NameContext {
         let needs_devices = sources
             .iter()
             .any(|s| matches!(s.kind, SourceKindConfig::Microphone { device_id: Some(_) }));
+        let needs_render_devices = sources.iter().any(|s| {
+            matches!(
+                s.kind,
+                SourceKindConfig::DesktopAudio { device_id: Some(_) }
+            )
+        });
         Self {
             devices: if needs_devices {
                 crate::audio::device::capture_devices()
+            } else {
+                Vec::new()
+            },
+            render_devices: if needs_render_devices {
+                crate::audio::device::render_devices()
             } else {
                 Vec::new()
             },
@@ -61,6 +76,13 @@ impl NameContext {
 
     fn device_name(&self, id: &str) -> Option<&str> {
         self.devices
+            .iter()
+            .find(|d| d.id == id)
+            .map(|d| d.name.as_str())
+    }
+
+    fn render_device_name(&self, id: &str) -> Option<&str> {
+        self.render_devices
             .iter()
             .find(|d| d.id == id)
             .map(|d| d.name.as_str())
@@ -171,7 +193,13 @@ fn base_strip_label(source: &SourceConfig, ctx: &NameContext) -> String {
             Some(name) => name.to_string(),
             None => "Microphone (unavailable)".to_string(),
         },
-        SourceKindConfig::DesktopAudio => "Desktop Audio".to_string(),
+        SourceKindConfig::DesktopAudio { device_id: None } => "Desktop Audio".to_string(),
+        SourceKindConfig::DesktopAudio {
+            device_id: Some(id),
+        } => match ctx.render_device_name(id) {
+            Some(name) => format!("Desktop Audio ({name})"),
+            None => "Desktop Audio (unavailable)".to_string(),
+        },
         SourceKindConfig::Application { process_name } => {
             if process_name.trim().is_empty() {
                 "Application".to_string()
@@ -203,7 +231,10 @@ fn base_list_label(source: &SourceConfig, ctx: &NameContext) -> String {
             "Microphone (default device)".to_string()
         }
         SourceKindConfig::Microphone { device_id: Some(_) } => base_strip_label(source, ctx),
-        SourceKindConfig::DesktopAudio => "Desktop Audio".to_string(),
+        SourceKindConfig::DesktopAudio { device_id: None } => {
+            "Desktop Audio (all output devices)".to_string()
+        }
+        SourceKindConfig::DesktopAudio { device_id: Some(_) } => base_strip_label(source, ctx),
         SourceKindConfig::Application { process_name } => {
             if process_name.trim().is_empty() {
                 "Application: not set".to_string()
@@ -298,6 +329,10 @@ mod tests {
             devices: vec![DeviceInfo {
                 id: "zoom-id".to_string(),
                 name: "Microphone (ZOOM H1essential)".to_string(),
+            }],
+            render_devices: vec![DeviceInfo {
+                id: "speakers-id".to_string(),
+                name: "Speakers (Realtek)".to_string(),
             }],
             // Keyed by what the user typed (here, without the extension) —
             // that is the contract `resolve_apps` returns.
@@ -405,11 +440,59 @@ mod tests {
         );
     }
 
+    /// A pinned Desktop Audio source reads as the device it captures, exactly
+    /// as a pinned microphone does — the two are the same kind of setting and
+    /// must not be described in two different ways.
+    #[test]
+    fn a_pinned_desktop_audio_source_is_named_after_its_device() {
+        let pinned = source(SourceKindConfig::DesktopAudio {
+            device_id: Some("speakers-id".to_string()),
+        });
+        assert_eq!(
+            strip_label(&pinned, &ctx()),
+            "Desktop Audio (Speakers (Realtek))"
+        );
+        assert_eq!(
+            list_label(&pinned, &ctx()),
+            "Desktop Audio (Speakers (Realtek))"
+        );
+    }
+
+    /// An unplugged device is a source that will not capture what it was told
+    /// to, and saying "Desktop Audio" would hide that completely.
+    #[test]
+    fn a_desktop_audio_device_that_is_gone_says_so() {
+        let pinned = source(SourceKindConfig::DesktopAudio {
+            device_id: Some("a-device-that-is-unplugged".to_string()),
+        });
+        assert_eq!(strip_label(&pinned, &ctx()), "Desktop Audio (unavailable)");
+    }
+
+    /// The two forms are genuinely different sources, and the list form is
+    /// where that difference has room to be spelled out.
+    #[test]
+    fn the_two_desktop_audio_forms_are_told_apart() {
+        let all = list_label(
+            &source(SourceKindConfig::DesktopAudio { device_id: None }),
+            &ctx(),
+        );
+        let pinned = list_label(
+            &source(SourceKindConfig::DesktopAudio {
+                device_id: Some("speakers-id".to_string()),
+            }),
+            &ctx(),
+        );
+        assert_ne!(all, pinned);
+    }
+
     #[test]
     fn desktop_and_sound_events_are_not_repeated() {
         assert_eq!(
-            list_label(&source(SourceKindConfig::DesktopAudio), &ctx()),
-            "Desktop Audio"
+            list_label(
+                &source(SourceKindConfig::DesktopAudio { device_id: None }),
+                &ctx()
+            ),
+            "Desktop Audio (all output devices)"
         );
         assert_eq!(
             list_label(
@@ -546,7 +629,7 @@ mod tests {
         let sources = vec![
             source(SourceKindConfig::Microphone { device_id: None }),
             source(SourceKindConfig::Microphone { device_id: None }),
-            source(SourceKindConfig::DesktopAudio),
+            source(SourceKindConfig::DesktopAudio { device_id: None }),
         ];
         assert_eq!(
             strip_labels(&sources, &ctx()),
@@ -557,7 +640,7 @@ mod tests {
             vec![
                 "Microphone (default device)",
                 "Microphone (default device) 2",
-                "Desktop Audio"
+                "Desktop Audio (all output devices)"
             ]
         );
     }

@@ -1,5 +1,9 @@
 //! The monitoring output thread: plays whatever the mixer taps for monitoring
-//! out of the default Windows playback device.
+//! out of the playback device chosen in Preferences (the system default until
+//! the user picks one) — see [`crate::audio::render::output_render_device`],
+//! which owns that setting and is also what local sound cues open. A change
+//! reaches this thread by way of `EngineCommand::ReopenMonitor`, which drops
+//! the thread so `engine_loop`'s per-block check spawns a fresh one.
 //!
 //! This is the mirror image of [`crate::audio::capture`] — same supervisor
 //! shape, same backoff, same cooperative stop flag — but running a WASAPI
@@ -92,7 +96,7 @@ fn run(consumer: &mut Consumer<f32>, stop: &AtomicBool) -> Result<(), String> {
         None,
     );
 
-    let mut client = device::default_render_device()?
+    let mut client = crate::audio::render::output_render_device()?
         .get_iaudioclient()
         .map_err(|e| format!("activating the playback device's audio client: {e}"))?;
 
