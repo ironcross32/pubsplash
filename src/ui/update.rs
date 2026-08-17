@@ -128,14 +128,21 @@ pub fn start_check(app: &Rc<App>, trigger: Trigger) {
 
 /// Whether now is a bad time to interrupt with an update question.
 ///
-/// A live stream or a running recording is the one state where a modal is
-/// genuinely unaffordable — it steals focus from a broadcaster mid-show, and the
-/// answer they would give is "not now" anyway. The check costs nothing to repeat
-/// at the next launch.
+/// A live stream, a running recording, or a stream waiting to go live is a state
+/// where a modal is genuinely unaffordable — it steals focus from a broadcaster
+/// mid-show, and the answer they would give is "not now" anyway. The check costs
+/// nothing to repeat at the next launch.
 fn is_a_bad_moment(app: &Rc<App>) -> bool {
     // A standalone recording is not covered by the streaming check, and matters
     // just as much: the file being written is thrown away if the app restarts.
-    app.is_streaming_or_starting() || app.run.borrow().recording_started.is_some()
+    //
+    // An armed schedule matters for a different reason: the whole point of one is
+    // that nobody need be at the machine when it fires, so an update question
+    // sitting in front of it would be answered by nobody and the broadcast would
+    // go out behind a dialog — or not at all, if the answer was to restart.
+    app.is_streaming_or_starting()
+        || app.run.borrow().recording_started.is_some()
+        || app.schedule_armed()
 }
 
 /// Drains everything the update workers have reported. Called from the pump.

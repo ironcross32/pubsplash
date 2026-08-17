@@ -1,5 +1,6 @@
-//! Keeps wxWidgets' MSAA layer out of the way of a native list box, so a screen
-//! reader sees the plain Win32 control instead of a hybrid of two objects.
+//! Keeps wxWidgets' MSAA layer out of the way of the native controls that have
+//! MSAA children of their own — list boxes and radio boxes — so a screen reader
+//! sees the plain Win32 control instead of a hybrid of two objects.
 //!
 //! wx wraps *every* MSW control: `wxWindowMSW`'s `WM_GETOBJECT` handler calls
 //! `GetOrCreateAccessible()`, which creates a `wxWindowAccessible` when the
@@ -41,6 +42,16 @@
 //! the fix, and [`super::set_accessible_name`] cannot be: it would replace the
 //! accessible of the group window only, and the items are separate child
 //! windows that wxdragon hands out no handles for.
+//!
+//! Date and time pickers are **not** a case for this module, which is worth
+//! recording because it looks like one. A `SysDateTimePick32` seems certain to
+//! expose its fields as MSAA children, and it does not: measured against the
+//! real control, its only children are the optional none-checkbox and the
+//! drop-down button, and `accFocus` answers `CHILDID_SELF` no matter which field
+//! the caret is on. There is nothing for a passthrough to reveal, so pickers keep
+//! [`super::set_accessible_name`] like any other childless control, and
+//! [`super::picker_acc`] announces their fields itself. That module's header has
+//! the measurements.
 //!
 //! Threading: `install` and the subclass procs all run on the UI thread. They
 //! hold no state, so nothing needs uninstalling — the subclass dies with the

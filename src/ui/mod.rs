@@ -23,9 +23,11 @@ mod mastodon_prefs;
 mod mastodon_templates;
 mod native_acc;
 mod panes;
+mod picker_acc;
 mod preferences;
 mod scan_dialog;
 mod scenes;
+mod schedule_ui;
 mod sends;
 mod slider_uia;
 mod sound_preview;
@@ -70,6 +72,7 @@ const ID_MENU_PREFERENCES: i32 = 2002;
 const ID_MENU_EXIT: i32 = 2003;
 const ID_MENU_STREAM_INFO: i32 = 2004;
 const ID_MENU_SOUND_PACK_MANAGER: i32 = 2005;
+const ID_MENU_SCHEDULE: i32 = 2006;
 const ID_MENU_ABOUT: i32 = 2101;
 const ID_MENU_README: i32 = 2102;
 const ID_MENU_CHANGELOG: i32 = 2103;
@@ -336,6 +339,16 @@ pub struct Runtime {
     pub next_announcement: Option<Instant>,
     /// The previous stream of this session, for the reconnect/resume rules.
     pub last_stream: Option<LastStream>,
+    /// The armed stream schedule, if any — see [`crate::schedule`].
+    ///
+    /// Session-only for the same reason [`Monitors`] is, and more so: a
+    /// persisted schedule would mean launching Pubsplash could start
+    /// broadcasting, on the strength of a choice made before the last restart
+    /// and possibly for a stream that has long since happened.
+    ///
+    /// Its deadlines are wall-clock Unix seconds rather than `Instant`s, unlike
+    /// `next_announcement` above; [`crate::schedule`] explains why.
+    pub schedule: Option<crate::schedule::Schedule>,
 }
 
 /// The last values `App::refresh_stream_ui` wrote to each control.
@@ -392,6 +405,12 @@ enum StreamPhase {
 }
 
 impl StreamPhase {
+    /// Deliberately blind to an armed schedule. Arming, cancelling and firing
+    /// are announced at their own call sites in `schedule_ui` instead, because
+    /// this returns `Option<&'static str>` and the one transition that genuinely
+    /// arrives unbidden — a schedule cancelling itself — has to be able to say
+    /// *why*, which a fixed string cannot. The one transition that would matter
+    /// here, firing, already speaks: it reaches `Starting`.
     fn of(state: &StreamState, server: ServerStream) -> Self {
         match state {
             StreamState::Idle => StreamPhase::Idle,
@@ -631,6 +650,7 @@ impl Default for Runtime {
             shown: ShownStreamUi::default(),
             next_announcement: None,
             last_stream: None,
+            schedule: None,
         }
     }
 }
@@ -1617,10 +1637,23 @@ impl App {
     }
 
     /// Whether the overview list has a clock that needs re-rendering every
-    /// second. A standalone recording has one even though nothing is streaming.
+    /// second. A standalone recording has one even though nothing is streaming,
+    /// and so does an armed schedule — its countdown row is the same kind of
+    /// once-a-second value as the duration.
     pub fn overview_ticking(&self) -> bool {
         let run = self.run.borrow();
-        !matches!(run.stream, StreamState::Idle) || run.recording_started.is_some()
+        !matches!(run.stream, StreamState::Idle)
+            || run.recording_started.is_some()
+            || run.schedule.is_some()
+    }
+
+    /// Whether a scheduled stream is waiting to go live.
+    ///
+    /// Every lockout in the app asks this rather than reaching into `Runtime`,
+    /// so the rule stays in one place: while a schedule is armed, recording is
+    /// unavailable and the stream button cancels instead of starting.
+    pub fn schedule_armed(&self) -> bool {
+        self.run.borrow().schedule.is_some()
     }
 
     /// The public page of the current live stream, once it is live.
@@ -1653,6 +1686,11 @@ impl App {
                 return;
             }
             run.stream = StreamState::Stopping;
+            // Stopping discards whatever the schedule had left, which in
+            // advanced mode is a pending scene switch. Inside the guard above on
+            // purpose: a `stop_streaming` on an idle app must not silently eat a
+            // schedule that is still waiting to go live.
+            run.schedule = None;
         }
         self.engine.send(EngineCommand::StopEncoding);
         self.engine.send(EngineCommand::StopRecording);
@@ -1671,6 +1709,12 @@ impl App {
         {
             let run = self.run.borrow();
             if run.recording || run.recording_pending || !matches!(run.stream, StreamState::Idle) {
+                return;
+            }
+            // Same lockout the disabled record button expresses, enforced here so
+            // no path — button, keybind, or anything added later — can start a
+            // recording that would be in the way when the schedule fires.
+            if run.schedule.is_some() {
                 return;
             }
         }
@@ -1747,7 +1791,13 @@ impl App {
         self.warn_if_the_server_has_not_accepted();
         let run = self.run.borrow();
 
+        // While a schedule is armed the button is the way to call it off, which
+        // is also why `stream_enabled` below stays keyed on the recording: a
+        // schedule cannot be armed while recording, so the two can never fight,
+        // and the button has to stay live for the cancel to be reachable.
+        let armed = run.schedule.is_some();
         let button_label = match &run.stream {
+            StreamState::Idle if armed => "Cancel scheduled stream",
             StreamState::Idle => "Start streaming",
             _ => "Stop streaming",
         };
@@ -1786,9 +1836,12 @@ impl App {
                 w.record_button.set_label(record_label);
                 shown.record_label = record_label.to_string();
             }
-            if shown.record_enabled != Some(!streaming_or_starting) {
-                w.record_button.enable(!streaming_or_starting);
-                shown.record_enabled = Some(!streaming_or_starting);
+            // An armed schedule locks recording out too: a recording running
+            // when the schedule fires would block the stream it was armed for.
+            let can_record = !streaming_or_starting && !armed;
+            if shown.record_enabled != Some(can_record) {
+                w.record_button.enable(can_record);
+                shown.record_enabled = Some(can_record);
             }
         });
         // Outside the closure above: it holds a borrow of `run`, and this takes
@@ -1969,6 +2022,23 @@ pub fn start_streaming(app: &Rc<App>) {
             return;
         }
     }
+    begin_stream(app);
+}
+
+/// The half of starting a stream that shows no dialog, and so may be called from
+/// a timer tick.
+///
+/// Split out for `schedule_ui::pump`, which fires an armed schedule from the
+/// one-second timer. A modal raised from there opens a nested event loop with
+/// nobody in front of the machine to dismiss it, so the scheduled broadcast
+/// would sit behind a dialog instead of going out. Keeping the preflight
+/// questions in [`start_streaming`] and the work here makes "the scheduled path
+/// cannot raise a modal" a property of the code rather than a promise: the fire
+/// path never calls anything that could ask.
+///
+/// The caller owes the two checks `start_streaming` does first — a connected
+/// service, and stream info confirmed — because this does not repeat them.
+pub fn begin_stream(app: &Rc<App>) {
     let info = app.run.borrow().stream_info.clone();
     // Bounded. Unbounded, a stalled TCP send window meant the queue grew at the
     // encoded bitrate for as long as the stall lasted, silently — and for a live
@@ -2288,6 +2358,24 @@ pub fn build(app: Rc<App>) {
                 }
                 // Cleanly terminate the stream before shutdown.
                 app.stop_streaming();
+            } else if app.schedule_armed() {
+                // A schedule is session-only, so exiting discards it. Said out
+                // loud rather than silently, because otherwise a user who armed a
+                // stream and then closed the window would find out by the stream
+                // never happening.
+                let dialog = MessageDialog::builder(
+                    &frame_for_close,
+                    "A stream is scheduled to go live later. Exit and discard it?",
+                    "Exit Pubsplash",
+                )
+                .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
+                .build();
+                if dialog.show_modal() != ID_YES {
+                    if let WindowEventData::General(e) = &event {
+                        e.veto();
+                    }
+                    return;
+                }
             }
             // Flush any recording. Standalone recording is not covered by the
             // streaming check above, and without this the encoder's flush and
@@ -2363,6 +2451,14 @@ pub fn build(app: Rc<App>) {
                 }
                 return;
             }
+            // Before the refresh below, so the tick that fires a schedule also
+            // repaints the buttons and rows it changed. A deadline check on the
+            // timer that already runs rather than a waitable-timer thread: the
+            // countdown row needs a fresh value every second regardless, so
+            // there is nothing an event would save, and comparing a wall-clock
+            // deadline means a tick missed under a modal fires late instead of
+            // never — the same reasoning as `maybe_periodic` below.
+            schedule_ui::pump(&app);
             // Durations, relative chat times, and the config write that slider
             // and text edits deferred to here.
             if app.overview_ticking() {
@@ -2507,6 +2603,11 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
             "Title, description, and archiving for the stream",
         )
         .append_item(
+            ID_MENU_SCHEDULE,
+            "Schedule stream...",
+            "Go live automatically at a set time",
+        )
+        .append_item(
             ID_MENU_PREFERENCES,
             "Preferences...\tCtrl+,",
             "Application preferences",
@@ -2563,6 +2664,7 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
             ID_MENU_STREAM_INFO => {
                 stream_info_dialog::show(&app, &frame);
             }
+            ID_MENU_SCHEDULE => schedule_ui::show(&app, &frame),
             ID_MENU_PREFERENCES => preferences::show(&app, &frame),
             ID_MENU_EXIT => {
                 frame.close(false);

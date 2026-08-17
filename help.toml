@@ -631,6 +631,42 @@ file = "src/ui/scan_dialog.rs"
 message = "What the scan is doing right now: how many plugins are done out of how many, and the name of the one being loaded. Read-only, and it does not read itself out as it changes, so tab here whenever you want to know where the scan has got to."
 
 [[control]]
+id = "dialog.schedule.date"
+label = "Date to go live on"
+file = "src/ui/schedule_ui.rs"
+message = "The day the stream goes live. Today to begin with, and dates in the past cannot be chosen. In advanced mode this is the day the pre-stream time falls on; if your start of stream time is earlier in the day than the pre-stream time, Pubsplash takes it as the following morning, so a broadcast can cross midnight."
+
+[[control]]
+id = "dialog.schedule.mode"
+label = "Scheduling mode selector"
+file = "src/ui/schedule_ui.rs"
+message = "Choose how the scheduled stream starts. Simple picks one time: Pubsplash connects then, using whichever scene is active. Advanced picks two: Pubsplash connects at the pre-stream time on one scene, then switches to a second scene when your content is due to begin. Advanced is worth using because Audio Pub can take half a minute or more to start serving listeners, so connecting early on a music scene means everyone arrives to a stream that is already up. Choosing Advanced adds the extra time and the two scene choices below."
+
+[[control]]
+id = "dialog.schedule.preScene"
+label = "Scene to broadcast before the content starts"
+file = "src/ui/schedule_ui.rs"
+message = "Advanced mode only. The scene Pubsplash connects on and broadcasts until your content is due. Usually a scene with nothing but music or a holding loop in it, so early listeners hear something and the stream is proven working before you are on air. Pubsplash switches to this scene just before it connects, so whatever was active is left alone until then."
+
+[[control]]
+id = "dialog.schedule.startScene"
+label = "Scene to switch to when the content starts"
+file = "src/ui/schedule_ui.rs"
+message = "Advanced mode only. The scene Pubsplash switches to at the start of stream time, normally the one with your microphone and any applications you are broadcasting. Pubsplash announces the switch when it happens. Note that switching moves keyboard focus out of the mixer, the same as switching scenes by hand does, so if you are working in the mixer at that moment you will need to tab back."
+
+[[control]]
+id = "dialog.schedule.startTime"
+label = "Time the content begins and the scene switches"
+file = "src/ui/schedule_ui.rs"
+message = "Advanced mode only. The time your actual content begins, which is when Pubsplash switches from the pre-stream scene to the start of stream scene. It must be later than the pre-stream time; if it is earlier in the day, Pubsplash takes it as the following morning so a broadcast can cross midnight. The stream is already live by then, so the switch happens even if it is running late."
+
+[[control]]
+id = "dialog.schedule.time"
+label = "Time to connect and go live"
+file = "src/ui/schedule_ui.rs"
+message = "The time Pubsplash connects to your streaming service and starts sending audio. In simple mode this is when your stream begins. In advanced mode it is called the pre-stream time, and it is when the first scene goes out, ahead of your content. It has to be in the future, and Pubsplash will not start a stream that is more than two minutes late, so a schedule missed because the computer was asleep is cancelled rather than going live to nobody."
+
+[[control]]
 id = "dialog.sends.busList"
 label = "Destinations for this source list"
 file = "src/ui/sends.rs"

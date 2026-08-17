@@ -12,6 +12,7 @@ mod keybind;
 mod logging;
 mod mastodon;
 mod net;
+mod schedule;
 mod secret;
 mod soundpack;
 mod source_name;

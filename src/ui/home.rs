@@ -125,7 +125,11 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, Button, Button, ListBox,
     {
         let app = app.clone();
         stream_button.on_click(move |_| {
-            if app.is_streaming_or_starting() {
+            // First, because while a schedule is armed this button reads "Cancel
+            // scheduled stream" and nothing is streaming yet.
+            if app.schedule_armed() {
+                super::schedule_ui::cancel(&app);
+            } else if app.is_streaming_or_starting() {
                 app.stop_streaming();
             } else {
                 super::start_streaming(&app);
@@ -266,10 +270,30 @@ pub fn refresh_scene_list(app: &Rc<App>) {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OverviewRow {
     Status,
+    /// Time until a scheduled stream connects, or until its scene switch.
+    ///
+    /// A row of its own rather than part of `Status`, for the reason the doc on
+    /// [`refresh_overview`] gives: a row that changes every second is left stale
+    /// while it is selected, and currency comes from arrowing off it and back.
+    /// While a schedule is armed and nothing is streaming the list would
+    /// otherwise be a **single** row, so there would be nowhere to arrow to and
+    /// the countdown would appear frozen. Keeping it separate also keeps
+    /// `Status` the near-constant string it is everywhere else, instead of
+    /// churning row 0 — the likeliest row to be selected — once a second.
+    Countdown,
     Quality,
     Listeners,
     ListenerPeak,
     Duration,
+}
+
+/// What a [`OverviewRow::Countdown`] row is counting down to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Countdown {
+    /// Until a scheduled stream connects.
+    Connect,
+    /// Until an advanced schedule switches scenes.
+    SceneSwitch,
 }
 
 /// Everything the overview list shows, snapshotted out of `Runtime` so the rows
@@ -299,6 +323,10 @@ pub struct OverviewState {
     /// Elapsed time on whichever clock is running: the stream's if streaming,
     /// otherwise the recording's. `None` when neither is.
     pub elapsed: Option<std::time::Duration>,
+    /// What a scheduled stream is waiting for and how long is left, or `None`
+    /// when no schedule is armed. Carries the kind as well as the time so the
+    /// wording is chosen here rather than by the caller. See `Runtime::schedule`.
+    pub countdown: Option<(Countdown, std::time::Duration)>,
 }
 
 /// The rows to show, in order. Only the ones that apply exist: idle and not
@@ -314,11 +342,19 @@ fn overview_rows(state: &OverviewState) -> Vec<(OverviewRow, String)> {
     } else {
         None
     };
+    // Deliberately only in the idle arm below: once the stream is up it is a
+    // stream like any other, and the outstanding scene switch is the Countdown
+    // row's business rather than another suffix competing with the four that
+    // report trouble.
+    let armed = matches!(state.countdown, Some((Countdown::Connect, _)));
     let status = match (&state.stream, recording_word) {
         // "Not streaming and recording" would be nonsense, so the idle case
         // says what is actually happening instead.
         (StreamState::Idle, Some("recording")) => "Recording".to_string(),
         (StreamState::Idle, Some(_)) => "Starting a recording".to_string(),
+        // Recording is locked out while a schedule is armed, so this can never
+        // have to combine with the two arms above.
+        (StreamState::Idle, None) if armed => "Stream scheduled".to_string(),
         (StreamState::Idle, None) => "Not streaming".to_string(),
         (phase, recording) => {
             let base = match phase {
@@ -371,6 +407,22 @@ fn overview_rows(state: &OverviewState) -> Vec<(OverviewRow, String)> {
     };
 
     let mut rows = vec![(OverviewRow::Status, format!("Status: {status}"))];
+    if let Some((kind, remaining)) = state.countdown {
+        let what = match kind {
+            Countdown::Connect => "Connecting in",
+            Countdown::SceneSwitch => "Switching scene in",
+        };
+        // Worded rather than the Duration row's clock format: this is a time
+        // *until* something, which is read aloud, not a stopwatch. See
+        // `schedule::format_countdown`.
+        rows.push((
+            OverviewRow::Countdown,
+            format!(
+                "{what} {}",
+                crate::schedule::format_countdown(remaining.as_secs())
+            ),
+        ));
+    }
     if streaming {
         // Describes what is going out on the wire, so it is grouped with the
         // listener counts and shares their streaming-only gate.
@@ -450,6 +502,20 @@ fn refresh(app: &App, selected_rows: Selected) {
             } else {
                 run.recording_started.map(|t| t.elapsed())
             },
+            countdown: run.schedule.as_ref().and_then(|s| {
+                match s.stage(crate::mastodon::now_unix()) {
+                    crate::schedule::Stage::WaitingToConnect { remaining } => {
+                        Some((Countdown::Connect, remaining))
+                    }
+                    crate::schedule::Stage::WaitingToSwitch { remaining } => {
+                        Some((Countdown::SceneSwitch, remaining))
+                    }
+                    // Every other stage is one the pump is about to act on, and
+                    // is gone by the refresh that follows it; showing a row for
+                    // it would flash a countdown of nothing.
+                    _ => None,
+                }
+            }),
         }
     };
     let mut rows = overview_rows(&state);
@@ -1191,7 +1257,7 @@ fn active_source_names(app: &Rc<App>) -> std::collections::HashSet<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{OverviewRow, OverviewState, neighbouring_scene, overview_rows};
+    use super::{Countdown, OverviewRow, OverviewState, neighbouring_scene, overview_rows};
     use crate::ui::StreamState;
     use std::time::Duration;
 
@@ -1257,6 +1323,7 @@ mod tests {
             listener_peak: 7,
             quality: "128 kbps MP3".into(),
             elapsed: elapsed.map(Duration::from_secs),
+            countdown: None,
         }
     }
 
@@ -1427,6 +1494,98 @@ mod tests {
             overview_rows(&s)[0].1,
             "Status: Streaming (the server has lost the source)"
         );
+    }
+
+    /// An armed schedule is two rows, and it must be two: while one is waiting
+    /// nothing is streaming and no clock is running, so a countdown folded into
+    /// Status would leave a one-row list — and a one-row list has nowhere to
+    /// arrow to, which is the only thing that refreshes a row the user is
+    /// standing on. See `OverviewRow::Countdown`.
+    #[test]
+    fn an_armed_schedule_counts_down_on_its_own_row() {
+        let mut s = state(StreamState::Idle, false, None);
+        s.countdown = Some((Countdown::Connect, Duration::from_secs(272)));
+        let rows = overview_rows(&s);
+        assert_eq!(
+            rows,
+            vec![
+                (OverviewRow::Status, "Status: Stream scheduled".to_string()),
+                (
+                    OverviewRow::Countdown,
+                    "Connecting in 4 minutes 32 seconds".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_pending_scene_switch_counts_down_beside_a_live_stream() {
+        let mut s = state(
+            StreamState::Live {
+                stream_id: "abc".into(),
+            },
+            false,
+            Some(30),
+        );
+        s.countdown = Some((Countdown::SceneSwitch, Duration::from_secs(45)));
+        let rows = overview_rows(&s);
+        assert_eq!(rows[0].1, "Status: Streaming");
+        assert_eq!(rows[1], (OverviewRow::Countdown, "Switching scene in 45 seconds".to_string()));
+        // Still a full streaming list underneath it.
+        assert!(rows.iter().any(|(k, _)| *k == OverviewRow::Duration));
+    }
+
+    /// The countdown is a row, never a suffix, so it cannot compete with the four
+    /// notes that report trouble — and, just as importantly, cannot vanish and
+    /// reappear as the link flaps. Each of the three worst cases keeps its own
+    /// wording byte for byte with a switch pending.
+    #[test]
+    fn a_pending_switch_never_displaces_a_trouble_suffix() {
+        let live = || {
+            let mut s = state(
+                StreamState::Live {
+                    stream_id: "abc".into(),
+                },
+                false,
+                Some(30),
+            );
+            s.countdown = Some((Countdown::SceneSwitch, Duration::from_secs(45)));
+            s
+        };
+        let mut encoder = live();
+        encoder.encoder_failed = true;
+        assert_eq!(
+            overview_rows(&encoder)[0].1,
+            "Status: Streaming (encoder failed, not sending audio)"
+        );
+        let mut reconnecting = live();
+        reconnecting.audio_link = super::super::AudioLink::Reconnecting;
+        assert_eq!(
+            overview_rows(&reconnecting)[0].1,
+            "Status: Streaming (reconnecting)"
+        );
+        let mut lost = live();
+        lost.server_stream = super::super::ServerStream::Lost;
+        assert_eq!(
+            overview_rows(&lost)[0].1,
+            "Status: Streaming (the server has lost the source)"
+        );
+        let mut pending = live();
+        pending.server_stream = super::super::ServerStream::Pending;
+        assert_eq!(
+            overview_rows(&pending)[0].1,
+            "Status: Streaming (waiting for the server to accept the stream)"
+        );
+        // The countdown row survives all four, since it is not competing for the
+        // status line at all.
+        for s in [encoder, reconnecting, lost, pending] {
+            assert!(
+                overview_rows(&s)
+                    .iter()
+                    .any(|(k, _)| *k == OverviewRow::Countdown),
+                "the countdown must not disappear when the link is in trouble"
+            );
+        }
     }
 
     /// A dead encoder is terminal and the server wait is not, so the worse one
