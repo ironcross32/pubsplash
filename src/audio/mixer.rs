@@ -128,6 +128,38 @@ impl ChannelStrip {
     }
 }
 
+/// Steps `current` one increment toward `target`, never overshooting.
+///
+/// The linear-in-amplitude slew every gain ramp in the mixer is built out of:
+/// `ChannelStrip::process` inlines it, `fx_chain::mix_in` calls it for a
+/// plugin's wet/dry fade, and the auto-ducker calls it for its duck gain. It
+/// lives here so those three agree by construction rather than by imitation.
+pub fn approach(current: f32, target: f32, step: f32) -> f32 {
+    if current < target {
+        (current + step).min(target)
+    } else {
+        (current - step).max(target)
+    }
+}
+
+/// The RMS level of an interleaved block, as an amplitude in 0..1.
+///
+/// RMS rather than peak because this feeds a threshold comparison: a peak
+/// detector on speech crosses and re-crosses a threshold within a single word,
+/// so anything gated off it chatters. Averaged over a 10 ms block, RMS is both
+/// steady enough to compare and free to compute.
+///
+/// Note this is a *block* average with no memory, so it is the raw detector
+/// input and not an envelope — whatever wants smoothing over time supplies its
+/// own attack and release.
+pub fn block_rms(block: &[f32]) -> f32 {
+    if block.is_empty() {
+        return 0.0;
+    }
+    let sum: f32 = block.iter().map(|s| s * s).sum();
+    (sum / block.len() as f32).sqrt()
+}
+
 /// Adds `src` into `dst` (same length), saturating is not needed for f32;
 /// the master stage clamps before conversion to integer PCM.
 pub fn mix_into(dst: &mut [f32], src: &[f32]) {
@@ -189,6 +221,42 @@ mod tests {
         let mut dest = vec![9.0f32; 4];
         assert_eq!(pull_block(&mut consumer, &mut dest), 0, "nothing was real");
         assert_eq!(dest, vec![0.0; 4]);
+    }
+
+    #[test]
+    fn approach_never_overshoots_from_either_side() {
+        assert_eq!(approach(0.0, 1.0, 0.25), 0.25);
+        assert_eq!(approach(0.9, 1.0, 0.25), 1.0, "clamped rising");
+        assert_eq!(approach(0.1, 0.0, 0.25), 0.0, "clamped falling");
+        assert_eq!(approach(0.5, 0.5, 0.25), 0.5, "already there");
+    }
+
+    #[test]
+    fn rms_of_silence_is_zero_and_of_full_scale_is_one() {
+        assert_eq!(block_rms(&[0.0; BLOCK_SAMPLES]), 0.0);
+        assert_eq!(
+            block_rms(&[]),
+            0.0,
+            "an empty block is not a division by zero"
+        );
+        assert!((block_rms(&[1.0; BLOCK_SAMPLES]) - 1.0).abs() < 1e-6);
+        // Sign does not matter: it is a level, not a value.
+        assert!((block_rms(&[-0.5; BLOCK_SAMPLES]) - 0.5).abs() < 1e-6);
+    }
+
+    /// A full-scale square wave reads 1.0 and a full-scale sine reads about
+    /// 0.707, which is what makes a trigger of a few percent the right order of
+    /// magnitude for speech.
+    #[test]
+    fn rms_of_a_sine_is_the_familiar_root_two_over_two() {
+        let sine: Vec<f32> = (0..BLOCK_SAMPLES)
+            .map(|i| (i as f32 / BLOCK_SAMPLES as f32 * std::f32::consts::TAU).sin())
+            .collect();
+        assert!(
+            (block_rms(&sine) - 0.707).abs() < 0.01,
+            "got {}",
+            block_rms(&sine)
+        );
     }
 
     #[test]

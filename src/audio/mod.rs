@@ -7,6 +7,7 @@ pub mod capture;
 pub mod convert;
 pub mod cue;
 pub mod device;
+pub mod effects;
 pub mod encoder;
 pub mod fx_chain;
 pub mod health;
@@ -39,7 +40,9 @@ pub enum FeedKind {
     External,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+// Not `Eq`: an effect's settings are floats. Nothing compares these for
+// exact equality anyway — the engine is told what to be, not asked what it is.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SourceSpec {
     pub name: String,
     pub volume: u32,
@@ -48,6 +51,10 @@ pub struct SourceSpec {
     /// Whether the source mixes directly into master (in addition to sends).
     pub to_master: bool,
     pub sends: Vec<SendSpec>,
+    /// Built-in effects on this source, in processing order. Applied after the
+    /// source's own volume and mute and before it reaches master or any send,
+    /// so they are inside everything downstream.
+    pub effects: Vec<effects::EffectSpec>,
     /// Whether this source's post-fader signal is played out of the local
     /// monitoring device. Session-only state, so it rides along in the spec
     /// and is re-sent with every `SetSources`.
@@ -127,6 +134,15 @@ pub enum EngineCommand {
     /// level is a `ChannelStrip` for the same reason a source's volume is, so
     /// this ramps rather than steps.
     SetSendLevel(usize, usize, u32),
+    /// Replaces one source's effects, keeping the running state of the ones
+    /// that survive.
+    ///
+    /// Targeted for the same reason [`EngineCommand::SetSourceRouting`] is:
+    /// `SetRouting` respawns every capture thread in the app, which is not a
+    /// price to pay for a slider the user just nudged in a dialog. This runs
+    /// through `effects::rebuild`, so an effect whose settings changed keeps
+    /// the gain it was applying rather than snapping back to unity.
+    SetSourceEffects(usize, Vec<effects::EffectSpec>),
     /// Play (or stop playing) this source's post-fader signal out of the local
     /// monitoring device. The output device is opened on the first strip that
     /// asks for it and closed again when the last one stops.
@@ -338,6 +354,10 @@ struct ActiveSource {
     scratch: Vec<f32>,
     to_master: bool,
     sends: Vec<ActiveSend>,
+    /// See [`SourceSpec::effects`]. Carries running state between blocks, which
+    /// is why a re-sync rebuilds it through `effects::rebuild` rather than
+    /// building it fresh.
+    effects: Vec<effects::ActiveEffect>,
     monitor: bool,
     /// See [`SourceSpec::local`].
     local: bool,
@@ -530,6 +550,10 @@ fn engine_loop(
     let mut mix_block = vec![0f32; BLOCK_SAMPLES];
     let mut monitor_block = vec![0f32; BLOCK_SAMPLES];
     let mut send_scratch = vec![0f32; BLOCK_SAMPLES];
+    // Every source's post-fader level for the block being mixed, indexed as
+    // `sources` is. Owned here and reused so `mix_one_block` stays
+    // allocation-free; it is resized there when the source list changes.
+    let mut key_levels: Vec<f32> = Vec::new();
     let mut pcm_i16: Vec<i16> = Vec::with_capacity(BLOCK_SAMPLES);
 
     // The first command is pulled with a blocking receive rather than the
@@ -597,6 +621,20 @@ fn engine_loop(
                     // waiting to hear that its retired plugins are unreferenced.
                     let touched_fx = new_buses.is_some() || new_master_chain.is_some();
                     if let Some(specs) = new_sources {
+                        // Lifted out before the old sources go away. A
+                        // `SetRouting` arrives for reasons that have nothing to
+                        // do with effects — the two-second application poll
+                        // re-syncs whenever a captured program's pid moves — and
+                        // rebuilding a ducker would snap its gain back to unity
+                        // in the middle of a duck. Keyed by name because that is
+                        // a source's identity; an index shifts when the user
+                        // reorders the scene.
+                        let mut carried: HashMap<String, Vec<effects::ActiveEffect>> = sources
+                            .iter_mut()
+                            .map(|source| {
+                                (source.name.clone(), std::mem::take(&mut source.effects))
+                            })
+                            .collect();
                         stop_sources(&mut sources, last_health.elapsed());
                         // The replacement sources deserve a full window before
                         // their first line, and their rings start empty.
@@ -631,6 +669,10 @@ fn engine_loop(
                                     feeds.insert(spec.name.clone(), producer);
                                 }
                             }
+                            let effects = effects::rebuild(
+                                carried.remove(&spec.name).unwrap_or_default(),
+                                &spec.effects,
+                            );
                             sources.push(ActiveSource {
                                 name: spec.name,
                                 strip: ChannelStrip::new(spec.volume, spec.muted),
@@ -639,6 +681,7 @@ fn engine_loop(
                                 scratch: vec![0f32; BLOCK_SAMPLES],
                                 to_master: spec.to_master,
                                 sends: active_sends(spec.sends),
+                                effects,
                                 monitor: spec.monitor,
                                 local: spec.local,
                                 stats,
@@ -700,6 +743,12 @@ fn engine_loop(
                 Ok(EngineCommand::SetSourceMute(i, m)) => {
                     if let Some(s) = sources.get_mut(i) {
                         s.strip.set_muted(m);
+                    }
+                }
+                Ok(EngineCommand::SetSourceEffects(index, specs)) => {
+                    if let Some(source) = sources.get_mut(index) {
+                        source.effects =
+                            effects::rebuild(std::mem::take(&mut source.effects), &specs);
                     }
                 }
                 Ok(EngineCommand::SetSourceMonitor(i, m)) => {
@@ -877,6 +926,7 @@ fn engine_loop(
             &mut mix_block,
             &mut monitor_block,
             &mut send_scratch,
+            &mut key_levels,
             master_monitor,
         );
         crate::vst::host2::advance_transport(mixer::BLOCK_FRAMES as u64);
@@ -986,9 +1036,15 @@ fn engine_loop(
     }
 }
 
-/// Mixes one 10 ms block: sources into master (if routed there) and into
-/// their send buses (post-fader, per-send level), then each bus through its
-/// strip into master, then the master strip. Allocation-free.
+/// Mixes one 10 ms block: sources through their own effects into master (if
+/// routed there) and into their send buses (post-fader, per-send level), then
+/// each bus through its chain and strip into master, then the master chain and
+/// strip.
+///
+/// Allocation-free in the steady state. `key_levels` is grown to match the
+/// source count, which only allocates on the block after a `SetRouting` changed
+/// it — the same block that has just respawned every capture thread, so it is
+/// not on the hot path.
 ///
 /// `monitor_block` collects the local monitoring mix. Every tap is taken
 /// **post-fader and post-mute**, so what a monitored strip sounds like is
@@ -1003,6 +1059,7 @@ fn mix_one_block(
     mix_block: &mut [f32],
     monitor_block: &mut [f32],
     send_scratch: &mut [f32],
+    key_levels: &mut Vec<f32>,
     master_monitor: bool,
 ) {
     mix_block.fill(0.0);
@@ -1010,7 +1067,18 @@ fn mix_one_block(
     for bus in buses.iter_mut() {
         bus.buffer.fill(0.0);
     }
-    for source in sources.iter_mut() {
+
+    // Two passes over the sources, and the split is what makes a sidechain work
+    // at all. A source's block lives in its own `scratch` and is overwritten
+    // the next time round, so in a single pass an effect on source N could only
+    // ever see the sources before it: a ducker keyed to a source further down
+    // the scene would read the *previous* block, and reordering the scene would
+    // silently change the timing. Measuring every level first and running every
+    // effect second makes the reading same-block whichever order the user
+    // happens to have put them in.
+    key_levels.clear();
+    key_levels.resize(sources.len(), 0.0);
+    for (index, source) in sources.iter_mut().enumerate() {
         // Ring occupancy is read here, before the pull, because this is the only
         // place it can be: the level *after* a pull is always near zero, and it
         // is the level before that says how far behind this source has fallen.
@@ -1025,6 +1093,16 @@ fn mix_one_block(
             source.window.starved_blocks += 1;
         }
         source.strip.process(&mut source.scratch);
+        // Measured after the strip, which is what makes a sidechain post-fader:
+        // muting the source a ducker listens to stops the ducking, and pulling
+        // that source's fader down makes ducking less likely to trigger.
+        key_levels[index] = mixer::block_rms(&source.scratch);
+    }
+
+    for source in sources.iter_mut() {
+        for effect in source.effects.iter_mut() {
+            effect.process(&mut source.scratch, key_levels);
+        }
         // One tap for both reasons a strip can be heard locally. The implicit
         // one is dropped when the strip is already arriving through the master
         // monitor below, so a broadcaster monitoring master does not hear their
@@ -1227,6 +1305,7 @@ mod routing_tests {
             scratch: vec![0f32; BLOCK_SAMPLES],
             to_master,
             sends: active_sends(sends),
+            effects: Vec::new(),
             monitor: false,
             local: false,
             stats: Arc::new(health::CaptureStats::new()),
@@ -1259,6 +1338,7 @@ mod routing_tests {
         let mut mix_block = vec![0f32; BLOCK_SAMPLES];
         let mut monitor_block = vec![0f32; BLOCK_SAMPLES];
         let mut send_scratch = vec![0f32; BLOCK_SAMPLES];
+        let mut key_levels = Vec::new();
         mix_one_block(
             sources,
             buses,
@@ -1267,6 +1347,7 @@ mod routing_tests {
             &mut mix_block,
             &mut monitor_block,
             &mut send_scratch,
+            &mut key_levels,
             master_monitor,
         );
         (mix_block, monitor_block)
@@ -1274,6 +1355,86 @@ mod routing_tests {
 
     fn send(bus_index: usize, level: u32) -> SendSpec {
         SendSpec { bus_index, level }
+    }
+
+    /// A scene of two full-scale sources where the one at `victim_index` ducks
+    /// to half against the one at `key_index`. Returns the master mix for the
+    /// first block, which is the only block either ring can supply.
+    ///
+    /// Fades and hold are all zero, so the duck lands inside that one block:
+    /// this is a test about which block the key level was read from, not about
+    /// the envelope.
+    fn duck_between(key_index: usize) -> Vec<f32> {
+        let victim_index = 1 - key_index;
+        let mut sources = vec![
+            test_source(1.0, 100, false, true, vec![]),
+            test_source(1.0, 100, false, true, vec![]),
+        ];
+        sources[victim_index].effects = vec![effects::ActiveEffect::new(
+            effects::EffectSpec::Ducker(effects::DuckerSpec::new(Some(key_index), 50, 1, 0, 0, 0)),
+        )];
+        run_block(&mut sources, &mut [])
+    }
+
+    /// The regression test for the two-pass split in `mix_one_block`. A ducker
+    /// must read its key source's level from the *same* block whether the key
+    /// sits above or below it in the scene. In a single pass an effect could
+    /// only ever see the sources ahead of it, so a key further down the list
+    /// would be read a block late and merely reordering the scene would change
+    /// the timing.
+    #[test]
+    fn a_ducker_reads_its_key_whichever_order_the_scene_is_in() {
+        // Two sources at full scale sum to 2.0; halving one of them gives 1.5.
+        for (label, mix) in [
+            ("key first", duck_between(0)),
+            ("key second", duck_between(1)),
+        ] {
+            assert!(
+                (mix[0] - 1.5).abs() < 1e-4,
+                "{label}: expected the victim ducked to half, got {}",
+                mix[0]
+            );
+            assert!(
+                (mix[BLOCK_SAMPLES - 1] - 1.5).abs() < 1e-4,
+                "{label}: and for the whole block"
+            );
+        }
+    }
+
+    /// The level a ducker keys off is measured after the source's own strip,
+    /// which is what makes muting the source it listens to stop the ducking.
+    #[test]
+    fn key_levels_are_measured_after_the_strip() {
+        let mut sources = vec![
+            test_source(1.0, 100, true, true, vec![]),
+            test_source(1.0, 50, false, true, vec![]),
+        ];
+        let mut key_levels = Vec::new();
+        let mut master_chain = FxChain::empty();
+        let mut master = ChannelStrip::new(100, false);
+        let mut mix_block = vec![0f32; BLOCK_SAMPLES];
+        let mut monitor_block = vec![0f32; BLOCK_SAMPLES];
+        let mut send_scratch = vec![0f32; BLOCK_SAMPLES];
+        mix_one_block(
+            &mut sources,
+            &mut [],
+            &mut master_chain,
+            &mut master,
+            &mut mix_block,
+            &mut monitor_block,
+            &mut send_scratch,
+            &mut key_levels,
+            false,
+        );
+        assert_eq!(key_levels.len(), 2, "one level per source");
+        assert_eq!(key_levels[0], 0.0, "a muted source is not making noise");
+        // The second is mid-fade toward half over the block, so it is somewhere
+        // under full scale rather than at it.
+        assert!(
+            key_levels[1] > 0.0 && key_levels[1] < 1.0,
+            "the fader is in the reading: {}",
+            key_levels[1]
+        );
     }
 
     #[test]

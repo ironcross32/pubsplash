@@ -16,19 +16,13 @@
 id = "dialog.appPicker.list"
 label = "Running applications list"
 file = "src/ui/app_picker.rs"
-message = "Arrow up and down through the applications you can capture. Each entry gives the application's name followed by its program file. Press ENTER or use the Select button to capture the highlighted one."
+message = "Arrow up and down through the applications this source can capture. Each entry gives the application's name followed by its program file, and whichever one is highlighted is the one the source will use when you press OK. If the application you want is not listed, try unchecking the sound-only checkbox below, press Refresh after starting it, or use Type a name to enter it by hand."
 
 [[control]]
 id = "dialog.appPicker.refresh"
 label = "Refresh the application list button"
 file = "src/ui/app_picker.rs"
 message = "Look for applications again. Use this after starting an application, or after playing something in one, so that it shows up in the list."
-
-[[control]]
-id = "dialog.appPicker.select"
-label = "Select highlighted application button"
-file = "src/ui/app_picker.rs"
-message = "Capture the application highlighted in the list and close this dialog."
 
 [[control]]
 id = "dialog.appPicker.soundOnly"
@@ -149,6 +143,42 @@ id = "dialog.desktopAudioSource.device"
 label = "Capture from combo box"
 file = "src/ui/scenes.rs"
 message = """Chooses where this Desktop Audio source gets its sound from. "All output devices (Pubsplash excluded)" is the usual choice: it captures everything your computer plays, on every device at once, apart from Pubsplash's own speech, sound cues and monitoring. Picking a single output device instead captures only what is played to that one device, but it captures everything on it with nothing left out, so it cannot be the device Pubsplash itself plays out of. If you pick that one, Pubsplash will say so and leave this window open so you can choose another; you can change which device Pubsplash plays out of on the Audio tab in Preferences."""
+
+[[control]]
+id = "dialog.ducker.duckTo"
+label = "Ducked volume slider"
+file = "src/ui/ducker_dialog.rs"
+message = "How loud this source is while the other one is making noise, as a share of its normal volume. 25% is a good starting point for music under speech: quiet enough to hear every word over, loud enough to still be there. 0% silences this source completely while the other one is talking, and 100% means no ducking at all."
+
+[[control]]
+id = "dialog.ducker.fadeDown"
+label = "Ducking fade down time slider"
+file = "src/ui/ducker_dialog.rs"
+message = "How long this source takes to get quiet once the other one starts. Short, because the drop has to be finished before the first word is: at 20 milliseconds it is immediate but still smooth. Making this long defeats the point, since the beginning of every sentence would be lost under the music."
+
+[[control]]
+id = "dialog.ducker.fadeUp"
+label = "Ducking fade up time slider"
+file = "src/ui/ducker_dialog.rs"
+message = "How long this source takes to come back to full volume after the other one stops. Longer than the fade down, because a fast recovery sounds like the music is lurching. Around 300 milliseconds feels natural."
+
+[[control]]
+id = "dialog.ducker.hold"
+label = "Ducking hold time slider"
+file = "src/ui/ducker_dialog.rs"
+message = "How long this source stays quiet after the other one goes silent, before the fade back up begins. This is what stops the music surging up and down in the gaps between your words. Raise it if the ducking pumps while you are speaking normally; lower it if the music takes too long to return once you have finished."
+
+[[control]]
+id = "dialog.ducker.listenTo"
+label = "Source the ducker listens to"
+file = "src/ui/ducker_dialog.rs"
+message = "The source the ducker listens to. Whenever that source makes a sound, this source gets quieter. The usual arrangement is a music or game source that ducks for your microphone, so your voice is never buried. It listens after that source's own volume and mute, so muting it stops the ducking entirely. A source cannot listen to itself."
+
+[[control]]
+id = "dialog.ducker.trigger"
+label = "Ducking trigger slider"
+file = "src/ui/ducker_dialog.rs"
+message = "How loud the source it is listening to has to get before the ducking starts. Above zero so that room noise, breathing and keyboard clatter do not set it off; too high and quiet speech will not trigger it. 5% suits most microphones. If music ducks when you are not talking, raise this; if it does not duck when you are, lower it."
 
 [[control]]
 id = "dialog.fxEditor.bypass"
@@ -293,6 +323,12 @@ id = "dialog.mastodonTokens.text"
 label = "Template token reference"
 file = "src/ui/mastodon_templates.rs"
 message = "The tokens you can use in a template, one per line, each with what it is replaced with. You can select text here and copy it with CONTROL plus C."
+
+[[control]]
+id = "dialog.microphoneSource.device"
+label = "Microphone combo box"
+file = "src/ui/scenes.rs"
+message = 'Chooses which microphone this source records from. "Default microphone" follows whatever Windows is currently set to use, so it changes with you when you plug in a headset; pick a named device instead to pin this source to that one microphone whatever Windows does.'
 
 [[control]]
 id = "dialog.missingPlugins.apply"
@@ -725,6 +761,42 @@ id = "dialog.soundPreview.play"
 label = "Play or stop button"
 file = "src/ui/sound_preview.rs"
 message = "Plays the sound for the event chosen in the list. It reads Stop instead whenever pressing it would stop something, which is while the sound playing is the one the list is sitting on; it goes back to reading Play by itself once that sound ends, and also the moment you arrow to a different event, since a press would then cut the first sound off and play the new one. SPACE in the list above does the same thing without leaving it."
+
+[[control]]
+id = "dialog.source.effects.add"
+label = "Add effect button"
+file = "src/ui/source_dialog.rs"
+message = "Adds a built-in effect to this source. You choose which kind, then its settings open straight away so it is never left sitting in the list doing nothing. It is added when you press OK in those settings, and not if you cancel them. ALT+A does the same thing as this button."
+
+[[control]]
+id = "dialog.source.effects.edit"
+label = "Edit effect button"
+file = "src/ui/source_dialog.rs"
+message = "Opens the settings for the selected effect. Your changes take effect when you press OK there, so you can hear the result at once. Pressing ENTER on the effects list does the same thing."
+
+[[control]]
+id = "dialog.source.effects.list"
+label = "Effects list"
+file = "src/ui/source_dialog.rs"
+message = "The built-in effects on this source, in the order they are applied. They run on the source itself, before any effect on a bus it is sent to. Press the Add button, or ALT+A, to add one; press ENTER or the Edit button to change the selected one; press DELETE to remove it; and hold CTRL with the up and down arrows to move it earlier or later in the order. Changes here take effect as you make them, so you can listen while you set an effect up; the OK and Cancel buttons below govern this source's own settings on the other tab."
+
+[[control]]
+id = "dialog.source.effects.moveDown"
+label = "Move effect down button"
+file = "src/ui/source_dialog.rs"
+message = "Moves the selected effect one place later, so it is applied after the one above it. CTRL+DOWN ARROW on the effects list does the same thing."
+
+[[control]]
+id = "dialog.source.effects.moveUp"
+label = "Move effect up button"
+file = "src/ui/source_dialog.rs"
+message = "Moves the selected effect one place earlier, so it is applied sooner. CTRL+UP ARROW on the effects list does the same thing."
+
+[[control]]
+id = "dialog.source.effects.remove"
+label = "Remove effect button"
+file = "src/ui/source_dialog.rs"
+message = "Deletes the selected effect from this source, straight away. Pressing DELETE on the effects list does the same thing."
 
 [[control]]
 id = "dialog.streamInfo.archive"
@@ -1211,6 +1283,12 @@ id = "window.tabBar"
 label = "Main tab bar"
 file = "src/ui/mod.rs"
 message = "The tabs of the main window: Home, Chat, Scenes and Sources, and Buses. Use the left and right arrow keys to move between tabs, then TAB to go into the tab's contents. From anywhere in a tab, F6 jumps forward to the next list, and on past the last one back here to the tabs; SHIFT+F6 goes the other way."
+
+[[stale]]
+id = "dialog.appPicker.select"
+label = "Select highlighted application button"
+file = "src/ui/app_picker.rs"
+message = "Capture the application highlighted in the list and close this dialog."
 
 [[stale]]
 id = "dialog.soundEventsSource.browse"

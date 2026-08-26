@@ -4,9 +4,19 @@
 
 ### Additions
 
+- **Every source edit dialog now has an Effects tab**, holding built-in effects that run on that source alone, before any effect on a bus it is sent to. The list has Add (ALT+A), Edit, Remove, Move up and Move down; DELETE removes the selected effect and CTRL with the up and down arrows reorders it, as on the Scenes and Sources lists. Changes on this tab take effect as they are made, so an effect can be set up by ear against live audio.
+
+- **A new Auto-ducker effect** turns another source down while a chosen one is making noise — music that gets out of the way when you talk. It is set up in percentages of full volume and times in milliseconds: which source to listen to, the ducked volume, the level that starts the ducking, the fade down and fade back up times, and how long it stays ducked.
+
 ### Fixes
 
 ### Changes
+
+- Source settings are now one dialog per source with the kind's own settings on the first tab, replacing the five separate dialogs. Microphone sources have a real settings window for the first time.
+
+- Editing a source opens with the keyboard on the first control of its settings, rather than on the tab bar.
+
+- The Application source's list of running applications is now the settings tab itself, instead of a separate picker window opened from a button.
 
 ## 0.1.7
 

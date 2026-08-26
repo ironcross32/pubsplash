@@ -3,11 +3,12 @@
 
 use super::home::on_sources_changed;
 use super::slider_uia::SliderAnnouncer;
+use super::source_dialog::{Shell, add_effects_page};
 use super::{App, WXK_DELETE, WXK_DOWN, WXK_UP, show_error};
 use crate::config::{
-    AzureTtsSettings, ElevenLabsTtsSettings, GoogleTtsSettings, GttsTtsSettings, OpenAiTtsSettings,
-    PollyTtsSettings, SoundEventsSourceConfig, SourceConfig, SourceKindConfig, TtsEngineProfile,
-    TtsEngineSettings, TtsSourceConfig,
+    AzureTtsSettings, EffectConfig, ElevenLabsTtsSettings, GoogleTtsSettings, GttsTtsSettings,
+    OpenAiTtsSettings, PollyTtsSettings, SoundEventsSourceConfig, SourceConfig, SourceKindConfig,
+    TtsEngineProfile, TtsEngineSettings, TtsSourceConfig,
 };
 use crate::soundpack::StreamEvent;
 use crate::state::{ListEdit, move_down, move_up};
@@ -509,41 +510,68 @@ fn add_source(app: &Rc<App>) {
 
 fn edit_source(app: &Rc<App>, list: &ListBox) {
     let scene_index = selected_scene_index(app);
-    let Some(index) = super::list::selection(list, source_count(app, scene_index)) else {
+    let Some(source_index) = super::list::selection(list, source_count(app, scene_index)) else {
         return;
     };
-    let kind = {
+    // The whole scene's sources, not just this one: the Effects page needs the
+    // siblings to label an effect and to offer a ducker something to listen to.
+    let siblings = {
         let config = app.config.borrow();
-        let Some(source) = config
-            .scenes
-            .scenes
-            .get(scene_index)
-            .and_then(|s| s.sources.get(index))
-        else {
+        let Some(scene) = config.scenes.scenes.get(scene_index) else {
             return;
         };
-        source.kind.clone()
+        scene.sources.clone()
+    };
+    let Some(kind) = siblings.get(source_index).map(|s| s.kind.clone()) else {
+        return;
+    };
+    let target = EditTarget {
+        scene_index,
+        source_index,
+        siblings,
     };
 
     match kind {
-        SourceKindConfig::Microphone { device_id } => {
-            edit_microphone(app, scene_index, index, device_id)
-        }
-        SourceKindConfig::Tts(tts) => edit_tts(app, scene_index, index, tts),
+        SourceKindConfig::Microphone { device_id } => edit_microphone(app, &target, device_id),
+        SourceKindConfig::Tts(tts) => edit_tts(app, &target, tts),
         SourceKindConfig::Application { process_name } => {
-            edit_application(app, scene_index, index, process_name)
+            edit_application(app, &target, process_name)
         }
-        SourceKindConfig::DesktopAudio { device_id } => {
-            edit_desktop_audio(app, scene_index, index, device_id)
-        }
-        SourceKindConfig::SoundEvents(settings) => {
-            edit_sound_events(app, scene_index, index, settings)
-        }
+        SourceKindConfig::DesktopAudio { device_id } => edit_desktop_audio(app, &target, device_id),
+        SourceKindConfig::SoundEvents(settings) => edit_sound_events(app, &target, settings),
     }
 }
 
-fn set_source_kind(app: &Rc<App>, scene_index: usize, source_index: usize, kind: SourceKindConfig) {
+/// What every source edit dialog needs beyond its own kind payload.
+///
+/// The dialogs are opened from a list selection taken before they ran, so the
+/// indices can go stale while one is up; nothing here is dereferenced until
+/// [`apply_source_edit`], which checks.
+struct EditTarget {
+    scene_index: usize,
+    source_index: usize,
+    /// The scene's sources as they stood when the dialog opened.
+    siblings: Vec<SourceConfig>,
+}
+
+impl EditTarget {
+    /// This source's effects, for the Effects page to edit a copy of.
+    fn effects(&self) -> Vec<EffectConfig> {
+        self.siblings
+            .get(self.source_index)
+            .map(|s| s.effects.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// Writes back what a source edit dialog's settings page produced.
+///
+/// The effects are not here: the Effects page writes and applies each change as
+/// it is made, so by the time this runs they are already saved. See
+/// `super::source_dialog` for why.
+fn apply_source_edit(app: &Rc<App>, target: &EditTarget, kind: SourceKindConfig) {
     let previous_sources = active_sources(app);
+    let (scene_index, source_index) = (target.scene_index, target.source_index);
     {
         let mut config = app.config.borrow_mut();
         match config
@@ -563,12 +591,7 @@ fn set_source_kind(app: &Rc<App>, scene_index: usize, source_index: usize, kind:
     }
     after_source_edit(app, previous_sources);
 }
-fn edit_microphone(
-    app: &Rc<App>,
-    scene_index: usize,
-    source_index: usize,
-    current: Option<String>,
-) {
+fn edit_microphone(app: &Rc<App>, target: &EditTarget, current: Option<String>) {
     let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
@@ -577,37 +600,58 @@ fn edit_microphone(
         show_error(&frame, "Microphone", "No microphones were found.");
         return;
     }
-    let mut labels: Vec<String> = vec!["Default microphone".to_string()];
-    labels.extend(devices.iter().map(|d| d.name.clone()));
-    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-    let dialog = SingleChoiceDialog::builder(
-        &frame,
-        "Which microphone should this source use?",
-        "Microphone",
-        &label_refs,
-    )
-    .build();
-    super::native_acc::install_in_dialog(&dialog, "Which microphone should this source use?");
-    // Preselect the current device.
+
+    let shell = Shell::new(&frame, "Microphone source", 500, 420, false);
+    let page = Panel::builder(&shell.notebook).build();
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+
+    const WHICH: &str = "Microphone";
+    let label = StaticText::builder(&page).with_label(WHICH).build();
+    let choice = Choice::builder(&page).build();
+    super::set_accessible_name(&choice, WHICH);
+    super::help::tag(
+        &choice,
+        "dialog.microphoneSource.device",
+        "Microphone combo box",
+    );
+    // Row 0 follows the system default, which is what a microphone source did
+    // before it could be pinned to one device.
+    choice.append("Default microphone");
+    for device in &devices {
+        choice.append(&device.name);
+    }
     let preselect = current
         .as_deref()
         .and_then(|id| devices.iter().position(|d| d.id == id).map(|i| i + 1))
         .unwrap_or(0);
-    dialog.set_selection(preselect as i32);
-    if dialog.show_modal() == ID_OK {
-        let selection = dialog.get_selection();
-        let device_id = if selection <= 0 {
-            None
-        } else {
-            devices.get(selection as usize - 1).map(|d| d.id.clone())
-        };
-        set_source_kind(
-            app,
-            scene_index,
-            source_index,
-            SourceKindConfig::Microphone { device_id },
-        );
+    choice.set_selection(preselect as u32);
+
+    sizer.add(&label, 0, SizerFlag::All, 4);
+    sizer.add(&choice, 0, SizerFlag::Expand | SizerFlag::All, 4);
+    page.set_sizer(sizer, true);
+    shell.add_settings_page(&page, WHICH);
+    add_effects_page(
+        app,
+        &shell,
+        target.scene_index,
+        &target.siblings,
+        target.source_index,
+        target.effects(),
+    );
+    shell.finish();
+
+    let dialog = shell.dialog;
+    shell.ok.on_click(move |_| dialog.end_modal(ID_OK));
+
+    if shell.show_modal_focused(&choice) == ID_OK {
+        let device_id = choice
+            .get_selection()
+            .and_then(|row| (row as usize).checked_sub(1))
+            .and_then(|i| devices.get(i))
+            .map(|d| d.id.clone());
+        apply_source_edit(app, target, SourceKindConfig::Microphone { device_id });
     }
+    shell.dialog.destroy();
 }
 
 /// Which output device a Desktop Audio source captures.
@@ -625,27 +669,19 @@ fn edit_microphone(
 /// endpoint loopback, which captures everything on it. Aimed at the device
 /// Pubsplash plays out of, that is Pubsplash's own speech, sound cues and
 /// monitoring going back out to the listeners.
-fn edit_desktop_audio(
-    app: &Rc<App>,
-    scene_index: usize,
-    source_index: usize,
-    current: Option<String>,
-) {
+fn edit_desktop_audio(app: &Rc<App>, target: &EditTarget, current: Option<String>) {
     let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
     let devices = crate::audio::device::render_devices();
 
-    let dialog = Dialog::builder(&frame, "Desktop Audio source")
-        .with_style(DialogStyle::DefaultDialogStyle)
-        .with_size(460, 220)
-        .build();
-    let panel = Panel::builder(&dialog).build();
+    let shell = Shell::new(&frame, "Desktop Audio source", 500, 420, false);
+    let page = Panel::builder(&shell.notebook).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     const CAPTURE_FROM: &str = "Capture from";
-    let label = StaticText::builder(&panel).with_label(CAPTURE_FROM).build();
-    let choice = Choice::builder(&panel).build();
+    let label = StaticText::builder(&page).with_label(CAPTURE_FROM).build();
+    let choice = Choice::builder(&page).build();
     super::set_accessible_name(&choice, CAPTURE_FROM);
     super::help::tag(
         &choice,
@@ -665,23 +701,22 @@ fn edit_desktop_audio(
         .unwrap_or(0);
     choice.set_selection(preselect as u32);
 
-    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let ok = super::ok_button(&panel, "OK");
-    // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
-    let cancel = Button::builder(&panel)
-        .with_id(ID_CANCEL)
-        .with_label("Cancel")
-        .build();
-    buttons.add(&ok, 0, SizerFlag::All, 4);
-    buttons.add(&cancel, 0, SizerFlag::All, 4);
-
     sizer.add(&label, 0, SizerFlag::All, 4);
     sizer.add(&choice, 0, SizerFlag::Expand | SizerFlag::All, 4);
-    sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight, 0);
-    panel.set_sizer(sizer, true);
-    let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
-    dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
-    dialog.set_sizer(dialog_sizer, true);
+    page.set_sizer(sizer, true);
+    shell.add_settings_page(&page, "Desktop Audio");
+    add_effects_page(
+        app,
+        &shell,
+        target.scene_index,
+        &target.siblings,
+        target.source_index,
+        target.effects(),
+    );
+    shell.finish();
+
+    // Named before `chosen` moves the control into itself.
+    let focus_first = choice;
 
     // The chosen id, or `None` for the all-endpoints row. Read in both the
     // confirm handler (to refuse) and after the modal (to save), so it is one
@@ -699,14 +734,16 @@ fn edit_desktop_audio(
 
     {
         let chosen = chosen.clone();
-        ok.on_click(move |_| {
+        let dialog = shell.dialog;
+        shell.ok.on_click(move |_| {
             if let Some(device) = chosen()
                 && crate::audio::device::effective_output_device_id().as_deref()
                     == Some(device.id.as_str())
             {
                 // Deliberately no `end_modal`: the user stays on the picker
                 // with their choice still selected, which is the whole reason
-                // this is not a `SingleChoiceDialog`.
+                // the confirm button carries the private `ID_CONFIRM` rather
+                // than `ID_OK`.
                 show_error(
                     &dialog,
                     "Desktop Audio",
@@ -724,72 +761,123 @@ fn edit_desktop_audio(
             dialog.end_modal(ID_OK);
         });
     }
-    {
-        cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
-    }
 
-    if dialog.show_modal() == ID_OK {
-        set_source_kind(
+    if shell.show_modal_focused(&focus_first) == ID_OK {
+        apply_source_edit(
             app,
-            scene_index,
-            source_index,
+            target,
             SourceKindConfig::DesktopAudio {
                 device_id: chosen().map(|d| d.id),
             },
         );
     }
-    dialog.destroy();
+    shell.dialog.destroy();
 }
 
-fn edit_application(app: &Rc<App>, scene_index: usize, source_index: usize, current: String) {
+/// The Application source dialog.
+///
+/// The chooser is the page: picking the application is the whole of what an
+/// Application source has to be told, so it is on screen the moment the dialog
+/// opens rather than behind a button. `super::app_picker` owns it, including
+/// the "Type a name" escape hatch for an app that is not running yet.
+fn edit_application(app: &Rc<App>, target: &EditTarget, current: String) {
     let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
-    let process_name = match super::app_picker::pick_application(&frame, &current) {
-        super::app_picker::Pick::App(name) => name,
-        // Opened here, after the picker has closed, so no modal is ever nested.
-        super::app_picker::Pick::TypeAName => {
-            match super::app_picker::type_a_name(&frame, &current) {
-                Some(name) => name,
-                None => return,
+    let shell = Shell::new(&frame, "Application source", 560, 520, true);
+    let page = Panel::builder(&shell.notebook).build();
+    let sizer = BoxSizer::builder(Orientation::Vertical).build();
+
+    // Shared rather than copied into the confirm handler: the answer has to be
+    // read when OK is pressed, not when the page was built.
+    let chooser = Rc::new(super::app_picker::build(
+        &page,
+        &sizer,
+        &shell.dialog,
+        &current,
+    ));
+
+    page.set_sizer(sizer, true);
+    shell.add_settings_page(&page, "Application");
+    add_effects_page(
+        app,
+        &shell,
+        target.scene_index,
+        &target.siblings,
+        target.source_index,
+        target.effects(),
+    );
+    shell.finish();
+
+    // Nothing selected means the list was empty and nothing was typed, so there
+    // is no new answer and the source keeps the name it had.
+    // The answer, resolved and stored *while the dialog is still up*.
+    //
+    // Reading the list after `show_modal` returns is what the standalone picker
+    // did in its first version, and it lost the user's choice: by then the
+    // dialog is hidden and the handle may no longer resolve, so `get_selection`
+    // answers `None` — which here would silently keep the source's old name and
+    // look like a confirmed edit that saved nothing.
+    let picked: Rc<std::cell::RefCell<Option<String>>> = Rc::new(std::cell::RefCell::new(None));
+
+    {
+        let dialog = shell.dialog;
+        let chooser = chooser.clone();
+        let picked = picked.clone();
+        let previous = current.clone();
+        shell.ok.on_click(move |_| {
+            // Nothing selected means the list was empty and nothing was typed,
+            // so there is no new answer and the source keeps the name it had.
+            let process_name = chooser.selected().unwrap_or_else(|| previous.clone());
+            // A name that resolves to nothing produces a source that is silent
+            // without complaining, which is the failure this warning exists to
+            // prevent. It is a notice, not a refusal: the app may simply not be
+            // running yet, and capture picks it up when it starts.
+            if !process_name.trim().is_empty()
+                && crate::audio::device::find_process(&process_name).is_none()
+            {
+                super::show_info(
+                    &dialog,
+                    "Application source",
+                    &format!(
+                        "{process_name} does not appear to be running. The source will stay silent until it starts, and will be picked up automatically when it does."
+                    ),
+                );
             }
-        }
-        super::app_picker::Pick::Cancelled => return,
-    };
-    // Only reachable through the typed fallback now, but still worth saying: a
-    // name that resolves to nothing produces a source that is silent without
-    // complaining, which is the failure this dialog exists to prevent.
-    if crate::audio::device::find_process(&process_name).is_none() {
-        super::show_info(
-            &frame,
-            "Application source",
-            &format!(
-                "{process_name} does not appear to be running. The source will stay silent until it starts, and will be picked up automatically when it does."
-            ),
+            *picked.borrow_mut() = Some(process_name);
+            dialog.end_modal(ID_OK);
+        });
+    }
+
+    let confirmed = shell.show_modal_focused(&chooser.list) == ID_OK;
+    let process_name = picked.borrow_mut().take();
+    if confirmed {
+        apply_source_edit(
+            app,
+            target,
+            SourceKindConfig::Application {
+                process_name: process_name.unwrap_or(current),
+            },
         );
     }
-    set_source_kind(
-        app,
-        scene_index,
-        source_index,
-        SourceKindConfig::Application { process_name },
-    );
+    shell.dialog.destroy();
 }
 
-fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: TtsSourceConfig) {
+fn edit_tts(app: &Rc<App>, target: &EditTarget, current: TtsSourceConfig) {
     let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
-    let dialog = Dialog::builder(&frame, "Text-to-Speech source")
-        .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
-        .with_size(560, 640)
-        .build();
+    let shell = Shell::new(&frame, "Text-to-Speech source", 600, 700, true);
+    let dialog = shell.dialog;
     // Voice fetches and previews finish on the pump, which keeps running
     // inside this dialog's modal loop — and can outlive the dialog if the user
     // closes it mid-request. Cleared just before `destroy()`, so those
     // callbacks bail instead of touching freed widgets.
     let alive = Rc::new(std::cell::Cell::new(true));
-    let scrolled = ScrolledWindow::builder(&dialog)
+    // Still a scrolled window, and still holding the same controls in the same
+    // order — it is simply a notebook page now rather than the dialog's only
+    // child. Nothing inside `TtsProviderControls` changes.
+    let scrolled = ScrolledWindow::builder(&shell.notebook)
         .with_style(ScrolledWindowStyle::VScroll)
         .build();
     scrolled.set_scroll_rate(0, 12);
@@ -911,16 +999,6 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         "Reset this engine to defaults button",
     );
 
-    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let ok = super::ok_button(&panel, "OK");
-    // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
-    let cancel = Button::builder(&panel)
-        .with_id(ID_CANCEL)
-        .with_label("Cancel")
-        .build();
-    buttons.add(&ok, 0, SizerFlag::All, 4);
-    buttons.add(&cancel, 0, SizerFlag::All, 4);
-
     sizer.add(&engine_label, 0, SizerFlag::All, 4);
     sizer.add(&engine_choice, 0, SizerFlag::Expand | SizerFlag::All, 4);
     sizer.add(&voice_label, 0, SizerFlag::All, 4);
@@ -938,14 +1016,20 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     sizer.add(&output_check, 0, SizerFlag::All, 8);
     sizer.add(&preview, 0, SizerFlag::All, 4);
     sizer.add(&reset, 0, SizerFlag::All, 4);
-    sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight, 0);
     panel.set_sizer(sizer, true);
     let scrolled_sizer = BoxSizer::builder(Orientation::Vertical).build();
     scrolled_sizer.add(&panel, 1, SizerFlag::Expand, 0);
     scrolled.set_sizer(scrolled_sizer, true);
-    let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
-    dialog_sizer.add(&scrolled, 1, SizerFlag::Expand, 0);
-    dialog.set_sizer(dialog_sizer, true);
+    shell.add_settings_page(&scrolled, "Text-to-Speech");
+    add_effects_page(
+        app,
+        &shell,
+        target.scene_index,
+        &target.siblings,
+        target.source_index,
+        target.effects(),
+    );
+    shell.finish();
 
     let rate_supported = rate_is_supported(selected_id);
     rate_label.show(rate_supported);
@@ -1338,13 +1422,9 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
     }
 
     {
-        ok.on_click(move |_| dialog.end_modal(ID_OK));
+        shell.ok.on_click(move |_| dialog.end_modal(ID_OK));
     }
-    {
-        cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
-    }
-
-    let outcome = dialog.show_modal();
+    let outcome = shell.show_modal_focused(&engine_choice);
     // Nothing may have settled yet if OK was pressed straight after an arrow
     // key; `selected_voice` below would then read the old engine's list.
     apply_engine();
@@ -1357,10 +1437,9 @@ fn edit_tts(app: &Rc<App>, scene_index: usize, source_index: usize, current: Tts
         let engine = selected_engine();
         let profiles = profiles.borrow();
         let active = profiles.get(engine).cloned().unwrap_or_default();
-        set_source_kind(
+        apply_source_edit(
             app,
-            scene_index,
-            source_index,
+            target,
             SourceKindConfig::Tts(TtsSourceConfig {
                 engine: engine.to_string(),
                 voice: active.voice,
@@ -2487,20 +2566,12 @@ fn preview_voice(
         true
     });
 }
-fn edit_sound_events(
-    app: &Rc<App>,
-    scene_index: usize,
-    source_index: usize,
-    current: SoundEventsSourceConfig,
-) {
+fn edit_sound_events(app: &Rc<App>, target: &EditTarget, current: SoundEventsSourceConfig) {
     let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
-    let dialog = Dialog::builder(&frame, "Sound Events source")
-        .with_style(DialogStyle::DefaultDialogStyle)
-        .with_size(420, 320)
-        .build();
-    let panel = Panel::builder(&dialog).build();
+    let shell = Shell::new(&frame, "Sound Events source", 500, 460, false);
+    let page = Panel::builder(&shell.notebook).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     // There is no pack picker here: every Sound Events source plays the pack
@@ -2512,7 +2583,7 @@ fn edit_sound_events(
     // dialog and the Sound Pack Manager can never name an event differently.
     // Screen readers do not announce a checkbox's label here on their own.
     let event_check = |event: StreamEvent, value: bool| {
-        let check = CheckBox::builder(&panel).with_label(event.label()).build();
+        let check = CheckBox::builder(&page).with_label(event.label()).build();
         super::set_accessible_name(&check, event.label());
         check.set_value(value);
         check
@@ -2551,7 +2622,7 @@ fn edit_sound_events(
         "Outgoing chat message checkbox",
     );
 
-    let output_check = CheckBox::builder(&panel)
+    let output_check = CheckBox::builder(&page)
         .with_label("Send these sounds to the stream")
         .build();
     super::set_accessible_name(&output_check, "Send these sounds to the stream");
@@ -2562,40 +2633,31 @@ fn edit_sound_events(
     );
     output_check.set_value(current.output_to_stream);
 
-    let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let ok = super::ok_button(&panel, "OK");
-    // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
-    let cancel = Button::builder(&panel)
-        .with_id(ID_CANCEL)
-        .with_label("Cancel")
-        .build();
-    buttons.add(&ok, 0, SizerFlag::All, 4);
-    buttons.add(&cancel, 0, SizerFlag::All, 4);
-
     sizer.add(&listener_increase, 0, SizerFlag::All, 4);
     sizer.add(&listener_decrease, 0, SizerFlag::All, 4);
     sizer.add(&listener_peak_increase, 0, SizerFlag::All, 4);
     sizer.add(&incoming_chat, 0, SizerFlag::All, 4);
     sizer.add(&outgoing_chat, 0, SizerFlag::All, 4);
     sizer.add(&output_check, 0, SizerFlag::All, 8);
-    sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight, 0);
-    panel.set_sizer(sizer, true);
-    let dialog_sizer = BoxSizer::builder(Orientation::Vertical).build();
-    dialog_sizer.add(&panel, 1, SizerFlag::Expand, 0);
-    dialog.set_sizer(dialog_sizer, true);
+    page.set_sizer(sizer, true);
+    shell.add_settings_page(&page, "Sound Events");
+    add_effects_page(
+        app,
+        &shell,
+        target.scene_index,
+        &target.siblings,
+        target.source_index,
+        target.effects(),
+    );
+    shell.finish();
 
-    {
-        ok.on_click(move |_| dialog.end_modal(ID_OK));
-    }
-    {
-        cancel.on_click(move |_| dialog.end_modal(ID_CANCEL));
-    }
+    let dialog = shell.dialog;
+    shell.ok.on_click(move |_| dialog.end_modal(ID_OK));
 
-    if dialog.show_modal() == ID_OK {
-        set_source_kind(
+    if shell.show_modal_focused(&listener_increase) == ID_OK {
+        apply_source_edit(
             app,
-            scene_index,
-            source_index,
+            target,
             SourceKindConfig::SoundEvents(SoundEventsSourceConfig {
                 // Unused for now; preserved so a path set by an earlier build
                 // survives until the Preferences pack picker can show it.
@@ -2609,7 +2671,7 @@ fn edit_sound_events(
             }),
         );
     }
-    dialog.destroy();
+    shell.dialog.destroy();
 }
 
 #[cfg(test)]

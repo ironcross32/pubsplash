@@ -17,7 +17,7 @@
 //! happens over real output rather than over a gap.
 
 use crate::vst::{MixMode, PluginInstance, Processed, PtrScratch};
-use mixer::{BLOCK_FRAMES, CHANNELS, FADE_SECONDS, SAMPLE_RATE};
+use mixer::{BLOCK_FRAMES, CHANNELS, FADE_SECONDS, SAMPLE_RATE, approach};
 use std::sync::Arc;
 
 use super::mixer;
@@ -235,14 +235,6 @@ fn mix_in(
             let n = stored.len().min(src.len());
             stored[..n].copy_from_slice(&src[..n]);
         }
-    }
-}
-
-fn approach(current: f32, target: f32, step: f32) -> f32 {
-    if current < target {
-        (current + step).min(target)
-    } else {
-        (current - step).max(target)
     }
 }
 

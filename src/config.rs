@@ -750,6 +750,10 @@ pub struct SourceConfig {
     /// heard only through its bus sends (insert-style routing).
     pub to_master: bool,
     pub sends: Vec<SendConfig>,
+    /// Built-in effects on this source; list order is processing order. These
+    /// run on the source's own signal, so they are inside everything
+    /// downstream — before any effect on a bus it sends to.
+    pub effects: Vec<EffectConfig>,
 }
 
 impl Default for SourceConfig {
@@ -762,6 +766,67 @@ impl Default for SourceConfig {
             kind: SourceKindConfig::Microphone { device_id: None },
             to_master: true,
             sends: Vec::new(),
+            effects: Vec::new(),
+        }
+    }
+}
+
+/// One built-in effect on a source.
+///
+/// Internally tagged like [`SourceKindConfig`], so a new effect kind is a new
+/// variant and older settings files keep loading. These are Pubsplash's own
+/// DSP — a hosted VST plugin is an [`FxSlotConfig`] and lives on a bus.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EffectConfig {
+    Ducker(DuckerConfig),
+}
+
+impl EffectConfig {
+    /// What this kind of effect is called, with no reference to its settings.
+    pub fn type_display_name(&self) -> &'static str {
+        match self {
+            EffectConfig::Ducker(_) => "Auto-ducker",
+        }
+    }
+}
+
+/// Drops this source's volume while another source is making noise.
+///
+/// Every field is in units a broadcaster can reason about without knowing any
+/// audio engineering: percentages of full signal, and milliseconds. There is
+/// deliberately no ratio, knee, or decibel anywhere.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct DuckerConfig {
+    /// The source this one listens to, by [`SourceConfig::name`]. Empty means
+    /// nothing is configured yet and the effect does nothing at all.
+    pub key: String,
+    /// The level this source drops to while the key source is making noise,
+    /// as a percentage of full signal (0-100). 100 would be no ducking.
+    pub duck_to: u32,
+    /// How loud the key source has to get before ducking starts, as a
+    /// percentage of full signal (0-100). Above zero so room noise and
+    /// keyboard clatter do not trigger it.
+    pub trigger: u32,
+    /// How long the drop takes, in milliseconds.
+    pub fade_down_ms: u32,
+    /// How long the recovery takes, in milliseconds.
+    pub fade_up_ms: u32,
+    /// How long it stays ducked after the key source goes quiet, in
+    /// milliseconds, so the pauses between words do not make it pump.
+    pub hold_ms: u32,
+}
+
+impl Default for DuckerConfig {
+    fn default() -> Self {
+        Self {
+            key: String::new(),
+            duck_to: 25,
+            trigger: 5,
+            fade_down_ms: 20,
+            fade_up_ms: 300,
+            hold_ms: 250,
         }
     }
 }
@@ -1165,6 +1230,60 @@ pub fn save_to(config: &Config, path: &Path) {
 
 #[cfg(test)]
 mod tests {
+    /// A settings file written before per-source effects existed has no
+    /// `effects` key at all, and must still load — the whole reason
+    /// `SourceConfig` carries `#[serde(default)]`.
+    #[test]
+    fn a_source_saved_before_effects_existed_still_loads() {
+        let json = r#"{
+            "name": "Microphone",
+            "volume": 100,
+            "muted": false,
+            "kind": { "type": "microphone", "device_id": null },
+            "to_master": true,
+            "sends": []
+        }"#;
+        let source: SourceConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(source.name, "Microphone");
+        assert!(source.effects.is_empty(), "no effects, not a parse failure");
+    }
+
+    #[test]
+    fn an_effect_round_trips_through_the_settings_file() {
+        let source = SourceConfig {
+            name: "Desktop Audio".into(),
+            effects: vec![EffectConfig::Ducker(DuckerConfig {
+                key: "Microphone".into(),
+                duck_to: 30,
+                ..Default::default()
+            })],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&source).unwrap();
+        assert_eq!(serde_json::from_str::<SourceConfig>(&json).unwrap(), source);
+    }
+
+    /// The tag is what lets a second built-in effect be added without
+    /// invalidating everything already written.
+    #[test]
+    fn effects_are_tagged_by_kind() {
+        let json = serde_json::to_string(&EffectConfig::Ducker(DuckerConfig::default())).unwrap();
+        assert!(json.contains("\"type\":\"ducker\""), "got {json}");
+    }
+
+    /// A ducker written by an older build that lacked one of these fields must
+    /// come back with the default rather than a zero — a zero `fade_up_ms` or
+    /// `trigger` is a real setting and a bad one.
+    #[test]
+    fn a_partial_ducker_fills_in_defaults() {
+        let ducker: DuckerConfig = serde_json::from_str(r#"{ "key": "Microphone" }"#).unwrap();
+        assert_eq!(ducker.key, "Microphone");
+        assert_eq!(ducker.duck_to, 25);
+        assert_eq!(ducker.trigger, 5);
+        assert_eq!(ducker.fade_up_ms, 300);
+        assert_eq!(ducker.hold_ms, 250);
+    }
+
     use super::*;
 
     fn temp_path(name: &str) -> PathBuf {

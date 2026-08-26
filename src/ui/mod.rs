@@ -9,6 +9,7 @@ mod buses;
 mod chat;
 mod connect_dialog;
 mod cue_feed;
+mod ducker_dialog;
 mod fx;
 mod fx_editor;
 mod fx_params;
@@ -31,6 +32,7 @@ mod schedule_ui;
 mod sends;
 mod slider_uia;
 mod sound_preview;
+mod source_dialog;
 mod stream_info_dialog;
 mod update;
 mod update_dialog;
@@ -1078,6 +1080,38 @@ fn tts_reaches_the_stream(source: &crate::config::SourceConfig) -> bool {
     }
 }
 
+/// One source's effects as engine specs, with every source reference resolved
+/// to an index.
+///
+/// `own_index` is the source the effects belong to, and it is refused as a key:
+/// a source that ducked against itself would turn itself down whenever it made
+/// a sound, and then turn back up because it had — a feedback loop with a gain
+/// control on it. An unresolved key is not an error and not a warning either;
+/// deleting a source is a perfectly ordinary thing to do, the effects list says
+/// plainly that the effect is listening to nothing, and it does nothing at all
+/// until it is pointed at something again.
+fn effect_specs(
+    source: &crate::config::SourceConfig,
+    own_index: usize,
+    source_index: impl Fn(&str) -> Option<usize>,
+) -> Vec<crate::audio::effects::EffectSpec> {
+    use crate::audio::effects::{DuckerSpec, EffectSpec};
+    source
+        .effects
+        .iter()
+        .map(|effect| match effect {
+            crate::config::EffectConfig::Ducker(ducker) => EffectSpec::Ducker(DuckerSpec::new(
+                source_index(&ducker.key).filter(|index| *index != own_index),
+                ducker.duck_to,
+                ducker.trigger,
+                ducker.fade_down_ms,
+                ducker.fade_up_ms,
+                ducker.hold_ms,
+            )),
+        })
+        .collect()
+}
+
 /// One source's engine-side routing: whether it mixes into master, and its
 /// sends with bus names resolved to the indices the engine addresses them by.
 ///
@@ -1527,6 +1561,10 @@ impl App {
         let config = self.config.borrow();
         let scene = config.scenes.active_scene()?;
         let bus_index = |name: &str| config.buses.buses.iter().position(|b| b.name == name);
+        // Effects name the source they listen to, the way a send names its bus,
+        // so the engine's index is resolved here and re-resolved on every
+        // re-sync. A source that has since been deleted resolves to nothing.
+        let source_index = |name: &str| scene.sources.iter().position(|s| s.name == name);
         let specs: Vec<SourceSpec> = scene
             .sources
             .iter()
@@ -1544,6 +1582,7 @@ impl App {
                     local: matches!(&s.kind, SourceKindConfig::Tts(_)),
                     to_master,
                     sends,
+                    effects: effect_specs(s, index, source_index),
                     feed: match &s.kind {
                         SourceKindConfig::Microphone { device_id } => {
                             FeedKind::Capture(CaptureKind::Microphone {
@@ -1576,6 +1615,29 @@ impl App {
             })
             .collect();
         Some(specs)
+    }
+
+    /// Applies one source's effects to the engine without disturbing anything
+    /// else about it.
+    ///
+    /// A no-op unless `scene_index` names the active scene, and targeted rather
+    /// than a whole-list re-sync, for exactly the reasons spelled out on
+    /// [`Self::sync_source_routing`].
+    pub fn sync_source_effects(&self, scene_index: usize, source_index: usize) {
+        let config = self.config.borrow();
+        let Some(scene) = config.scenes.scenes.get(scene_index) else {
+            return;
+        };
+        if scene.name != config.scenes.active_scene {
+            return;
+        }
+        let Some(source) = scene.sources.get(source_index) else {
+            return;
+        };
+        let index_of = |name: &str| scene.sources.iter().position(|s| s.name == name);
+        let specs = effect_specs(source, source_index, index_of);
+        self.engine
+            .send(EngineCommand::SetSourceEffects(source_index, specs));
     }
 
     /// Applies one source's `to_master` and sends to the engine without
@@ -3515,6 +3577,87 @@ mod recording_failure_tests {
             false,
         );
         assert!(text.contains("(os error 3)"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod effect_spec_tests {
+    use super::*;
+    use crate::audio::effects::EffectSpec;
+    use crate::config::{DuckerConfig, EffectConfig, SourceConfig};
+
+    fn scene(names: &[&str]) -> Vec<SourceConfig> {
+        names
+            .iter()
+            .map(|name| SourceConfig {
+                name: (*name).to_string(),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    /// Builds the specs for the source at `own_index` of a scene named by
+    /// `names`, whose ducker listens to `key`.
+    fn resolve(names: &[&str], own_index: usize, key: &str) -> EffectSpec {
+        let sources = scene(names);
+        let mut source = sources[own_index].clone();
+        source.effects = vec![EffectConfig::Ducker(DuckerConfig {
+            key: key.to_string(),
+            ..Default::default()
+        })];
+        let index = |name: &str| sources.iter().position(|s| s.name == name);
+        effect_specs(&source, own_index, index).remove(0)
+    }
+
+    fn key_of(spec: EffectSpec) -> Option<usize> {
+        let EffectSpec::Ducker(ducker) = spec;
+        ducker.key
+    }
+
+    #[test]
+    fn a_key_resolves_to_its_position_in_the_scene() {
+        let spec = resolve(&["Microphone", "Desktop Audio", "Music"], 1, "Music");
+        assert_eq!(key_of(spec), Some(2));
+    }
+
+    /// Deleting a source is ordinary; the ducker that pointed at it simply
+    /// stops doing anything rather than ducking against the wrong source.
+    #[test]
+    fn a_key_naming_a_deleted_source_resolves_to_nothing() {
+        let spec = resolve(&["Microphone", "Desktop Audio"], 1, "Gone");
+        assert_eq!(key_of(spec), None);
+    }
+
+    #[test]
+    fn an_unconfigured_key_resolves_to_nothing() {
+        let spec = resolve(&["Microphone", "Desktop Audio"], 1, "");
+        assert_eq!(key_of(spec), None);
+    }
+
+    /// A source keyed to itself would duck whenever it made a sound and
+    /// recover because it had — a feedback loop with a gain control on it. It
+    /// is refused here rather than in the engine, so the engine never sees one.
+    #[test]
+    fn a_source_may_not_listen_to_itself() {
+        let spec = resolve(&["Microphone", "Desktop Audio"], 1, "Desktop Audio");
+        assert_eq!(key_of(spec), None);
+    }
+
+    #[test]
+    fn settings_carry_through_in_the_engines_units() {
+        let sources = scene(&["Microphone", "Music"]);
+        let mut source = sources[1].clone();
+        source.effects = vec![EffectConfig::Ducker(DuckerConfig {
+            key: "Microphone".into(),
+            duck_to: 40,
+            trigger: 10,
+            ..Default::default()
+        })];
+        let index = |name: &str| sources.iter().position(|s| s.name == name);
+        let EffectSpec::Ducker(ducker) = effect_specs(&source, 1, index).remove(0);
+        assert_eq!(ducker.key, Some(0));
+        assert!((ducker.duck_to - 0.4).abs() < 1e-6);
+        assert!((ducker.trigger - 0.1).abs() < 1e-6);
     }
 }
 
