@@ -10,6 +10,10 @@
 
 ### Fixes
 
+- STAR voices now populate the voice dropdown from the configured coagulator.
+
+- STAR now defaults to the coagulator's standard port 7774.
+
 ### Changes
 
 - The project has moved to github.com/liamerven/pubsplash. Automatic updates, the download links in the README, and the Help menu's online readme and changelog now point at the new home.
