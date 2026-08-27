@@ -12,6 +12,8 @@
 
 ### Changes
 
+- The project has moved to github.com/liamerven/pubsplash. Automatic updates, the download links in the README, and the Help menu's online readme and changelog now point at the new home.
+
 - Source settings are now one dialog per source with the kind's own settings on the first tab, replacing the five separate dialogs. Microphone sources have a real settings window for the first time.
 
 - Editing a source opens with the keyboard on the first control of its settings, rather than on the tab bar.

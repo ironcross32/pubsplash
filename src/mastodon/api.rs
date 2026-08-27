@@ -12,7 +12,7 @@ use serde::Deserialize;
 /// Sent as the app name at registration, so a user can recognise the entry in
 /// their account's "Authorized apps" list and revoke it there.
 const CLIENT_NAME: &str = "Pubsplash";
-const WEBSITE: &str = "https://github.com/ironcross32/pubsplash";
+const WEBSITE: &str = "https://github.com/liamerven/pubsplash";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MastodonError {

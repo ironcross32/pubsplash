@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 
 /// The repository every URL is built from. One constant so a fork needs one
 /// edit, and so nothing can drift into pointing at a different repo.
-pub const REPO: &str = "ironcross32/pubsplash";
+pub const REPO: &str = "liamerven/pubsplash";
 
 /// The manifest asset name. Must match what the release workflow writes.
 pub const MANIFEST_ASSET: &str = "latest.json";
@@ -241,11 +241,11 @@ mod tests {
     fn asset_urls_are_the_stable_latest_form() {
         assert_eq!(
             asset_url("pubsplash-setup.exe"),
-            "https://github.com/ironcross32/pubsplash/releases/latest/download/pubsplash-setup.exe"
+            "https://github.com/liamerven/pubsplash/releases/latest/download/pubsplash-setup.exe"
         );
         assert_eq!(
             asset_url(MANIFEST_ASSET),
-            "https://github.com/ironcross32/pubsplash/releases/latest/download/latest.json"
+            "https://github.com/liamerven/pubsplash/releases/latest/download/latest.json"
         );
     }
 
@@ -256,7 +256,7 @@ mod tests {
     /// once, and the only symptom is a check that always reports a failure.
     const WORKFLOW_OUTPUT: &str = r#"{
     "version":  "0.1.5",
-    "notes_url":  "https://github.com/ironcross32/pubsplash/releases/tag/v0.1.5",
+    "notes_url":  "https://github.com/liamerven/pubsplash/releases/tag/v0.1.5",
     "installer":  {
                       "name":  "pubsplash-setup.exe",
                       "sha256":  "7d0c7a9c2355f573af56d9c2e32bc05be3d991556a378ad5a8f62b308e615f3c",

@@ -62,7 +62,7 @@ mod tests {
 
     const SAMPLE: &str = r#"{
         "version": "0.1.5",
-        "notes_url": "https://github.com/ironcross32/pubsplash/releases/tag/v0.1.5",
+        "notes_url": "https://github.com/liamerven/pubsplash/releases/tag/v0.1.5",
         "installer": { "name": "pubsplash-setup.exe", "sha256": "abc123", "size": 10160085 },
         "portable":  { "name": "pubsplash-portable.zip", "sha256": "def456", "size": 9000000 }
     }"#;

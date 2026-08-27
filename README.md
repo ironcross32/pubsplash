@@ -14,18 +14,18 @@ You need:
 
 ## Install
 
-Download the newest release from the [GitHub releases page](https://github.com/ironcross32/pubsplash/releases).
+Download the newest release from the [GitHub releases page](https://github.com/liamerven/pubsplash/releases).
 
 These two links always point at the newest release, so they never go stale:
 
-- [**Installer**](https://github.com/ironcross32/pubsplash/releases/latest/download/pubsplash-setup.exe)
-- [**Portable ZIP**](https://github.com/ironcross32/pubsplash/releases/latest/download/pubsplash-portable.zip)
+- [**Installer**](https://github.com/liamerven/pubsplash/releases/latest/download/pubsplash-setup.exe)
+- [**Portable ZIP**](https://github.com/liamerven/pubsplash/releases/latest/download/pubsplash-portable.zip)
 
 The two keep their data in different places. The installed copy uses `%LOCALAPPDATA%\pubsplash`. The portable copy uses a `user_data` folder inside the folder you unzipped. This allows Pubsplash and your user data to travel with you. Updates leave `user_data` alone.
 
 One thing does not travel with a portable copy: saved passwords and API keys are encrypted for the Windows account that entered them, so on a different machine or a different user account they read as blank and have to be entered again. Everything else will still work.
 
-Both kinds keep themselves up to date — see [Automatic updates](#automatic-updates). Every release is also on the [releases page](https://github.com/ironcross32/pubsplash/releases) under its version number, along with debug symbols.
+Both kinds keep themselves up to date — see [Automatic updates](#automatic-updates). Every release is also on the [releases page](https://github.com/liamerven/pubsplash/releases) under its version number, along with debug symbols.
 
 ## Getting started
 

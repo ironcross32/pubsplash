@@ -93,8 +93,8 @@ const ID_CONFIRM: i32 = 2301;
 
 /// Where the Help menu goes when the copy installed with this build cannot be
 /// found or will not open.
-const README_URL: &str = "https://github.com/ironcross32/pubsplash#readme";
-const CHANGELOG_URL: &str = "https://github.com/ironcross32/pubsplash/blob/master/changelog.md";
+const README_URL: &str = "https://github.com/liamerven/pubsplash#readme";
+const CHANGELOG_URL: &str = "https://github.com/liamerven/pubsplash/blob/master/changelog.md";
 
 /// How long the exit will wait for the shutdown cue before giving up on it.
 const SHUTDOWN_CUE_TIMEOUT: Duration = Duration::from_secs(5);
