@@ -173,6 +173,7 @@ impl TtsCatalog {
                     | super::engines::AZURE
                     | super::engines::ELEVENLABS
                     | super::engines::GOOGLE
+                    | super::engines::GTTS
                     | super::engines::OPENAI
                     | super::engines::STAR
             )
@@ -369,12 +370,14 @@ pub fn discover(engine: &str, speech: &SpeechConfig) -> Result<EngineCatalog, Tt
         ),
         engines::OPENAI => engines::openai::discover(speech)?,
         engines::ELEVENLABS => engines::elevenlabs::discover(speech)?,
-        engines::AZURE | engines::GOOGLE | engines::STAR => EngineCatalog::from_voices(
-            Vec::new(),
-            engines::build(engine, speech)
-                .expect("engine is registered")
-                .voices()?,
-        ),
+        engines::AZURE | engines::GOOGLE | engines::GTTS | engines::STAR => {
+            EngineCatalog::from_voices(
+                Vec::new(),
+                engines::build(engine, speech)
+                    .expect("engine is registered")
+                    .voices()?,
+            )
+        }
         engines::AWS => engines::polly::discover(speech)?,
         _ => {
             return Err(TtsError::Other(
@@ -388,7 +391,9 @@ pub fn discover(engine: &str, speech: &SpeechConfig) -> Result<EngineCatalog, Tt
 
 pub fn startup_engines(speech: &SpeechConfig) -> Vec<&'static str> {
     use super::engines;
-    let mut selected = vec![engines::SAPI, engines::EDGE];
+    // Google Translate's language list is fixed and needs no network, so it is
+    // refreshed alongside the two engines that need no setup.
+    let mut selected = vec![engines::SAPI, engines::EDGE, engines::GTTS];
     if !speech.star_host.trim().is_empty() {
         selected.push(engines::STAR);
     }
@@ -622,10 +627,11 @@ mod tests {
         assert!(!startup_engines(&speech).contains(&super::super::engines::AWS));
         speech.aws_secret_access_key = crate::secret::Secret::new("secret");
         assert!(startup_engines(&speech).contains(&super::super::engines::AWS));
+        // Google Translate's list is fixed and offline, so it is always refreshed.
+        assert!(startup_engines(&speech).contains(&super::super::engines::GTTS));
         assert!(!startup_engines(&speech).contains(&super::super::engines::STAR));
         speech.star_host = "ws://localhost:7774".into();
         assert!(startup_engines(&speech).contains(&super::super::engines::STAR));
-        assert!(!startup_engines(&speech).contains(&super::super::engines::GTTS));
     }
 
     #[test]
@@ -637,5 +643,16 @@ mod tests {
         );
         catalog.normalize();
         assert_eq!(catalog.engines[super::super::engines::STAR].voices.len(), 1);
+    }
+
+    #[test]
+    fn google_translate_voices_survive_catalog_normalization() {
+        let mut catalog = TtsCatalog::default();
+        catalog.engines.insert(
+            super::super::engines::GTTS.into(),
+            EngineCatalog::from_voices(Vec::new(), vec![Voice::plain("English (en)")]),
+        );
+        catalog.normalize();
+        assert_eq!(catalog.engines[super::super::engines::GTTS].voices.len(), 1);
     }
 }
