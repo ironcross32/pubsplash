@@ -4,6 +4,14 @@
 
 ### Additions
 
+### Fixes
+
+### Changes
+
+## 0.1.8
+
+### Additions
+
 - **Every source edit dialog now has an Effects tab**, holding built-in effects that run on that source alone, before any effect on a bus it is sent to. The list has Add (ALT+A), Edit, Remove, Move up and Move down; DELETE removes the selected effect and CTRL with the up and down arrows reorders it, as on the Scenes and Sources lists. Changes on this tab take effect as they are made, so an effect can be set up by ear against live audio.
 
 - **A new Auto-ducker effect** turns another source down while a chosen one is making noise — music that gets out of the way when you talk. It is set up in percentages of full volume and times in milliseconds: which source to listen to, the ducked volume, the level that starts the ducking, the fade down and fade back up times, and how long it stays ducked.
@@ -11,6 +19,8 @@
 ### Fixes
 
 - Google Translate TTS voices now populate the voice picker.
+
+- Render-device tests no longer interfere when they run in parallel.
 
 ### Changes
 

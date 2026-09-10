@@ -50,6 +50,11 @@ const DRAIN_AFTER_CUE: Duration = Duration::from_millis(100);
 /// reopen by `EngineCommand::ReopenMonitor`.
 static OUTPUT_DEVICE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
+/// Tests that replace [`OUTPUT_DEVICE`] must not overlap: Rust runs tests in
+/// parallel, but this setting is process-global.
+#[cfg(test)]
+static OUTPUT_DEVICE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 fn output_device() -> &'static Mutex<Option<String>> {
     OUTPUT_DEVICE.get_or_init(|| Mutex::new(None))
 }
@@ -78,6 +83,16 @@ pub fn set_output_device(id: Option<String>) {
 /// What [`set_output_device`] was last given.
 pub fn output_device_id() -> Option<String> {
     lock_output_device().clone()
+}
+
+/// Serializes tests which temporarily replace the process-global output-device
+/// setting. This is shared with `audio::device`'s tests.
+#[cfg(test)]
+pub(crate) fn lock_output_device_for_test() -> std::sync::MutexGuard<'static, ()> {
+    match OUTPUT_DEVICE_TEST_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 /// Opens the endpoint Pubsplash plays out of.
@@ -245,6 +260,7 @@ mod tests {
     /// module in one process.
     #[test]
     fn the_output_device_setting_round_trips() {
+        let _serial = lock_output_device_for_test();
         let previous = output_device_id();
 
         set_output_device(Some("{some-endpoint-id}".to_string()));
@@ -261,6 +277,7 @@ mod tests {
     /// output back onto the endpoint that check just approved.
     #[test]
     fn an_unknown_output_device_is_an_error_not_the_default() {
+        let _serial = lock_output_device_for_test();
         let previous = output_device_id();
 
         set_output_device(Some("{not-a-real-endpoint}".to_string()));
