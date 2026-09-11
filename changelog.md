@@ -4,6 +4,8 @@
 
 ### Additions
 
+- Added a Discord community link to the README.
+
 ### Fixes
 
 ### Changes

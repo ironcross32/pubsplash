@@ -139,6 +139,10 @@ Install Rust stable, Visual Studio 2019 or later with the Windows SDK, CMake, an
 
 The first build downloads the required prebuilt wxWidgets libraries.
 
+## Join the Discord
+
+Join the Pubsplash community on [Discord](https://discord.gg/UajYHbVp8r).
+
 ## License
 
 See [LICENSE](LICENSE) for licensing information.
