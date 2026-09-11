@@ -4,6 +4,12 @@
 mod data_dir;
 #[path = "../soundpack.rs"]
 mod soundpack;
+// Only so the `t!` calls inside `soundpack.rs` resolve. `init` is never
+// called here, so every message stays English — which is what a command-line
+// tool's output should be.
+#[allow(dead_code)]
+#[path = "../i18n.rs"]
+mod i18n;
 
 use std::path::PathBuf;
 

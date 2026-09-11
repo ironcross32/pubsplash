@@ -17,6 +17,7 @@
 //! The flood gate is not here. It lives in `mastodon::net::post`, below every
 //! caller, so that a mistake in the scheduling above cannot reach a timeline.
 
+use crate::t;
 use super::{App, LastStream, StreamState};
 use crate::mastodon::api::Link;
 use crate::mastodon::net::{AuthEvent, Occasion};
@@ -155,9 +156,9 @@ fn ask_about_resuming(app: &Rc<App>) {
     };
     let ask = MessageDialog::builder(
         &frame,
-        "This stream has the same title as the one that just ended. \
-         Would you like to post about resuming it?",
-        "Post to Mastodon",
+        &t!("This stream has the same title as the one that just ended. \
+         Would you like to post about resuming it?"),
+        &t!("Post to Mastodon"),
     )
     .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
     .build();
@@ -251,7 +252,7 @@ pub fn authorize(parent: &Dialog, instance: &str) -> Option<Link> {
     let cancel = mastodon::oauth::cancel_flag();
     mastodon::net::authorize(instance.to_string(), tx, cancel.clone());
 
-    let dialog = Dialog::builder(parent, "Authorize with Mastodon")
+    let dialog = Dialog::builder(parent, &t!("Authorize with Mastodon"))
         .with_style(DialogStyle::DefaultDialogStyle)
         .with_size(460, 220)
         .build();
@@ -259,12 +260,12 @@ pub fn authorize(parent: &Dialog, instance: &str) -> Option<Link> {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
     let status = TextCtrl::builder(&panel)
         .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly)
-        .with_value(
+        .with_value(&t!(
             "Contacting the server. Your browser will open so you can sign in \
-             and approve Pubsplash.",
-        )
+             and approve Pubsplash."
+        ))
         .build();
-    super::set_accessible_name(&status, "Authorization status");
+    super::set_accessible_name(&status, &t!("Authorization status"));
     super::help::tag(
         &status,
         "dialog.mastodonAuth.status",
@@ -272,7 +273,7 @@ pub fn authorize(parent: &Dialog, instance: &str) -> Option<Link> {
     );
     // Dismiss-only: Escape and Enter both cancel, which is the only thing this
     // dialog can do on its own.
-    let cancel_button = super::dismiss_button(&panel, "Cancel");
+    let cancel_button = super::dismiss_button(&panel, &t!("Cancel"));
     sizer.add(&status, 1, SizerFlag::Expand | SizerFlag::All, 8);
     sizer.add(&cancel_button, 0, SizerFlag::All, 8);
     panel.set_sizer(sizer, true);
@@ -301,23 +302,25 @@ pub fn authorize(parent: &Dialog, instance: &str) -> Option<Link> {
                         // Opened from the UI thread: `ShellExecuteW` wants an
                         // apartment, and this thread already has one.
                         if let Err(e) = super::shell_open(&url) {
-                            *failure.borrow_mut() = Some(format!(
-                                "Could not open your browser: {e}\r\n\r\nOpen this address by hand:\r\n{url}"
-                            ));
+                            *failure.borrow_mut() = Some(t!("Could not open your browser: {e}\r\n\r\nOpen this address by hand:\r\n{url}", e = e, url = url));
                             dialog.end_modal(ID_CANCEL);
                             return;
                         }
                         set_status(
                             &status,
-                            "Waiting for you to approve Pubsplash in your browser. \
-                             This window closes on its own once you have.",
+                            &t!(
+                                "Waiting for you to approve Pubsplash in your browser. \
+                                 This window closes on its own once you have."
+                            ),
                         );
                     }
                     AuthEvent::NeedCode(reply) => {
                         set_status(
                             &status,
-                            "Your browser is showing an authorization code. \
-                             Copy it and paste it into the box that just opened.",
+                            &t!(
+                                "Your browser is showing an authorization code. \
+                                 Copy it and paste it into the box that just opened."
+                            ),
                         );
                         let code = prompt_for_code(&dialog);
                         let _ = reply.send(code);
@@ -350,7 +353,7 @@ pub fn authorize(parent: &Dialog, instance: &str) -> Option<Link> {
     dialog.destroy();
 
     if let Some(message) = failure.borrow().clone() {
-        super::show_error(parent, "Authorize", &message);
+        super::show_error(parent, &t!("Authorize"), &message);
     }
 
     outcome.borrow().clone()
@@ -358,7 +361,7 @@ pub fn authorize(parent: &Dialog, instance: &str) -> Option<Link> {
 
 fn set_status(status: &TextCtrl, text: &str) {
     status.set_value(text);
-    super::set_accessible_name(status, &format!("Authorization status, {text}"));
+    super::set_accessible_name(status, &t!("Authorization status, {text}", text = text));
     super::help::announce(text);
 }
 
@@ -366,8 +369,8 @@ fn set_status(status: &TextCtrl, text: &str) {
 fn prompt_for_code(parent: &Dialog) -> Option<String> {
     let entry = TextEntryDialog::builder(
         parent,
-        "Paste the authorization code your browser is showing.",
-        "Authorization code",
+        &t!("Paste the authorization code your browser is showing."),
+        &t!("Authorization code"),
     )
     .build();
     let answer = entry.show_modal();

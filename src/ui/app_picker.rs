@@ -18,12 +18,15 @@
 //! answer comes from: whatever row is selected.
 
 use crate::audio::app_list::{self, AppCandidate};
+use crate::t;
 use std::cell::RefCell;
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
 /// Shown when no application matches the current view. See [`super::list`].
-const NO_APPLICATIONS: &str = "No applications";
+fn no_applications() -> String {
+    t!("No applications")
+}
 
 /// The application chooser, once built into a page.
 pub struct Chooser {
@@ -47,16 +50,16 @@ impl Chooser {
 /// visible and reachable rather than silently disappearing when it is closed.
 pub fn build(page: &Panel, sizer: &BoxSizer, dialog: &Dialog, current: &str) -> Chooser {
     let intro = StaticText::builder(page)
-        .with_label("Which application should this source capture?")
+        .with_label(&t!("Which application should this source capture?"))
         .build();
     let list = ListBox::builder(page).build();
-    super::native_acc::install(&list, "Running applications");
+    super::native_acc::install(&list, &t!("Running applications"));
     super::help::tag(&list, "dialog.appPicker.list", "Running applications list");
     let sound_only = CheckBox::builder(page)
-        .with_label("Only show apps that have played sound")
+        .with_label(&t!("Only show apps that have played sound"))
         .build();
     sound_only.set_value(true);
-    super::set_accessible_name(&sound_only, "Only show apps that have played sound");
+    super::set_accessible_name(&sound_only, &t!("Only show apps that have played sound"));
     super::help::tag(
         &sound_only,
         "dialog.appPicker.soundOnly",
@@ -64,10 +67,12 @@ pub fn build(page: &Panel, sizer: &BoxSizer, dialog: &Dialog, current: &str) -> 
     );
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let refresh = Button::builder(page).with_label("Refresh").build();
-    let type_name = Button::builder(page).with_label("Type a name...").build();
-    super::set_accessible_name(&refresh, "Refresh");
-    super::set_accessible_name(&type_name, "Type a name");
+    let refresh = Button::builder(page).with_label(&t!("Refresh")).build();
+    let type_name = Button::builder(page)
+        .with_label(&t!("Type a name..."))
+        .build();
+    super::set_accessible_name(&refresh, &t!("Refresh"));
+    super::set_accessible_name(&type_name, &t!("Type a name"));
     super::help::tag(
         &refresh,
         "dialog.appPicker.refresh",
@@ -111,7 +116,10 @@ pub fn build(page: &Panel, sizer: &BoxSizer, dialog: &Dialog, current: &str) -> 
                     .iter()
                     .any(|a| crate::audio::device::name_matches(&configured, &a.exe))
             {
-                rows.push((configured.clone(), format!("{configured} (not running)")));
+                rows.push((
+                    configured.clone(),
+                    t!("{current} (not running)", current = configured),
+                ));
             }
             for app in apps.iter() {
                 if only_sounding && !app.has_audio {
@@ -124,7 +132,7 @@ pub fn build(page: &Panel, sizer: &BoxSizer, dialog: &Dialog, current: &str) -> 
             }
 
             let labels: Vec<String> = rows.iter().map(|(_, label)| label.clone()).collect();
-            super::list::fill(&list, &labels, NO_APPLICATIONS);
+            super::list::fill(&list, &labels, &no_applications());
             let keep = keep.or_else(|| (!configured.is_empty()).then(|| configured.clone()));
             let index = keep
                 .and_then(|want| {
@@ -135,10 +143,10 @@ pub fn build(page: &Panel, sizer: &BoxSizer, dialog: &Dialog, current: &str) -> 
             if !rows.is_empty() {
                 list.set_selection(index as u32, true);
             }
-            intro.set_label(if rows.is_empty() {
-                "No applications found. Use Type a name to enter one."
+            intro.set_label(&if rows.is_empty() {
+                t!("No applications found. Use Type a name to enter one.")
             } else {
-                "Which application should this source capture?"
+                t!("Which application should this source capture?")
             });
             *shown.borrow_mut() = rows.into_iter().map(|(exe, _)| exe).collect();
         })
@@ -196,8 +204,8 @@ pub fn build(page: &Panel, sizer: &BoxSizer, dialog: &Dialog, current: &str) -> 
 fn type_a_name(parent: &Dialog, current: &str) -> Option<String> {
     let entry = TextEntryDialog::builder(
         parent,
-        "Name of the application to capture (for example: firefox):",
-        "Application source",
+        &t!("Name of the application to capture (for example: firefox):"),
+        &t!("Application source"),
     )
     .with_default_value(current)
     .build();

@@ -1,5 +1,6 @@
 //! Chat tab: message list, view popup, and outbound input box.
 
+use crate::t;
 use super::{App, WXK_ESCAPE};
 use crate::net::NetCommand;
 use crate::state::relative_time;
@@ -7,19 +8,21 @@ use std::rc::Rc;
 use wxdragon::prelude::*;
 
 /// Shown when there are no messages. See [`super::list`].
-const NO_CHATS: &str = "No chats";
+fn no_chats() -> String {
+    t!("No chats")
+}
 
 pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl, Button) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
-    let list_label = StaticText::builder(panel).with_label("Messages").build();
+    let list_label = StaticText::builder(panel).with_label(&t!("Messages")).build();
     let chat_list = ListBox::builder(panel).build();
     // Nothing refreshes this list until a stream starts, so seed the
     // placeholder here rather than leaving it empty (and unannounceable).
-    super::list::fill(&chat_list, &[], NO_CHATS);
-    super::native_acc::install(&chat_list, "Messages");
+    super::list::fill(&chat_list, &[], &no_chats());
+    super::native_acc::install(&chat_list, &t!("Messages"));
     super::help::tag(&chat_list, "tab.chat.messageList", "Chat message list");
-    let view_button = Button::builder(panel).with_label("View message").build();
+    let view_button = Button::builder(panel).with_label(&t!("View message")).build();
     super::help::tag(
         &view_button,
         "tab.chat.viewButton",
@@ -27,14 +30,14 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl, Button) {
     );
 
     let input_label = StaticText::builder(panel)
-        .with_label("Send a message")
+        .with_label(&t!("Send a message"))
         .build();
     let chat_input = TextCtrl::builder(panel)
         .with_style(TextCtrlStyle::ProcessEnter)
         .build();
-    super::set_accessible_name(&chat_input, "Send a message");
+    super::set_accessible_name(&chat_input, &t!("Send a message"));
     super::help::tag(&chat_input, "tab.chat.input", "Chat message input box");
-    let send_button = Button::builder(panel).with_label("Send").build();
+    let send_button = Button::builder(panel).with_label(&t!("Send")).build();
     super::help::tag(
         &send_button,
         "tab.chat.sendButton",
@@ -43,7 +46,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, TextCtrl, Button) {
 
     // Created last so the common path (list, view, input, send) keeps the tab
     // order it had.
-    let reconnect_button = Button::builder(panel).with_label("Reconnect chat").build();
+    let reconnect_button = Button::builder(panel).with_label(&t!("Reconnect chat")).build();
     super::help::tag(
         &reconnect_button,
         "tab.chat.reconnectButton",
@@ -149,8 +152,8 @@ fn reconnect_chat(app: &Rc<App>, button: &Button) {
     if !matches!(app.run.borrow().stream, super::StreamState::Live { .. }) {
         super::show_error(
             button,
-            "Chat",
-            "You can only reconnect the chat feed while streaming.",
+            &t!("Chat"),
+            &t!("You can only reconnect the chat feed while streaming."),
         );
         return;
     }
@@ -166,8 +169,8 @@ fn send_message(app: &Rc<App>, input: &TextCtrl) {
     if !matches!(app.run.borrow().stream, super::StreamState::Live { .. }) {
         super::show_error(
             input,
-            "Chat",
-            "You can only send chat messages while streaming.",
+            &t!("Chat"),
+            &t!("You can only send chat messages while streaming."),
         );
         return;
     }
@@ -192,7 +195,7 @@ fn view_selected(app: &Rc<App>, list: &ListBox) {
     let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
-    let dialog = Dialog::builder(&frame, &format!("Message from {user}"))
+    let dialog = Dialog::builder(&frame, &t!("Message from {user}", user = user))
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(500, 300)
         .build();
@@ -200,13 +203,13 @@ fn view_selected(app: &Rc<App>, list: &ListBox) {
     // Read-only but selectable/copyable.
     let text = TextCtrl::builder(&panel)
         .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly)
-        .with_value(&format!("{user}: {content}"))
+        .with_value(&t!("{user}: {content}", user = user, content = content))
         .build();
     super::help::tag(&text, "dialog.chatView.text", "Full chat message text");
     // Dismiss-only, so `dismiss_button` puts both Escape and Enter on it. The
     // message body above is `MultiLine`, which wx exempts from the default-item
     // handling, so Enter there still moves the caret rather than closing.
-    let close = super::dismiss_button(&panel, "Close");
+    let close = super::dismiss_button(&panel, &t!("Close"));
     {
         close.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
@@ -242,7 +245,7 @@ pub fn refresh_chat_list(app: &App) {
                 label_for(entry, &entry.shown_age)
             })
             .collect();
-        super::list::fill(&w.chat_list, &labels, NO_CHATS);
+        super::list::fill(&w.chat_list, &labels, &no_chats());
         if let Some(index) = selected {
             if index < w.chat_list.get_count() {
                 w.chat_list.set_selection(index, true);

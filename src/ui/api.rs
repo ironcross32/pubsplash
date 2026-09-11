@@ -12,6 +12,7 @@
 //! zero, because "0 credits left" and "this provider does not report credits"
 //! are very different things to read out.
 
+use crate::t;
 use super::{App, list};
 use crate::tts::usage::{self, EngineUsage};
 use std::rc::Rc;
@@ -19,11 +20,15 @@ use wxdragon::prelude::*;
 
 /// Shown while nothing has spoken yet. See [`super::list`] — a `ListBox` with
 /// no rows is announced as "Unknown".
-const NO_USAGE: &str = "No engines used yet";
+fn no_usage() -> String {
+    t!("No engines used yet")
+}
 
 /// What a provider does not tell us. One spelling everywhere, so a screen
 /// reader user learns the word once.
-const UNAVAILABLE: &str = "unavailable";
+fn unavailable() -> String {
+    t!("unavailable")
+}
 
 /// The indent that marks a row as belonging to the engine heading above it.
 /// A `ListBox` has no headings, so the structure has to live in the text.
@@ -67,13 +72,13 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, Button) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     let list_label = StaticText::builder(panel)
-        .with_label("API usage this session")
+        .with_label(&t!("API usage this session"))
         .build();
     let usage_list = ListBox::builder(panel).build();
     // Nothing has spoken when the window opens, so seed the placeholder rather
     // than leaving the list empty.
-    list::fill(&usage_list, &[], NO_USAGE);
-    super::native_acc::install(&usage_list, "API usage this session");
+    list::fill(&usage_list, &[], &no_usage());
+    super::native_acc::install(&usage_list, &t!("API usage this session"));
     super::help::tag(
         &usage_list,
         "tab.api.usageList",
@@ -81,7 +86,7 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, Button) {
     );
 
     let refresh_button = Button::builder(panel)
-        .with_label("Refresh balances")
+        .with_label(&t!("Refresh balances"))
         .build();
     super::help::tag(
         &refresh_button,
@@ -144,8 +149,8 @@ fn refresh_balances(app: &Rc<App>) {
         app.widgets(|w| {
             super::show_info(
                 &w.frame,
-                "Refresh balances",
-                "No engine used this session reports a credit balance.",
+                &t!("Refresh balances"),
+                &t!("No engine used this session reports a credit balance."),
             )
         });
         return;
@@ -210,7 +215,7 @@ fn refresh(app: &App, selected_rows: Selected) {
             .and_then(|index| shown.get(index as usize))
             .map(|(row, _)| *row);
         let labels: Vec<String> = rows.iter().map(|(_, label)| label.clone()).collect();
-        list::fill(&list, &labels, NO_USAGE);
+        list::fill(&list, &labels, &no_usage());
         std::mem::swap(&mut shown, &mut rows);
         if let Some(index) = was_on.and_then(|row| shown.iter().position(|(r, _)| *r == row)) {
             list.set_selection(index as u32, true);
@@ -287,7 +292,7 @@ fn credits_spent(entry: &EngineUsage) -> String {
     if usage::reports_balance(entry.engine) {
         thousands(entry.characters)
     } else {
-        UNAVAILABLE.to_string()
+        unavailable().to_string()
     }
 }
 
@@ -308,16 +313,16 @@ fn balance_text(entry: &EngineUsage) -> String {
         // Distinguishing these two matters: one is a button the user has not
         // pressed yet, the other is a provider that will never answer.
         None if usage::reports_balance(entry.engine) => {
-            "not fetched, press Refresh balances".to_string()
+            t!("not fetched, press Refresh balances")
         }
-        None => UNAVAILABLE.to_string(),
+        None => unavailable().to_string(),
     }
 }
 
 fn join_or_unavailable<'a>(values: impl IntoIterator<Item = &'a String>) -> String {
     let joined = values.into_iter().cloned().collect::<Vec<_>>().join(", ");
     if joined.is_empty() {
-        UNAVAILABLE.to_string()
+        unavailable().to_string()
     } else {
         joined
     }

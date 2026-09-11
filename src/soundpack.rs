@@ -13,6 +13,7 @@
 #[path = "audio/convert.rs"]
 mod convert;
 
+use crate::t;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use convert::{decode_audio, encode_ogg_opus};
 use rand::{RngCore, rngs::OsRng};
@@ -99,15 +100,15 @@ impl SoundKind {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Startup => "Startup",
-            Self::Shutdown => "Shut down",
-            Self::ListenerIncrease => "Listener count increased",
-            Self::ListenerDecrease => "Listener count decreased",
-            Self::ListenerPeakIncrease => "Listener peak increased",
-            Self::IncomingChat => "Incoming chat message",
-            Self::OutgoingChat => "Outgoing chat message",
+            Self::Startup => t!("Startup"),
+            Self::Shutdown => t!("Shut down"),
+            Self::ListenerIncrease => t!("Listener count increased"),
+            Self::ListenerDecrease => t!("Listener count decreased"),
+            Self::ListenerPeakIncrease => t!("Listener peak increased"),
+            Self::IncomingChat => t!("Incoming chat message"),
+            Self::OutgoingChat => t!("Outgoing chat message"),
         }
     }
 
@@ -144,7 +145,7 @@ impl StreamEvent {
         SoundKind::from_stream_event(self).filename()
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         SoundKind::from_stream_event(self).label()
     }
 }

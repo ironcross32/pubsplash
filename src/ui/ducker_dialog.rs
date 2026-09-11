@@ -13,12 +13,15 @@
 use super::slider_uia::SliderAnnouncer;
 use super::source_dialog::KeyChoice;
 use crate::config::DuckerConfig;
+use crate::t;
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
 /// The row offered when a ducker is not listening to anything, and what an
 /// unconfigured or orphaned key falls back to.
-const NOTHING: &str = "(nothing)";
+fn nothing() -> String {
+    t!("(nothing)")
+}
 
 /// One slider and everything needed to keep it spoken.
 struct Row {
@@ -29,17 +32,17 @@ struct Row {
 /// Shows the dialog over `parent`, returning the edited settings, or `None` if
 /// the user cancelled.
 pub fn edit(parent: &Dialog, current: &DuckerConfig, keys: &[KeyChoice]) -> Option<DuckerConfig> {
-    let dialog = Dialog::builder(parent, "Auto-ducker")
+    let dialog = Dialog::builder(parent, &t!("Auto-ducker"))
         .with_style(DialogStyle::DefaultDialogStyle)
         .with_size(520, 560)
         .build();
     let panel = Panel::builder(&dialog).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
-    const LISTEN_TO: &str = "Listen to";
-    let listen_label = StaticText::builder(&panel).with_label(LISTEN_TO).build();
+    let listen_to = t!("Listen to");
+    let listen_label = StaticText::builder(&panel).with_label(&listen_to).build();
     let listen = Choice::builder(&panel).build();
-    super::set_accessible_name(&listen, LISTEN_TO);
+    super::set_accessible_name(&listen, &listen_to);
     super::help::tag(
         &listen,
         "dialog.ducker.listenTo",
@@ -48,7 +51,7 @@ pub fn edit(parent: &Dialog, current: &DuckerConfig, keys: &[KeyChoice]) -> Opti
     // Row 0 is "listening to nothing", which is also where an orphaned key
     // lands: the source it named has been deleted, so there is nothing to
     // preselect and silently picking a different source would be worse.
-    listen.append(NOTHING);
+    listen.append(&nothing());
     for key in keys {
         listen.append(&key.label);
     }
@@ -124,24 +127,36 @@ pub fn edit(parent: &Dialog, current: &DuckerConfig, keys: &[KeyChoice]) -> Opti
     sizer.add(&listen_label, 0, SizerFlag::All, 4);
     sizer.add(&listen, 0, SizerFlag::Expand | SizerFlag::All, 4);
 
-    let duck_to = slider("Ducked volume", current.duck_to, 100, 10, Unit::Percent);
-    let trigger = slider("Start ducking at", current.trigger, 100, 5, Unit::Percent);
+    let duck_to = slider(
+        &t!("Ducked volume"),
+        current.duck_to,
+        100,
+        10,
+        Unit::Percent,
+    );
+    let trigger = slider(
+        &t!("Start ducking at"),
+        current.trigger,
+        100,
+        5,
+        Unit::Percent,
+    );
     let fade_down = slider(
-        "Fade down over",
+        &t!("Fade down over"),
         current.fade_down_ms,
         MAX_FADE_DOWN_MS,
         50,
         Unit::Millis,
     );
     let fade_up = slider(
-        "Fade back up over",
+        &t!("Fade back up over"),
         current.fade_up_ms,
         MAX_TIME_MS,
         100,
         Unit::Millis,
     );
     let hold = slider(
-        "Stay ducked for",
+        &t!("Stay ducked for"),
         current.hold_ms,
         MAX_TIME_MS,
         100,
@@ -162,11 +177,11 @@ pub fn edit(parent: &Dialog, current: &DuckerConfig, keys: &[KeyChoice]) -> Opti
     super::help::tag(&hold, "dialog.ducker.hold", "Ducking hold time slider");
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let ok = super::ok_button(&panel, "OK");
+    let ok = super::ok_button(&panel, &t!("OK"));
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
     let cancel = Button::builder(&panel)
         .with_id(ID_CANCEL)
-        .with_label("Cancel")
+        .with_label(&t!("Cancel"))
         .build();
     buttons.add(&ok, 0, SizerFlag::All, 4);
     buttons.add(&cancel, 0, SizerFlag::All, 4);
@@ -225,8 +240,8 @@ impl Unit {
         match self {
             // "of full volume" rather than a bare percent: the number is a
             // share of the source's own level, not of the master fader.
-            Unit::Percent => format!("{value}% of full volume"),
-            Unit::Millis => format!("{value} ms"),
+            Unit::Percent => t!("{value}% of full volume", value = value),
+            Unit::Millis => t!("{value} ms", value = value),
         }
     }
 }

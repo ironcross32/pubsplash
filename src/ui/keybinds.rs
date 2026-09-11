@@ -33,6 +33,7 @@
 //! rings the idle doorbell, and returns; [`pump`] does the real work on the UI
 //! thread from the 100 ms pump. Same shape as `panes.rs`.
 
+use crate::t;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -284,7 +285,7 @@ fn source_target(app: &Rc<App>, name: &str) -> Option<StripTarget> {
     match index {
         Some(index) => Some(StripTarget::Source(index)),
         None => {
-            super::help::announce(&format!("{name} is not in the current scene"));
+            super::help::announce(&t!("{name} is not in the current scene", name = name));
             None
         }
     }
@@ -301,7 +302,7 @@ fn bus_target(app: &Rc<App>, name: &str) -> Option<StripTarget> {
     match index {
         Some(index) => Some(StripTarget::Bus(index)),
         None => {
-            super::help::announce(&format!("There is no bus called {name}"));
+            super::help::announce(&t!("There is no bus called {name}", name = name));
             None
         }
     }
@@ -319,7 +320,7 @@ fn run(app: &Rc<App>, action: &BindAction) {
             } else if app.run.borrow().recording {
                 // Same rule the disabled stream button expresses: streaming and a
                 // standalone recording are mutually exclusive.
-                super::help::announce("Cannot stream while a recording is running");
+                super::help::announce(&t!("Cannot stream while a recording is running"));
             } else {
                 super::start_streaming(app);
             }
@@ -329,12 +330,12 @@ fn run(app: &Rc<App>, action: &BindAction) {
             if recording {
                 app.stop_recording();
             } else if app.is_streaming_or_starting() {
-                super::help::announce("Cannot start a recording while streaming");
+                super::help::announce(&t!("Cannot start a recording while streaming"));
             } else if app.schedule_armed() {
                 // Same rule the disabled record button expresses while a schedule
                 // is armed: a recording running when it fires would block the
                 // stream it was armed for.
-                super::help::announce("Cannot start a recording while a stream is scheduled");
+                super::help::announce(&t!("Cannot start a recording while a stream is scheduled"));
             } else {
                 app.start_recording();
             }

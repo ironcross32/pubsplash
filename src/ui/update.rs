@@ -16,6 +16,7 @@
 //! a live stream or a recording. An update prompt during a show is exactly the
 //! modal nobody can afford, and the check is cheap to repeat next launch.
 
+use crate::t;
 use super::{App, show_error, show_info};
 use crate::update::{ApplyPlan, Trigger, UpdateEvent, install_kind};
 use std::rc::Rc;
@@ -160,8 +161,8 @@ pub fn drain_results(app: &Rc<App>) {
                     let version = crate::update::version::current();
                     show_info(
                         owner.as_widget(),
-                        "Check for updates",
-                        &format!("Pubsplash {version} is the latest version."),
+                        &t!("Check for updates"),
+                        &t!("Pubsplash {version} is the latest version.", version = version),
                     );
                 }
             }
@@ -172,7 +173,7 @@ pub fn drain_results(app: &Rc<App>) {
                 // The user did not ask, and an error box on every launch behind
                 // a captive portal or a firewall would be its own bug.
                 if trigger.reports_quiet_outcomes() && let Some(owner) = notice_owner(app) {
-                    show_error(owner.as_widget(), "Check for updates", &message);
+                    show_error(owner.as_widget(), &t!("Check for updates"), &message);
                 }
             }
 
@@ -206,7 +207,7 @@ pub fn drain_results(app: &Rc<App>) {
                 // the window.
                 finish_download(app);
                 if !cancelled && let Some(owner) = notice_owner(app) {
-                    show_error(owner.as_widget(), "Update", &message);
+                    show_error(owner.as_widget(), &t!("Update"), &message);
                 }
             }
 
@@ -262,12 +263,13 @@ fn offer(app: &Rc<App>, trigger: Trigger, manifest: crate::update::manifest::Man
         }
         let ask = MessageDialog::builder(
             owner.as_widget(),
-            &format!(
-                "Pubsplash {} is available; you are running {current}. This copy was not \
+            &t!(
+                "Pubsplash {version} is available; you are running {current}. This copy was not \
                  installed in a way Pubsplash can update on its own. Open the download page?",
-                manifest.version
+                version = manifest.version,
+                current = current
             ),
-            "Update available",
+            &t!("Update available"),
         )
         .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
         .build();
@@ -281,24 +283,26 @@ fn offer(app: &Rc<App>, trigger: Trigger, manifest: crate::update::manifest::Man
 
     let what_happens = match kind {
         install_kind::InstallKind::Installed => {
-            "Pubsplash will download it, then close and run the installer."
+            t!("Pubsplash will download it, then close and run the installer.")
         }
         // Named explicitly: the folder being replaced is the surprising half,
         // and someone keeping their own files beside a portable copy deserves
         // to know before they say yes.
         install_kind::InstallKind::Portable => {
-            "Pubsplash will download it, then close, replace its own files, and start again."
+            t!("Pubsplash will download it, then close, replace its own files, and start again.")
         }
         install_kind::InstallKind::Unknown => unreachable!("handled above"),
     };
     let ask = MessageDialog::builder(
         owner.as_widget(),
-        &format!(
-            "Pubsplash {} is available; you are running {current}. {what_happens} \
+        &t!(
+            "Pubsplash {version} is available; you are running {current}. {what_happens} \
              Download and install it now?",
-            manifest.version
+            version = manifest.version,
+            current = current,
+            what_happens = what_happens
         ),
-        "Update available",
+        &t!("Update available"),
     )
     .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
     .build();
@@ -312,8 +316,8 @@ fn offer(app: &Rc<App>, trigger: Trigger, manifest: crate::update::manifest::Man
     let Some(install) = install_kind::detect() else {
         show_error(
             owner.as_widget(),
-            "Update",
-            "Could not work out where Pubsplash is installed, so nothing was changed.",
+            &t!("Update"),
+            &t!("Could not work out where Pubsplash is installed, so nothing was changed."),
         );
         return;
     };
@@ -350,7 +354,7 @@ fn apply(app: &Rc<App>, plan: ApplyPlan) {
     let helper = match stage_helper() {
         Ok(helper) => helper,
         Err(message) => {
-            show_error(owner.as_widget(), "Update", &message);
+            show_error(owner.as_widget(), &t!("Update"), &message);
             return;
         }
     };
@@ -389,10 +393,11 @@ fn apply(app: &Rc<App>, plan: ApplyPlan) {
     if let Err(e) = command.spawn() {
         show_error(
             owner.as_widget(),
-            "Update",
-            &format!(
-                "Could not start the updater ({}): {e}. Nothing has been changed.",
-                helper.display()
+            &t!("Update"),
+            &t!(
+                "Could not start the updater ({path}): {e}. Nothing has been changed.",
+                path = helper.display(),
+                e = e
             ),
         );
         return;
@@ -406,21 +411,24 @@ fn apply(app: &Rc<App>, plan: ApplyPlan) {
 /// Never run from beside `pubsplash.exe`: for a portable update that directory
 /// is about to be overwritten, and Windows will not replace a running image.
 fn stage_helper() -> Result<std::path::PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("current_exe failed: {e}"))?;
+    let exe = std::env::current_exe()
+        .map_err(|e| t!("Pubsplash could not find its own program file: {e}", e = e))?;
     let source = exe.with_file_name(crate::update::HELPER_BINARY);
     if !source.is_file() {
-        return Err(format!(
-            "The updater ({}) is missing. Reinstall Pubsplash to restore it.",
-            source.display()
+        return Err(t!(
+            "The updater ({path}) is missing. Reinstall Pubsplash to restore it.",
+            path = source.display()
         ));
     }
     let dir = crate::update::runner_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| t!("Could not create {path}: {e}", path = dir.display(), e = e))?;
     let destination = dir.join(crate::update::HELPER_BINARY);
     std::fs::copy(&source, &destination).map_err(|e| {
-        format!(
-            "Could not prepare the updater at {}: {e}",
-            destination.display()
+        t!(
+            "Could not prepare the updater at {path}: {e}",
+            path = destination.display(),
+            e = e
         )
     })?;
     Ok(destination)

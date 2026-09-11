@@ -10,6 +10,7 @@
 //! Playback goes through `audio::cue`, which is local-only: a preview never
 //! reaches the mixer, the stream, or a recording.
 
+use crate::t;
 use super::{WXK_SPACE, show_error};
 use crate::audio::cue::CuePlayback;
 use crate::soundpack::SoundKind;
@@ -19,7 +20,9 @@ use wxdragon::prelude::*;
 
 /// Never seen: `SoundKind::ALL` is not empty. Kept because `list::fill` wants a
 /// placeholder, and because NVDA reads an empty `ListBox` as "Unknown".
-const NO_SOUND_EVENTS: &str = "No sound events";
+fn no_sound_events() -> String {
+    t!("No sound events")
+}
 
 /// One row per event Pubsplash supports, in `SoundKind::ALL` order.
 fn event_labels() -> Vec<String> {
@@ -30,7 +33,7 @@ fn event_labels() -> Vec<String> {
 }
 
 pub fn show(parent: &Dialog) {
-    let dialog = Dialog::builder(parent, "Preview sounds")
+    let dialog = Dialog::builder(parent, &t!("Preview sounds"))
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(360, 320)
         .build();
@@ -40,12 +43,12 @@ pub fn show(parent: &Dialog) {
     // `native_acc` takes the list's name from this label, so its text and the
     // name passed to `install` have to agree, and it has to stay in front of
     // the list.
-    let label = StaticText::builder(&panel).with_label("Sound event").build();
+    let label = StaticText::builder(&panel).with_label(&t!("Sound event")).build();
     let list = ListBox::builder(&panel).build();
-    super::native_acc::install(&list, "Sound event");
+    super::native_acc::install(&list, &t!("Sound event"));
     super::help::tag(&list, "dialog.soundPreview.list", "Sound event list");
     let labels = event_labels();
-    super::list::fill(&list, &labels, NO_SOUND_EVENTS);
+    super::list::fill(&list, &labels, &no_sound_events());
     if !labels.is_empty() {
         // A freshly built dialog is the one place a list may select for
         // itself; every later selection move belongs to the user.
@@ -53,11 +56,11 @@ pub fn show(parent: &Dialog) {
     }
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let play = Button::builder(&panel).with_label("Play").build();
-    super::set_accessible_name(&play, "Play");
+    let play = Button::builder(&panel).with_label(&t!("Play")).build();
+    super::set_accessible_name(&play, &t!("Play"));
     super::help::tag(&play, "dialog.soundPreview.play", "Play or stop button");
     // Dismiss-only, so `dismiss_button` puts both Enter and Escape on it.
-    let close = super::dismiss_button(&panel, "Close");
+    let close = super::dismiss_button(&panel, &t!("Close"));
     buttons.add(&play, 0, SizerFlag::All, 4);
     buttons.add(&close, 0, SizerFlag::All, 4);
 
@@ -98,13 +101,9 @@ pub fn show(parent: &Dialog) {
                 .borrow()
                 .as_ref()
                 .is_some_and(|(kind, _)| selected == Some(*kind));
-            let (label, name) = if stops {
-                ("Stop", "Stop")
-            } else {
-                ("Play", "Play")
-            };
-            play.set_label(label);
-            super::set_accessible_name(&play, name);
+            let label = if stops { t!("Stop") } else { t!("Play") };
+            play.set_label(&label);
+            super::set_accessible_name(&play, &label);
         })
     };
 
@@ -148,8 +147,8 @@ pub fn show(parent: &Dialog) {
                 refresh_button();
                 show_error(
                     &dialog,
-                    "Preview sound",
-                    "The sound pack could not be loaded.",
+                    &t!("Preview sound"),
+                    &t!("The sound pack could not be loaded."),
                 );
                 return;
             };
@@ -159,8 +158,8 @@ pub fn show(parent: &Dialog) {
                 // rather than arriving on its own, so a modal is right here.
                 let notice = MessageDialog::builder(
                     &dialog,
-                    "This pack has no sound for that event.",
-                    "Preview sound",
+                    &t!("This pack has no sound for that event."),
+                    &t!("Preview sound"),
                 )
                 .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconInformation)
                 .build();
@@ -258,7 +257,7 @@ mod tests {
         assert_eq!(labels.len(), SoundKind::ALL.len());
         for kind in SoundKind::ALL {
             assert!(
-                labels.iter().any(|label| label == kind.label()),
+                labels.iter().any(|label| *label == kind.label()),
                 "{kind:?} has no row"
             );
         }

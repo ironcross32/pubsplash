@@ -391,6 +391,12 @@ file = "src/ui/preferences.rs"
 message = "When this box is checked, Pubsplash asks GitHub once each time it starts whether a newer version exists. If there isn't one, or GitHub can't be reached, nothing is said at all. If there is, Pubsplash asks whether you'd like to download and install it; nothing is downloaded or replaced unless you say yes. The check is skipped entirely while you are streaming or recording."
 
 [[control]]
+id = "dialog.preferences.general.language"
+label = "Interface language combo box"
+file = "src/ui/preferences.rs"
+message = "Choose the language Pubsplash speaks and writes its own interface in. The first row, Follow Windows, is the default and uses whatever language Windows itself is set to; every other row names a language in that language. This does not change the voice a text-to-speech source reads chat in, and it does not change your screen reader's own language, both of which are set elsewhere. A change takes effect the next time you start Pubsplash, and Pubsplash will say so when you make one. Anything not yet translated stays in English rather than going blank."
+
+[[control]]
 id = "dialog.preferences.keybinds.add"
 label = "Add binding button"
 file = "src/ui/keybinds_ui.rs"

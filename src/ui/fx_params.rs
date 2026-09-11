@@ -5,6 +5,7 @@
 //! The dialog's logic lives behind the [`ParamSource`] trait so the stepping,
 //! filtering, and value-formatting rules can be unit-tested against a fake.
 
+use crate::t;
 use super::fx::{self, ChainTarget};
 use super::slider_uia::{self, SliderAnnouncer};
 use super::{App, WXK_END, WXK_ESCAPE, WXK_HOME, WXK_PAGEDOWN, WXK_PAGEUP, WXK_TAB};
@@ -125,7 +126,7 @@ pub fn formatted_value(src: &dyn ParamSource, index: i32) -> String {
     if label.is_empty() {
         display
     } else {
-        format!("{display} {label}")
+        t!("{display} {label}", display = display, label = label)
     }
 }
 
@@ -247,44 +248,44 @@ pub fn edit_parameters(
     if src.count() == 0 {
         super::show_info(
             &frame,
-            "Edit parameters",
-            "This plugin exposes no automatable parameters.",
+            &t!("Edit parameters"),
+            &t!("This plugin exposes no automatable parameters."),
         );
         return;
     }
 
-    let dialog = Dialog::builder(&frame, "Plugin parameters")
+    let dialog = Dialog::builder(&frame, &t!("Plugin parameters"))
         .with_style(DialogStyle::DefaultDialogStyle)
         .with_size(460, 320)
         .build();
     let panel = Panel::builder(&dialog).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
-    let filter_label = StaticText::builder(&panel).with_label("Filter").build();
+    let filter_label = StaticText::builder(&panel).with_label(&t!("Filter")).build();
     let filter_box = TextCtrl::builder(&panel).build();
-    super::set_accessible_name(&filter_box, "Filter parameters");
+    super::set_accessible_name(&filter_box, &t!("Filter parameters"));
     super::help::tag(
         &filter_box,
         "dialog.fxParams.filter",
         "Filter parameters by name box",
     );
 
-    let param_label = StaticText::builder(&panel).with_label("Parameter").build();
+    let param_label = StaticText::builder(&panel).with_label(&t!("Parameter")).build();
     let param_choice = Choice::builder(&panel).build();
-    super::set_accessible_name(&param_choice, "Parameter");
+    super::set_accessible_name(&param_choice, &t!("Parameter"));
     super::help::tag(
         &param_choice,
         "dialog.fxParams.parameter",
         "Plugin parameter chooser",
     );
 
-    let value_label = StaticText::builder(&panel).with_label("Value").build();
+    let value_label = StaticText::builder(&panel).with_label(&t!("Value")).build();
     let value_slider = Slider::builder(&panel)
         .with_value(0)
         .with_min_value(0)
         .with_max_value(1000)
         .build();
-    super::set_accessible_name(&value_slider, "Value");
+    super::set_accessible_name(&value_slider, &t!("Value"));
     super::help::tag(
         &value_slider,
         "dialog.fxParams.value",
@@ -297,7 +298,7 @@ pub fn edit_parameters(
     let value_text = TextCtrl::builder(&panel)
         .with_style(TextCtrlStyle::ProcessEnter)
         .build();
-    super::set_accessible_name(&value_text, "Value entry");
+    super::set_accessible_name(&value_text, &t!("Value entry"));
     super::help::tag(
         &value_text,
         "dialog.fxParams.valueText",
@@ -305,9 +306,9 @@ pub fn edit_parameters(
     );
 
     let unnamed_check = CheckBox::builder(&panel)
-        .with_label("Show unnamed parameters")
+        .with_label(&t!("Show unnamed parameters"))
         .build();
-    super::set_accessible_name(&unnamed_check, "Show unnamed parameters");
+    super::set_accessible_name(&unnamed_check, &t!("Show unnamed parameters"));
     super::help::tag(
         &unnamed_check,
         "dialog.fxParams.showUnnamed",
@@ -319,7 +320,7 @@ pub fn edit_parameters(
     // close on Escape, but only on the controls they are attached to; this covers
     // the rest of the dialog. Enter in `value_text` is unaffected — that control
     // has `ProcessEnter` and keeps the key to commit the typed value.
-    let close = super::dismiss_button(&panel, "Close");
+    let close = super::dismiss_button(&panel, &t!("Close"));
 
     sizer.add(&filter_label, 0, SizerFlag::All, 4);
     sizer.add(&filter_box, 0, SizerFlag::Expand | SizerFlag::All, 4);
@@ -525,7 +526,7 @@ pub fn edit_parameters(
                     value_text.set_value(&current);
                     announcer.update(
                         &src.name(index),
-                        &format!("this plugin does not accept typed values, still {current}"),
+                        &t!("this plugin does not accept typed values, still {current}", current = current),
                     );
                 }
             }

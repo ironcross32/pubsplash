@@ -6,6 +6,12 @@
 
 - Added a Discord community link to the README.
 
+- **The interface can now be translated, and ships in Spanish.** Every label, dialog, list row, spoken announcement and F1 help message goes through a message catalog, so Pubsplash speaks and writes the language you read. Anything not yet translated falls back to its English original rather than going blank, which means a partially translated language is still a working interface.
+
+- **Interface language** is chosen on the General tab in Preferences. The default, **Follow Windows**, uses whatever language Windows itself is set to; every other row names a language in that language, so somebody who has landed in an interface they cannot read can still find their own. The choice takes effect the next time Pubsplash starts, and Pubsplash says so when you make one. It does not change the voice a text-to-speech source reads chat in, nor your screen reader's own language.
+
+- Catalogs are embedded in the executable, so nothing has to be installed or shipped beside it and a portable copy behaves exactly like an installed one. Adding a language is a `.po` file under `po/`, a row in `i18n::LANGUAGES` and a line in `i18n::CATALOGS`; `cargo run --bin gen-po` rescans the source and `help.toml` and refreshes every catalog without disturbing the translations already written.
+
 ### Fixes
 
 ### Changes

@@ -13,6 +13,7 @@
 //! that is not running), and [`strip_labels`] is the concise one that a screen
 //! reader reads out on every mixer strip.
 
+use crate::t;
 use crate::audio::device::{AppProcess, DeviceInfo};
 use crate::config::{SourceConfig, SourceKindConfig};
 use std::collections::{HashMap, HashSet};
@@ -160,7 +161,7 @@ fn voice_display<'a>(
 /// fix instead of waiting a couple of seconds.
 fn with_state(label: String, source: &SourceConfig, ctx: &NameContext) -> String {
     if ctx.failing.contains(&source.name) {
-        format!("{label} (reconnecting)")
+        t!("{label} (reconnecting)", label = label)
     } else {
         label
     }
@@ -186,23 +187,23 @@ pub fn strip_label(source: &SourceConfig, ctx: &NameContext) -> String {
 
 fn base_strip_label(source: &SourceConfig, ctx: &NameContext) -> String {
     match &source.kind {
-        SourceKindConfig::Microphone { device_id: None } => "Microphone".to_string(),
+        SourceKindConfig::Microphone { device_id: None } => t!("Microphone"),
         SourceKindConfig::Microphone {
             device_id: Some(id),
         } => match ctx.device_name(id) {
             Some(name) => name.to_string(),
-            None => "Microphone (unavailable)".to_string(),
+            None => t!("Microphone (unavailable)"),
         },
-        SourceKindConfig::DesktopAudio { device_id: None } => "Desktop Audio".to_string(),
+        SourceKindConfig::DesktopAudio { device_id: None } => t!("Desktop Audio"),
         SourceKindConfig::DesktopAudio {
             device_id: Some(id),
         } => match ctx.render_device_name(id) {
-            Some(name) => format!("Desktop Audio ({name})"),
-            None => "Desktop Audio (unavailable)".to_string(),
+            Some(name) => t!("Desktop Audio ({name})", name = name),
+            None => t!("Desktop Audio (unavailable)"),
         },
         SourceKindConfig::Application { process_name } => {
             if process_name.trim().is_empty() {
-                "Application".to_string()
+                t!("Application")
             } else {
                 match ctx.app(process_name) {
                     Some(app) => app.display_name.clone(),
@@ -211,13 +212,13 @@ fn base_strip_label(source: &SourceConfig, ctx: &NameContext) -> String {
             }
         }
         SourceKindConfig::Tts(tts) => match voice_display(tts, ctx) {
-            VoiceDisplay::Named(voice) => format!("Text-to-Speech ({voice})"),
+            VoiceDisplay::Named(voice) => t!("Text-to-Speech ({voice})", voice = voice),
             // An unresolved opaque id reads exactly like an unset voice here.
             // The strip form is the short one and has no room to explain the
             // difference; the list form below does.
-            VoiceDisplay::Default | VoiceDisplay::Unnamed => "Text-to-Speech".to_string(),
+            VoiceDisplay::Default | VoiceDisplay::Unnamed => t!("Text-to-Speech"),
         },
-        SourceKindConfig::SoundEvents(_) => "Sound Events".to_string(),
+        SourceKindConfig::SoundEvents(_) => t!("Sound Events"),
     }
 }
 
@@ -228,34 +229,45 @@ fn list_label(source: &SourceConfig, ctx: &NameContext) -> String {
 fn base_list_label(source: &SourceConfig, ctx: &NameContext) -> String {
     match &source.kind {
         SourceKindConfig::Microphone { device_id: None } => {
-            "Microphone (default device)".to_string()
+            t!("Microphone (default device)")
         }
         SourceKindConfig::Microphone { device_id: Some(_) } => base_strip_label(source, ctx),
         SourceKindConfig::DesktopAudio { device_id: None } => {
-            "Desktop Audio (all output devices)".to_string()
+            t!("Desktop Audio (all output devices)")
         }
         SourceKindConfig::DesktopAudio { device_id: Some(_) } => base_strip_label(source, ctx),
         SourceKindConfig::Application { process_name } => {
             if process_name.trim().is_empty() {
-                "Application: not set".to_string()
+                t!("Application: not set")
             } else {
                 match ctx.app(process_name) {
-                    Some(app) => format!("Application: {} ({})", app.display_name, app.exe),
-                    None => format!("Application: {} (not running)", process_name.trim()),
+                    Some(app) => t!(
+                        "Application: {name} ({exe})",
+                        name = app.display_name,
+                        exe = app.exe
+                    ),
+                    None => t!(
+                        "Application: {name} (not running)",
+                        name = process_name.trim()
+                    ),
                 }
             }
         }
         SourceKindConfig::Tts(tts) => {
             let engine = crate::tts::engines::display_name(&tts.engine);
             match voice_display(tts, ctx) {
-                VoiceDisplay::Default => format!("Text-to-Speech: {engine}, default voice"),
-                VoiceDisplay::Named(voice) => format!("Text-to-Speech: {engine}, {voice}"),
+                VoiceDisplay::Default => {
+                    t!("Text-to-Speech: {engine}, default voice", engine = engine)
+                }
+                VoiceDisplay::Named(voice) => {
+                    t!("Text-to-Speech: {engine}, {voice}", engine = engine, voice = voice)
+                }
                 // A voice *is* configured, so this must not say "default
                 // voice" — the engine name alone, until the catalog resolves it.
-                VoiceDisplay::Unnamed => format!("Text-to-Speech: {engine}"),
+                VoiceDisplay::Unnamed => t!("Text-to-Speech: {engine}", engine = engine),
             }
         }
-        SourceKindConfig::SoundEvents(_) => "Sound Events".to_string(),
+        SourceKindConfig::SoundEvents(_) => t!("Sound Events"),
     }
 }
 

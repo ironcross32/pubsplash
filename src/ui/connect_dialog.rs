@@ -1,5 +1,6 @@
 //! Setup streaming services dialog: service list, credentials, connect/disconnect.
 
+use crate::t;
 use super::{App, show_error};
 use crate::config::{MAIN_SITE_URL, SiteConfig, StreamingServiceType};
 use crate::net::NetCommand;
@@ -8,10 +9,12 @@ use std::rc::Rc;
 use wxdragon::prelude::*;
 
 /// Shown when no services are configured. See [`super::list`].
-const NO_SERVICES: &str = "No services";
+fn no_services() -> String {
+    t!("No services")
+}
 
 pub fn show(app: &Rc<App>, frame: &Frame) {
-    let dialog = Dialog::builder(frame, "Setup streaming services")
+    let dialog = Dialog::builder(frame, &t!("Setup streaming services"))
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(560, 640)
         .build();
@@ -19,22 +22,22 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     let services_label = StaticText::builder(&panel)
-        .with_label("Streaming services")
+        .with_label(&t!("Streaming services"))
         .build();
     let services_list = ListBox::builder(&panel).build();
-    super::native_acc::install(&services_list, "Streaming services");
+    super::native_acc::install(&services_list, &t!("Streaming services"));
     super::help::tag(
         &services_list,
         "dialog.connect.siteList",
         "Configured streaming services list",
     );
     let service_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let add_service = Button::builder(&panel).with_label("Add service").build();
+    let add_service = Button::builder(&panel).with_label(&t!("Add service")).build();
     let rename_service = Button::builder(&panel)
-        .with_label("Rename service")
+        .with_label(&t!("Rename service"))
         .build();
     let remove_service = Button::builder(&panel)
-        .with_label("Remove service")
+        .with_label(&t!("Remove service"))
         .build();
     super::help::tag(&add_service, "dialog.connect.addSite", "Add service button");
     super::help::tag(
@@ -52,11 +55,11 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     service_buttons.add(&remove_service, 0, SizerFlag::All, 4);
 
     let service_type = RadioBox::builder(&panel, &["Audiopub", "Icecast"])
-        .with_label("Service type")
+        .with_label(&t!("Service type"))
         .with_style(RadioBoxStyle::SpecifyRows)
         .with_major_dimension(1)
         .build();
-    super::native_acc::install_radio_box(&service_type, "Service type");
+    super::native_acc::install_radio_box(&service_type, &t!("Service type"));
     super::help::tag(
         &service_type,
         "dialog.connect.serviceType",
@@ -64,28 +67,28 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     );
 
     let url_label = StaticText::builder(&panel)
-        .with_label("Audiopub URL")
+        .with_label(&t!("Audiopub URL"))
         .build();
     let url_input = TextCtrl::builder(&panel).build();
-    super::set_accessible_name(&url_input, "Audiopub URL");
+    super::set_accessible_name(&url_input, &t!("Audiopub URL"));
     super::help::tag(
         &url_input,
         "dialog.connect.url",
         "Audiopub URL for the selected service",
     );
-    let email_label = StaticText::builder(&panel).with_label("Email").build();
+    let email_label = StaticText::builder(&panel).with_label(&t!("Email")).build();
     let email_input = TextCtrl::builder(&panel).build();
-    super::set_accessible_name(&email_input, "Email");
+    super::set_accessible_name(&email_input, &t!("Email"));
     super::help::tag(
         &email_input,
         "dialog.connect.email",
         "Email address for the selected service",
     );
-    let password_label = StaticText::builder(&panel).with_label("Password").build();
+    let password_label = StaticText::builder(&panel).with_label(&t!("Password")).build();
     let password_input = TextCtrl::builder(&panel)
         .with_style(TextCtrlStyle::Password)
         .build();
-    super::set_accessible_name(&password_input, "Password");
+    super::set_accessible_name(&password_input, &t!("Password"));
     super::help::tag(
         &password_input,
         "dialog.connect.password",
@@ -93,59 +96,59 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     );
 
     let server_label = StaticText::builder(&panel)
-        .with_label("Icecast server")
+        .with_label(&t!("Icecast server"))
         .build();
     let server_input = TextCtrl::builder(&panel).build();
-    super::set_accessible_name(&server_input, "Icecast server");
+    super::set_accessible_name(&server_input, &t!("Icecast server"));
     super::help::tag(
         &server_input,
         "dialog.connect.icecastServer",
         "Icecast server for the selected service",
     );
     let port_label = StaticText::builder(&panel)
-        .with_label("Icecast port")
+        .with_label(&t!("Icecast port"))
         .build();
     let port_input = TextCtrl::builder(&panel).build();
-    super::set_accessible_name(&port_input, "Icecast port");
+    super::set_accessible_name(&port_input, &t!("Icecast port"));
     super::help::tag(
         &port_input,
         "dialog.connect.icecastPort",
         "Icecast port for the selected service",
     );
     let mount_label = StaticText::builder(&panel)
-        .with_label("Icecast mount point")
+        .with_label(&t!("Icecast mount point"))
         .build();
     let mount_input = TextCtrl::builder(&panel).build();
-    super::set_accessible_name(&mount_input, "Icecast mount point");
+    super::set_accessible_name(&mount_input, &t!("Icecast mount point"));
     super::help::tag(
         &mount_input,
         "dialog.connect.icecastMount",
         "Icecast mount point for the selected service",
     );
     let username_label = StaticText::builder(&panel)
-        .with_label("Icecast username")
+        .with_label(&t!("Icecast username"))
         .build();
     let username_input = TextCtrl::builder(&panel).build();
-    super::set_accessible_name(&username_input, "Icecast username");
+    super::set_accessible_name(&username_input, &t!("Icecast username"));
     super::help::tag(
         &username_input,
         "dialog.connect.icecastUsername",
         "Icecast username for the selected service",
     );
     let icecast_password_label = StaticText::builder(&panel)
-        .with_label("Icecast password")
+        .with_label(&t!("Icecast password"))
         .build();
     let icecast_password_input = TextCtrl::builder(&panel)
         .with_style(TextCtrlStyle::Password)
         .build();
-    super::set_accessible_name(&icecast_password_input, "Icecast password");
+    super::set_accessible_name(&icecast_password_input, &t!("Icecast password"));
     super::help::tag(
         &icecast_password_input,
         "dialog.connect.icecastPassword",
         "Icecast password for the selected service",
     );
 
-    let connect_button = Button::builder(&panel).with_label("Connect").build();
+    let connect_button = Button::builder(&panel).with_label(&t!("Connect")).build();
     super::help::tag(
         &connect_button,
         "dialog.connect.connectButton",
@@ -158,7 +161,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
     // Connect deliberately stays off the default item: it starts or stops a live
     // connection, which is not something a stray Enter in the service list or a
     // password field should ever do.
-    let close_button = super::dismiss_button(&panel, "Close");
+    let close_button = super::dismiss_button(&panel, &t!("Close"));
 
     sizer.add(&services_label, 0, SizerFlag::All, 4);
     sizer.add(&services_list, 1, SizerFlag::Expand | SizerFlag::All, 4);
@@ -202,19 +205,19 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
             // alongside the visible label, or a screen reader goes on reading
             // the wording the field had when the dialog was built.
             let server_name = if audiopub {
-                "Audiopub Icecast server"
+                t!("Audiopub Icecast server")
             } else {
-                "Icecast server"
+                t!("Icecast server")
             };
             let port_name = if audiopub {
-                "Audiopub Icecast port"
+                t!("Audiopub Icecast port")
             } else {
-                "Icecast port"
+                t!("Icecast port")
             };
-            server_label.set_label(server_name);
-            super::set_accessible_name(&server_input, server_name);
-            port_label.set_label(port_name);
-            super::set_accessible_name(&port_input, port_name);
+            server_label.set_label(&server_name);
+            super::set_accessible_name(&server_input, &server_name);
+            port_label.set_label(&port_name);
+            super::set_accessible_name(&port_input, &port_name);
             email_label.show(audiopub);
             email_input.show(audiopub);
             password_label.show(audiopub);
@@ -264,7 +267,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
                     label
                 })
                 .collect();
-            let synced = super::list::sync(&services_list, &labels, NO_SERVICES);
+            let synced = super::list::sync(&services_list, &labels, &no_services());
             if services.is_empty() {
                 return;
             }
@@ -367,10 +370,10 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
         move || {
             let connected = app.run.borrow().connected_service.clone();
             let disconnects = connected.is_some() && connected == selected_service_id();
-            connect_button.set_label(if disconnects {
-                "Dis&connect"
+            connect_button.set_label(&if disconnects {
+                t!("Dis&connect")
             } else {
-                "&Connect"
+                t!("&Connect")
             });
         }
     };
@@ -514,8 +517,8 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
                 if service.is_main() {
                     show_error(
                         &dialog_for_rename,
-                        "Rename service",
-                        "The main Audiopub service cannot be renamed.",
+                        &t!("Rename service"),
+                        &t!("The main Audiopub service cannot be renamed."),
                     );
                     return;
                 }
@@ -523,8 +526,8 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
             };
             let entry = TextEntryDialog::builder(
                 &dialog_for_rename,
-                "New service nickname:",
-                "Rename service",
+                &t!("New service nickname:"),
+                &t!("Rename service"),
             )
             .with_default_value(&current_name)
             .build();
@@ -533,7 +536,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
             {
                 let name = name.trim();
                 if name.is_empty() {
-                    show_error(&dialog_for_rename, "Rename service", "Enter a nickname.");
+                    show_error(&dialog_for_rename, &t!("Rename service"), &t!("Enter a nickname."));
                     return;
                 }
                 if let Some(service) = app.config.borrow_mut().connection.site_mut(&id) {
@@ -565,8 +568,8 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
                     drop(config);
                     show_error(
                         &dialog_for_remove,
-                        "Remove service",
-                        "The main Audiopub service cannot be removed.",
+                        &t!("Remove service"),
+                        &t!("The main Audiopub service cannot be removed."),
                     );
                     return;
                 }
@@ -609,7 +612,7 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
                     Ok(profile) => profile,
                     Err(message) => {
                         drop(config);
-                        show_error(&dialog_for_connect, "Connect", &message);
+                        show_error(&dialog_for_connect, &t!("Connect"), &message);
                         return;
                     }
                 }
@@ -643,37 +646,37 @@ pub fn show(app: &Rc<App>, frame: &Frame) {
 }
 
 fn prompt_new_service(parent: &Dialog) -> Option<(String, StreamingServiceType)> {
-    let dialog = Dialog::builder(parent, "Add streaming service")
+    let dialog = Dialog::builder(parent, &t!("Add streaming service"))
         .with_style(DialogStyle::DefaultDialogStyle)
         .with_size(360, 220)
         .build();
     let panel = Panel::builder(&dialog).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
-    let nickname_label = StaticText::builder(&panel).with_label("Nickname").build();
+    let nickname_label = StaticText::builder(&panel).with_label(&t!("Nickname")).build();
     let nickname_input = TextCtrl::builder(&panel).build();
-    super::set_accessible_name(&nickname_input, "Nickname");
+    super::set_accessible_name(&nickname_input, &t!("Nickname"));
     super::help::tag(
         &nickname_input,
         "dialog.connect.nickname",
         "Streaming service nickname",
     );
     let service_type = RadioBox::builder(&panel, &["Audiopub", "Icecast"])
-        .with_label("Service type")
+        .with_label(&t!("Service type"))
         .with_style(RadioBoxStyle::SpecifyRows)
         .with_major_dimension(1)
         .build();
     service_type.set_selection(0);
-    super::native_acc::install_radio_box(&service_type, "Service type");
+    super::native_acc::install_radio_box(&service_type, &t!("Service type"));
     super::help::tag(
         &service_type,
         "dialog.connect.addServiceType",
         "New service type selector",
     );
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let ok = super::ok_button(&panel, "OK");
+    let ok = super::ok_button(&panel, &t!("OK"));
     let cancel = Button::builder(&panel)
         .with_id(ID_CANCEL)
-        .with_label("Cancel")
+        .with_label(&t!("Cancel"))
         .build();
     {
         ok.on_click(move |_| dialog.end_modal(ID_OK));
@@ -699,7 +702,7 @@ fn prompt_new_service(parent: &Dialog) -> Option<(String, StreamingServiceType)>
         }
         let nickname = nickname_input.get_value().trim().to_string();
         if nickname.is_empty() {
-            show_error(&dialog, "Add service", "Enter a nickname.");
+            show_error(&dialog, &t!("Add service"), &t!("Enter a nickname."));
             continue;
         }
         let kind = if service_type.get_selection() == 1 {

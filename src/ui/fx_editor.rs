@@ -8,6 +8,7 @@
 //! (Close button). Everything else the plugin receives normally, and the
 //! toolbar's own buttons are ordinary Tab-reachable wx controls.
 
+use crate::t;
 use super::App;
 use super::WXK_ESCAPE;
 use super::fx::{self, ChainTarget};
@@ -139,8 +140,8 @@ pub fn open_editor(
     if !plugin.has_editor() {
         super::show_info(
             &parent,
-            "Plugin interface",
-            "This plugin has no interface of its own. Use \"Edit parameters\" instead.",
+            &t!("Plugin interface"),
+            &t!("This plugin has no interface of its own. Use \"Edit parameters\" instead."),
         );
         return;
     }
@@ -149,7 +150,7 @@ pub fn open_editor(
     let name = plugin.info().name.clone();
     let frame = Frame::builder()
         .with_parent(&parent)
-        .with_title(&format!("{name} interface"))
+        .with_title(&t!("{name} interface", name = name))
         .with_size(frame_size(w, h))
         .build();
     let panel = Panel::builder(&frame).build();
@@ -157,19 +158,19 @@ pub fn open_editor(
 
     // Toolbar (Tab-reachable, always an escape from the plugin's own UI).
     let toolbar = BoxSizer::builder(Orientation::Horizontal).build();
-    let params = Button::builder(&panel).with_label("Parameters...").build();
-    let bypass = CheckBox::builder(&panel).with_label("Bypass").build();
+    let params = Button::builder(&panel).with_label(&t!("Parameters...")).build();
+    let bypass = CheckBox::builder(&panel).with_label(&t!("Bypass")).build();
     bypass.set_value(
         fx::with_slots(app, target, |slots| {
             slots.get(slot).map(|s| s.bypass).unwrap_or(false)
         })
         .unwrap_or(false),
     );
-    super::set_accessible_name(&bypass, "Bypass this plugin");
+    super::set_accessible_name(&bypass, &t!("Bypass this plugin"));
     let focus_plugin = Button::builder(&panel)
-        .with_label("Plugin interface")
+        .with_label(&t!("Plugin interface"))
         .build();
-    let close = Button::builder(&panel).with_label("Close").build();
+    let close = Button::builder(&panel).with_label(&t!("Close")).build();
     super::help::tag(
         &params,
         "dialog.fxEditor.parameters",

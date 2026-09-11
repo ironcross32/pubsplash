@@ -21,6 +21,7 @@
 //! class of problem above go away. Nothing here may grow a modal dialog or a
 //! `Yield` for the same reason.
 
+use crate::t;
 use super::ID_CANCEL;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -60,7 +61,7 @@ impl ScanDialog {
     /// needs no borrow of anything and cannot be tripped up by whatever the
     /// pump is in the middle of.
     pub fn show(parent: &Dialog, cancel: Arc<AtomicBool>, skip: Arc<AtomicBool>) -> Self {
-        let dialog = Dialog::builder(parent, "Scanning plugins")
+        let dialog = Dialog::builder(parent, &t!("Scanning plugins"))
             .with_style(DialogStyle::DefaultDialogStyle)
             .with_size(480, 220)
             .build();
@@ -71,26 +72,26 @@ impl ScanDialog {
         // so all it needs from us is a name. Its range is fixed at 100 and fed
         // a percentage, so the plugin count arriving later never has to re-range
         // it.
-        let gauge_label = StaticText::builder(&panel).with_label("Progress").build();
+        let gauge_label = StaticText::builder(&panel).with_label(&t!("Progress")).build();
         let gauge = Gauge::builder(&panel).with_range(100).build();
-        super::set_accessible_name(&gauge, "Scan progress");
+        super::set_accessible_name(&gauge, &t!("Scan progress"));
         super::help::tag(&gauge, "dialog.scan.progress", "Scan progress bar");
 
         // Read-only, so it is somewhere to tab to and read the current plugin
         // on demand. Rewriting it announces nothing by itself, which is what
         // keeps a scan of hundreds of plugins from talking continuously.
-        let status_label = StaticText::builder(&panel).with_label("Status").build();
+        let status_label = StaticText::builder(&panel).with_label(&t!("Status")).build();
         let status = TextCtrl::builder(&panel)
             .with_style(TextCtrlStyle::ReadOnly)
-            .with_value("Looking for plugins in the configured folders...")
+            .with_value(&t!("Looking for plugins in the configured folders..."))
             .build();
-        super::set_accessible_name(&status, "Scan status");
+        super::set_accessible_name(&status, &t!("Scan status"));
         super::help::tag(&status, "dialog.scan.status", "Scan status text");
 
         // Skip is the default item, so ENTER skips the plugin the scan is stuck
         // on — the thing you want to be able to do quickly. ESCAPE reaches
         // Cancel through its `ID_CANCEL`, as everywhere else in the app.
-        let skip_button = super::ok_button(&panel, "Skip this plugin");
+        let skip_button = super::ok_button(&panel, &t!("Skip this plugin"));
         super::help::tag(
             &skip_button,
             "dialog.scan.skip",
@@ -98,7 +99,7 @@ impl ScanDialog {
         );
         let cancel_button = Button::builder(&panel)
             .with_id(ID_CANCEL)
-            .with_label("Cancel scan")
+            .with_label(&t!("Cancel scan"))
             .build();
         super::help::tag(
             &cancel_button,
@@ -121,7 +122,7 @@ impl ScanDialog {
             let skip = skip.clone();
             skip_button.on_click(move |event| {
                 skip.store(true, Ordering::Relaxed);
-                status.set_value("Skipping this plugin...");
+                status.set_value(&t!("Skipping this plugin..."));
                 // The scan reports back on its own; do not let this reach
                 // wxDialogBase and close the dialog behind us.
                 event.event.skip(false);
@@ -133,7 +134,7 @@ impl ScanDialog {
                 cancel.store(true, Ordering::Relaxed);
                 // A helper that is part-way through a plugin has to finish or
                 // be killed first, so say that rather than vanishing.
-                status.set_value("Cancelling the scan...");
+                status.set_value(&t!("Cancelling the scan..."));
                 event.event.skip(false);
             });
         }
@@ -153,14 +154,14 @@ impl ScanDialog {
     /// Enumeration is over and the plugin count is known.
     pub fn counted(&self, total: usize) {
         self.status
-            .set_value(&format!("Found {total} plugins to scan."));
+            .set_value(&t!("Found {total} plugins to scan.", total = total));
     }
 
     /// One plugin done.
     pub fn scanned(&self, done: usize, total: usize, current: &str) {
         self.gauge.set_value(scan_percent(done, total));
         self.status
-            .set_value(&format!("Scanned {done} of {total}: {current}"));
+            .set_value(&t!("Scanned {done} of {total}: {current}", done = done, total = total, current = current));
     }
 }
 

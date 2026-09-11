@@ -25,12 +25,15 @@
 use super::App;
 use crate::config::{DuckerConfig, EffectConfig, SourceConfig};
 use crate::state::{ListEdit, move_down, move_up};
+use crate::t;
 use std::cell::RefCell;
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
 /// Shown when a source has no effects yet. See [`super::list`].
-const NO_EFFECTS: &str = "No effects";
+fn no_effects() -> String {
+    t!("No effects")
+}
 
 /// The dialog, its notebook and the shared buttons.
 pub struct Shell {
@@ -52,11 +55,11 @@ impl Shell {
             .with_size(width, height)
             .build();
         let notebook = Notebook::builder(&dialog).build();
-        let ok = super::ok_button(&dialog, "OK");
+        let ok = super::ok_button(&dialog, &t!("OK"));
         // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
         let cancel = Button::builder(&dialog)
             .with_id(ID_CANCEL)
-            .with_label("Cancel")
+            .with_label(&t!("Cancel"))
             .build();
         Shell {
             dialog,
@@ -131,23 +134,25 @@ pub fn add_effects_page(
     effects: Vec<EffectConfig>,
 ) {
     let page = Panel::builder(&shell.notebook).build();
-    shell.notebook.add_page(&page, "Effects", false, None);
+    shell.notebook.add_page(&page, &t!("Effects"), false, None);
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     // The list takes its accessible name from the control in front of it, so
     // this label is not decoration; see `super::native_acc`.
-    const EFFECTS: &str = "Effects";
-    let label = StaticText::builder(&page).with_label(EFFECTS).build();
+    let effects_label = t!("Effects");
+    let label = StaticText::builder(&page)
+        .with_label(&effects_label)
+        .build();
     let list = ListBox::builder(&page).build();
-    super::native_acc::install(&list, EFFECTS);
+    super::native_acc::install(&list, &effects_label);
     super::help::tag(&list, "dialog.source.effects.list", "Effects list");
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let add = Button::builder(&page).with_label("&Add").build();
-    let edit = Button::builder(&page).with_label("Edit...").build();
-    let remove = Button::builder(&page).with_label("Remove").build();
-    let up = Button::builder(&page).with_label("Move up").build();
-    let down = Button::builder(&page).with_label("Move down").build();
+    let add = Button::builder(&page).with_label(&t!("&Add")).build();
+    let edit = Button::builder(&page).with_label(&t!("Edit...")).build();
+    let remove = Button::builder(&page).with_label(&t!("Remove")).build();
+    let up = Button::builder(&page).with_label(&t!("Move up")).build();
+    let down = Button::builder(&page).with_label(&t!("Move down")).build();
     super::help::tag(&add, "dialog.source.effects.add", "Add effect button");
     super::help::tag(&edit, "dialog.source.effects.edit", "Edit effect button");
     super::help::tag(
@@ -191,7 +196,7 @@ pub fn add_effects_page(
                 .enumerate()
                 .map(|(i, effect)| row_label(i, effect, &keys))
                 .collect();
-            super::list::sync(&list, &labels, NO_EFFECTS);
+            super::list::sync(&list, &labels, &no_effects());
             if let Some(row) = select
                 && (row as usize) < labels.len()
             {
@@ -208,7 +213,7 @@ pub fn add_effects_page(
             .enumerate()
             .map(|(i, effect)| row_label(i, effect, &keys))
             .collect();
-        super::list::fill(&list, &labels, NO_EFFECTS);
+        super::list::fill(&list, &labels, &no_effects());
     }
 
     let dialog = shell.dialog;
@@ -223,10 +228,14 @@ pub fn add_effects_page(
             // `available` and an arm in `configure`, and nothing else.
             let available = available_effects();
             let labels: Vec<&str> = available.iter().map(|e| e.type_display_name()).collect();
-            let picker =
-                SingleChoiceDialog::builder(&dialog, "What kind of effect?", "Add effect", &labels)
-                    .build();
-            super::native_acc::install_in_dialog(&picker, "What kind of effect?");
+            let picker = SingleChoiceDialog::builder(
+                &dialog,
+                &t!("What kind of effect?"),
+                &t!("Add effect"),
+                &labels,
+            )
+            .build();
+            super::native_acc::install_in_dialog(&picker, &t!("What kind of effect?"));
             picker.set_selection(0);
             let chosen = (picker.show_modal() == ID_OK)
                 .then(|| picker.get_selection())

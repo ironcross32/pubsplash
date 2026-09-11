@@ -38,6 +38,12 @@ path = "src/bin/soundpack.rs"
 name = "gen-help"
 path = "src/bin/gen_help.rs"
 
+# Dev tool: scans the source for `t!`/`tn!` calls and help.toml for context-help
+# prose, and round-trips the translation catalogs under `po/`. Not shipped.
+[[bin]]
+name = "gen-po"
+path = "src/bin/gen_po.rs"
+
 [build-dependencies]
 winresource = "0.1"
 

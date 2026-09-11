@@ -20,6 +20,7 @@ pub struct Config {
     pub audio: AudioConfig,
     pub scenes: ScenesConfig,
     pub logging: LoggingConfig,
+    pub interface: InterfaceConfig,
     pub plugins: PluginsConfig,
     pub buses: BusesConfig,
     pub archiving: ArchivingConfig,
@@ -1175,6 +1176,17 @@ impl Default for LoggingConfig {
             level: "info".to_string(),
         }
     }
+}
+
+/// Settings for the interface itself, as opposed to what it is controlling.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct InterfaceConfig {
+    /// The language code the interface is shown in, such as `es`. Empty — the
+    /// default — means "follow Windows", which is what a first run should do:
+    /// a Spanish speaker should not have to find an English settings dialog in
+    /// order to ask for Spanish. See [`crate::i18n`].
+    pub language: String,
 }
 
 /// The data directory: `%LOCALAPPDATA%\pubsplash`, or `user_data\` beside the

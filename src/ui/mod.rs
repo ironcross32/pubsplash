@@ -37,6 +37,7 @@ mod stream_info_dialog;
 mod update;
 mod update_dialog;
 
+use crate::t;
 use crate::audio::{
     AudioEngine, EngineCommand, FeedKind, RoutingUpdate, SourceSpec, capture::CaptureKind,
 };
@@ -234,8 +235,8 @@ pub struct StreamInfo {
 impl Default for StreamInfo {
     fn default() -> Self {
         Self {
-            title: "Stream".to_string(),
-            description: "This is just a stream".to_string(),
+            title: t!("Stream"),
+            description: t!("This is just a stream"),
             archive: false,
             record: false,
             announce_start: false,
@@ -431,12 +432,12 @@ impl StreamPhase {
     }
 
     /// What to say on arriving here from `previous`.
-    fn announcement(&self, previous: StreamPhase) -> Option<&'static str> {
+    fn announcement(&self, previous: StreamPhase) -> Option<String> {
         match self {
-            StreamPhase::Starting => Some("Connecting to the stream"),
-            StreamPhase::LivePending => Some("Connected, waiting for the server"),
-            StreamPhase::Live => Some("Streaming started"),
-            StreamPhase::Stopping => Some("Stopping the stream"),
+            StreamPhase::Starting => Some(t!("Connecting to the stream")),
+            StreamPhase::LivePending => Some(t!("Connected, waiting for the server")),
+            StreamPhase::Live => Some(t!("Streaming started")),
+            StreamPhase::Stopping => Some(t!("Stopping the stream")),
             // Reaching idle from starting means the attempt failed, and
             // `NetEvent::StreamError` has already put a message box up saying
             // why — "Streaming stopped" on top of that would be noise.
@@ -445,7 +446,7 @@ impl StreamPhase {
             // accepting it, so ending one still owes the user the word.
             StreamPhase::Idle => match previous {
                 StreamPhase::Live | StreamPhase::LivePending | StreamPhase::Stopping => {
-                    Some("Streaming stopped")
+                    Some(t!("Streaming stopped"))
                 }
                 _ => None,
             },
@@ -939,21 +940,23 @@ fn live_stream_url(site_url: &str, stream_id: &str) -> Option<String> {
 /// The Go to menu is always enabled — a greyed-out item tells a screen reader
 /// nothing about *why* — so every state that [`App::stream_url`] answers `None`
 /// for needs its own sentence. Pure so the wording is testable without an `App`.
-fn no_stream_page_reason(stream: &StreamState) -> &'static str {
+fn no_stream_page_reason(stream: &StreamState) -> String {
     match stream {
-        StreamState::Idle => "You are not streaming. Start a stream, and this will open its page.",
-        StreamState::Starting => {
-            "The stream is still connecting, so its page is not available yet."
+        StreamState::Idle => {
+            t!("You are not streaming. Start a stream, and this will open its page.")
         }
-        StreamState::Stopping => "The stream is shutting down.",
+        StreamState::Starting => {
+            t!("The stream is still connecting, so its page is not available yet.")
+        }
+        StreamState::Stopping => t!("The stream is shutting down."),
         // Live, but `stream_url` still declined: either a direct Icecast target,
         // which has no page at all, or a service whose site URL is not set.
         StreamState::Live { stream_id } if stream_id.starts_with("icecast:") => {
-            "This is a direct Icecast stream, which has no Audio Pub page."
+            t!("This is a direct Icecast stream, which has no Audio Pub page.")
         }
-        StreamState::Live { .. } => {
+        StreamState::Live { .. } => t!(
             "Pubsplash does not have a page address for this stream. Check the site address of the service you are streaming to."
-        }
+        ),
     }
 }
 
@@ -1149,6 +1152,11 @@ fn source_routing(
 /// because that list carries what viewers said and nothing else. Never spoken
 /// either: `speak_chat` feeds TTS sources whose audio may be going out to the
 /// stream, and a Pubsplash status notice must not reach listeners.
+///
+/// Being a log line is also why nothing here goes through `t!`, and the same
+/// goes for [`server_state_line`] and [`audio_link_line`] below: users are asked
+/// to send their log when something goes wrong, and a log in a language the
+/// maintainer cannot read is not a diagnostic. See [`crate::i18n`].
 fn chat_feed_line(state: &crate::net::ChatFeedState) -> String {
     use crate::net::ChatFeedState;
     match state {
@@ -1261,7 +1269,7 @@ fn speak_chat(app: &Rc<App>, user: &str, content: &str) {
         app.speaker.speak(crate::tts::speaker::SpeakRequest {
             engine: tts.engine.clone(),
             synth: crate::tts::engine::SynthRequest {
-                text: format!("{user}: {content}"),
+                text: t!("{user}: {content}", user = user, content = content),
                 voice: tts.voice.clone(),
                 rate: tts.rate,
                 volume: tts.volume,
@@ -1859,9 +1867,9 @@ impl App {
         // and the button has to stay live for the cancel to be reachable.
         let armed = run.schedule.is_some();
         let button_label = match &run.stream {
-            StreamState::Idle if armed => "Cancel scheduled stream",
-            StreamState::Idle => "Start streaming",
-            _ => "Stop streaming",
+            StreamState::Idle if armed => t!("Cancel scheduled stream"),
+            StreamState::Idle => t!("Start streaming"),
+            _ => t!("Stop streaming"),
         };
 
         let streaming_or_starting = !matches!(run.stream, StreamState::Idle);
@@ -1874,9 +1882,9 @@ impl App {
         // the engine says the file exists.
         let busy_recording = run.recording || run.recording_pending;
         let record_label = if busy_recording {
-            "Stop recording"
+            t!("Stop recording")
         } else {
-            "Start recording"
+            t!("Start recording")
         };
         drop(run);
 
@@ -1886,7 +1894,7 @@ impl App {
             let mut run = self.run.borrow_mut();
             let shown = &mut run.shown;
             if shown.stream_label != button_label {
-                w.stream_button.set_label(button_label);
+                w.stream_button.set_label(&button_label);
                 shown.stream_label = button_label.to_string();
             }
             // Streaming and standalone recording are mutually exclusive.
@@ -1895,7 +1903,7 @@ impl App {
                 shown.stream_enabled = Some(!busy_recording);
             }
             if shown.record_label != record_label {
-                w.record_button.set_label(record_label);
+                w.record_button.set_label(&record_label);
                 shown.record_label = record_label.to_string();
             }
             // An armed schedule locks recording out too: a recording running
@@ -1927,16 +1935,16 @@ impl App {
             };
             let record_line = match shown.announced_recording.replace(recording) {
                 Some(previous) if previous != recording => Some(if recording {
-                    "Recording started"
+                    t!("Recording started")
                 } else {
-                    "Recording stopped"
+                    t!("Recording stopped")
                 }),
                 _ => None,
             };
             [stream_line, record_line]
         };
         for line in lines.into_iter().flatten() {
-            help::announce(line);
+            help::announce(&line);
         }
     }
 }
@@ -1968,10 +1976,10 @@ fn recording_filename() -> String {
 fn validate_site_url(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err("Enter a full Audiopub URL starting with https://".to_string());
+        return Err(t!("Enter a full Audiopub URL starting with https://"));
     }
     let url = reqwest::Url::parse(trimmed).map_err(|_| {
-        format!("{trimmed:?} is not a valid URL. It should look like https://audiopub.site")
+        t!("{url} is not a valid URL. It should look like https://audiopub.site", url = format!("{trimmed:?}"))
     })?;
     match url.scheme() {
         "https" => {}
@@ -1980,25 +1988,24 @@ fn validate_site_url(raw: &str) -> Result<String, String> {
             url.host_str().unwrap_or("(no host)")
         ),
         other => {
-            return Err(format!(
-                "{other:?} is not a web address scheme. The URL should start with https://"
+            return Err(t!(
+                "{scheme} is not a web address scheme. The URL should start with https://",
+                scheme = format!("{other:?}")
             ));
         }
     }
     if url.host_str().is_none_or(str::is_empty) {
-        return Err(
+        return Err(t!(
             "That URL has no site name in it. It should look like https://audiopub.site"
-                .to_string(),
-        );
+        ));
     }
     if !url.username().is_empty() || url.password().is_some() {
-        return Err(
+        return Err(t!(
             "Remove the user name and password from the URL; enter them in the fields below."
-                .to_string(),
-        );
+        ));
     }
     if url.fragment().is_some() {
-        return Err("Remove the '#' and everything after it from the URL.".to_string());
+        return Err(t!("Remove the '#' and everything after it from the URL."));
     }
     Ok(trimmed.trim_end_matches('/').to_string())
 }
@@ -2017,7 +2024,7 @@ pub fn service_profile_from_site(site: &SiteConfig) -> Result<ServiceProfile, St
             let (server, embedded_port) = crate::net::icecast::split_host_port(&typed_server)?;
             let port = embedded_port.unwrap_or(typed_port);
             if site.email.trim().is_empty() || site.password.is_empty() {
-                return Err("Enter your email and password first.".to_string());
+                return Err(t!("Enter your email and password first."));
             }
             Ok(ServiceProfile::Audiopub {
                 id: site.id.clone(),
@@ -2036,13 +2043,13 @@ pub fn service_profile_from_site(site: &SiteConfig) -> Result<ServiceProfile, St
             let (server, typed_port) = crate::net::icecast::split_host_port(&site.icecast_server)?;
             let port = typed_port.unwrap_or(site.icecast_port);
             if port == 0 {
-                return Err("Enter a valid Icecast port.".to_string());
+                return Err(t!("Enter a valid Icecast port."));
             }
             if site.icecast_mount.trim().is_empty() {
-                return Err("Enter the Icecast mount point.".to_string());
+                return Err(t!("Enter the Icecast mount point."));
             }
             if site.icecast_password.is_empty() {
-                return Err("Enter the Icecast password.".to_string());
+                return Err(t!("Enter the Icecast password."));
             }
             Ok(ServiceProfile::Icecast {
                 id: site.id.clone(),
@@ -2070,8 +2077,8 @@ pub fn start_streaming(app: &Rc<App>) {
             app.widgets(|w| {
                 show_error(
                     &w.frame,
-                    "Not connected",
-                    "Connect to a streaming service first (File > Setup streaming services).",
+                    &t!("Not connected"),
+                    &t!("Connect to a streaming service first (File > Setup streaming services)."),
                 )
             });
             return;
@@ -2179,29 +2186,24 @@ fn recording_failure_message(
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| failure.path.display().to_string());
     let cause = match failure.kind {
-        Some(ErrorKind::NotFound) => format!(
-            "The folder {folder} does not exist.\n\n\
+        Some(ErrorKind::NotFound) => t!("The folder {folder} does not exist.\n\n\
              Choose a folder that does exist under Recording folder in Preferences, \
-             or create that one."
-        ),
-        Some(ErrorKind::PermissionDenied) => format!(
-            "Pubsplash is not allowed to write to {folder}.\n\n\
-             Choose a different folder under Recording folder in Preferences."
-        ),
-        Some(_) => format!(
-            "The recording file could not be created in {folder}.\n\n\
+             or create that one.", folder = folder),
+        Some(ErrorKind::PermissionDenied) => t!("Pubsplash is not allowed to write to {folder}.\n\n\
+             Choose a different folder under Recording folder in Preferences.", folder = folder),
+        Some(_) => t!("The recording file could not be created in {folder}.\n\n\
              Check that the folder exists and can be written to, or choose another \
-             one under Recording folder in Preferences."
+             one under Recording folder in Preferences.", folder = folder),
+        None => t!(
+            "The MP3 encoder for the recording could not be created, so nothing \
+             could be written."
         ),
-        None => "The MP3 encoder for the recording could not be created, so nothing \
-                 could be written."
-            .to_string(),
     };
-    let mut message = format!("The recording did not start.\n\n{cause}");
+    let mut message = t!("The recording did not start.\n\n{cause}", cause = cause);
     if streaming {
-        message.push_str("\n\nThe stream itself is unaffected and is still live.");
+        message.push_str(&t!("\n\nThe stream itself is unaffected and is still live."));
     }
-    message.push_str(&format!("\n\nDetails: {detail}"));
+    message.push_str(&t!("\n\nDetails: {detail}", detail = detail));
     message
 }
 
@@ -2287,7 +2289,7 @@ pub fn dismiss_button(parent: &dyn WxWidget, label: &str) -> Button {
 /// Builds the whole UI. Called from inside `wxdragon::main`.
 pub fn build(app: Rc<App>) {
     let frame = Frame::builder()
-        .with_title("Pubsplash")
+        .with_title(&t!("Pubsplash"))
         .with_size(Size::new(900, 700))
         .build();
 
@@ -2297,13 +2299,13 @@ pub fn build(app: Rc<App>) {
     let scenes_panel = Panel::builder(&notebook).build();
     let buses_panel = Panel::builder(&notebook).build();
     let api_panel = Panel::builder(&notebook).build();
-    notebook.add_page(&home_panel, "Home", true, None);
-    notebook.add_page(&chat_panel, "Chat", false, None);
-    notebook.add_page(&scenes_panel, "Scenes and Sources", false, None);
-    notebook.add_page(&buses_panel, "Buses", false, None);
+    notebook.add_page(&home_panel, &t!("Home"), true, None);
+    notebook.add_page(&chat_panel, &t!("Chat"), false, None);
+    notebook.add_page(&scenes_panel, &t!("Scenes and Sources"), false, None);
+    notebook.add_page(&buses_panel, &t!("Buses"), false, None);
     // Last in the strip: read-only, and nothing here is needed to get a stream
     // on the air.
-    notebook.add_page(&api_panel, "API", false, None);
+    notebook.add_page(&api_panel, &t!("API"), false, None);
     help::tag(&notebook, "window.tabBar", "Main tab bar");
 
     let frame_sizer = BoxSizer::builder(Orientation::Vertical).build();
@@ -2370,9 +2372,9 @@ pub fn build(app: Rc<App>) {
             .partition(|f| f.error == fx::SlotError::NotInstalled);
         let mut message = String::new();
         if !uninstalled.is_empty() {
-            message.push_str(
-                "Some plugins used by your buses are not installed on this machine and will be skipped until you install them and rescan:\n",
-            );
+            message.push_str(&t!(
+                "Some plugins used by your buses are not installed on this machine and will be skipped until you install them and rescan:\n"
+            ));
             for failure in &uninstalled {
                 message.push_str(&format!("\n- {}", failure.describe()));
             }
@@ -2381,14 +2383,14 @@ pub fn build(app: Rc<App>) {
             if !message.is_empty() {
                 message.push_str("\n\n");
             }
-            message.push_str(
-                "These plugins are installed but could not be loaded, so they will be skipped:\n",
-            );
+            message.push_str(&t!(
+                "These plugins are installed but could not be loaded, so they will be skipped:\n"
+            ));
             for failure in &failed {
                 message.push_str(&format!("\n- {}", failure.describe()));
             }
         }
-        show_info(&frame, "Plugins skipped", &message);
+        show_info(&frame, &t!("Plugins skipped"), &message);
     }
 
     // Exit confirmation while streaming (menu Exit and ALT+F4 both arrive here).
@@ -2407,8 +2409,8 @@ pub fn build(app: Rc<App>) {
             if app.is_streaming_or_starting() {
                 let dialog = MessageDialog::builder(
                     &frame_for_close,
-                    "You are currently streaming. Stop the stream and exit?",
-                    "Exit Pubsplash",
+                    &t!("You are currently streaming. Stop the stream and exit?"),
+                    &t!("Exit Pubsplash"),
                 )
                 .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
                 .build();
@@ -2427,8 +2429,8 @@ pub fn build(app: Rc<App>) {
                 // never happening.
                 let dialog = MessageDialog::builder(
                     &frame_for_close,
-                    "A stream is scheduled to go live later. Exit and discard it?",
-                    "Exit Pubsplash",
+                    &t!("A stream is scheduled to go live later. Exit and discard it?"),
+                    &t!("Exit Pubsplash"),
                 )
                 .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
                 .build();
@@ -2656,64 +2658,64 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
     let file_menu = Menu::builder()
         .append_item(
             ID_MENU_CONFIGURE,
-            "Setup streaming services...",
-            "Manage Audiopub and Icecast streaming services",
+            &t!("Setup streaming services..."),
+            &t!("Manage Audiopub and Icecast streaming services"),
         )
         .append_item(
             ID_MENU_STREAM_INFO,
-            "Set stream info...",
-            "Title, description, and archiving for the stream",
+            &t!("Set stream info..."),
+            &t!("Title, description, and archiving for the stream"),
         )
         .append_item(
             ID_MENU_SCHEDULE,
-            "Schedule stream...",
-            "Go live automatically at a set time",
+            &t!("Schedule stream..."),
+            &t!("Go live automatically at a set time"),
         )
         .append_item(
             ID_MENU_PREFERENCES,
-            "Preferences...\tCtrl+,",
-            "Application preferences",
+            &t!("Preferences...\tCtrl+,"),
+            &t!("Application preferences"),
         )
         .append_separator()
-        .append_item(ID_MENU_EXIT, "Exit\tAlt+F4", "Exit Pubsplash")
+        .append_item(ID_MENU_EXIT, &t!("Exit\tAlt+F4"), &t!("Exit Pubsplash"))
         .build();
     let tools_menu = Menu::builder()
         .append_item(
             ID_MENU_SOUND_PACK_MANAGER,
-            "Sound Pack Manager...",
-            "Create and compile Pubsplash sound packs",
+            &t!("Sound Pack Manager..."),
+            &t!("Create and compile Pubsplash sound packs"),
         )
         .build();
     let goto_menu = Menu::builder()
         .append_item(
             ID_MENU_GOTO_STREAM,
-            "Go to stream page",
-            "Open the current stream's page in your browser",
+            &t!("Go to stream page"),
+            &t!("Open the current stream's page in your browser"),
         )
         .append_item(
             ID_MENU_GOTO_DATA_DIR,
-            "Go to Pubsplash data directory",
-            "Open the folder holding settings, logs, and crash dumps",
+            &t!("Go to Pubsplash data directory"),
+            &t!("Open the folder holding settings, logs, and crash dumps"),
         )
         .build();
     let help_menu = Menu::builder()
-        .append_item(ID_MENU_ABOUT, "About Pubsplash", "Version information")
+        .append_item(ID_MENU_ABOUT, &t!("About Pubsplash"), &t!("Version information"))
         .append_item(
             ID_MENU_README,
-            "Open Readme",
-            "Open the documentation in your browser",
+            &t!("Open Readme"),
+            &t!("Open the documentation in your browser"),
         )
         .append_item(
             ID_MENU_CHANGELOG,
-            "View Changelog",
-            "Open the list of changes in your browser",
+            &t!("View Changelog"),
+            &t!("Open the list of changes in your browser"),
         )
         .build();
     let menu_bar = MenuBar::builder()
-        .append(file_menu, "File")
-        .append(tools_menu, "Tools")
-        .append(goto_menu, "Go to")
-        .append(help_menu, "Help")
+        .append(file_menu, &t!("File"))
+        .append(tools_menu, &t!("Tools"))
+        .append(goto_menu, &t!("Go to"))
+        .append(help_menu, &t!("Help"))
         .build();
     frame.set_menu_bar(menu_bar);
 
@@ -2733,7 +2735,7 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
             }
             ID_MENU_SOUND_PACK_MANAGER => {
                 if let Err(message) = launch_sound_pack_manager() {
-                    show_error(&frame, "Sound Pack Manager", &message);
+                    show_error(&frame, &t!("Sound Pack Manager"), &message);
                 }
             }
             ID_MENU_GOTO_STREAM => {
@@ -2742,8 +2744,8 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
                         if let Err(message) = shell_open(&url) {
                             show_error(
                                 &frame,
-                                "Go to stream page",
-                                &format!("Could not open {url}: {message}"),
+                                &t!("Go to stream page"),
+                                &t!("Could not open {url}: {message}", url = url, message = message),
                             );
                         }
                     }
@@ -2752,33 +2754,33 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
                         // dialog pumps the message queue, which re-enters the
                         // pump timer and borrows `run` again.
                         let reason = no_stream_page_reason(&app.run.borrow().stream);
-                        show_warning(&frame, "Go to stream page", reason);
+                        show_warning(&frame, &t!("Go to stream page"), &reason);
                     }
                 }
             }
             ID_MENU_GOTO_DATA_DIR => {
                 if let Err(message) = open_data_dir() {
-                    show_error(&frame, "Go to Pubsplash data directory", &message);
+                    show_error(&frame, &t!("Go to Pubsplash data directory"), &message);
                 }
             }
             ID_MENU_ABOUT => {
                 show_info(
                     &frame,
-                    "About Pubsplash",
-                    &format!(
-                        "Pubsplash {}\n\nAn accessibility-first streaming app for Audio Pub.",
-                        env!("CARGO_PKG_VERSION")
+                    &t!("About Pubsplash"),
+                    &t!(
+                        "Pubsplash {version}\n\nAn accessibility-first streaming app for Audio Pub.",
+                        version = env!("CARGO_PKG_VERSION")
                     ),
                 );
             }
             ID_MENU_README => {
                 if let Err(message) = open_doc("readme.html", README_URL) {
-                    show_error(&frame, "Open Readme", &message);
+                    show_error(&frame, &t!("Open Readme"), &message);
                 }
             }
             ID_MENU_CHANGELOG => {
                 if let Err(message) = open_doc("changelog.html", CHANGELOG_URL) {
-                    show_error(&frame, "View Changelog", &message);
+                    show_error(&frame, &t!("View Changelog"), &message);
                 }
             }
             _ => {}
@@ -2792,18 +2794,19 @@ fn build_menu(app: &Rc<App>, frame: &Frame) {
 /// directory and PATH — which either fails with a pathless "os error 2" or, on
 /// an unlucky machine, runs something else entirely.
 fn launch_sound_pack_manager() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("current_exe failed: {e}"))?;
+    let exe = std::env::current_exe()
+        .map_err(|e| t!("Pubsplash could not find its own program file: {e}", e = e))?;
     let manager = exe.with_file_name("pubsplash-soundpack.exe");
     if !manager.is_file() {
-        return Err(format!(
-            "The Sound Pack Manager ({}) is missing. Reinstall Pubsplash to restore it.",
-            manager.display()
+        return Err(t!(
+            "The Sound Pack Manager ({path}) is missing. Reinstall Pubsplash to restore it.",
+            path = manager.display()
         ));
     }
     std::process::Command::new(&manager)
         .spawn()
         .map(|_| ())
-        .map_err(|e| format!("Could not start {}: {e}", manager.display()))
+        .map_err(|e| t!("Could not start {path}: {e}", path = manager.display(), e = e))
 }
 
 /// Opens a documentation file that ships with Pubsplash, falling back to the
@@ -2821,7 +2824,8 @@ fn open_doc(name: &str, fallback_url: &str) -> Result<(), String> {
             return Ok(());
         }
     }
-    shell_open(fallback_url).map_err(|e| format!("Could not open {fallback_url}: {e}"))
+    shell_open(fallback_url)
+        .map_err(|e| t!("Could not open {url}: {e}", url = fallback_url, e = e))
 }
 
 /// Opens the data directory — settings, logs, crash dumps — in Explorer.
@@ -2831,8 +2835,9 @@ fn open_doc(name: &str, fallback_url: &str) -> Result<(), String> {
 fn open_data_dir() -> Result<(), String> {
     let dir = crate::config::config_dir();
     std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
-    shell_open(&dir.to_string_lossy()).map_err(|e| format!("Could not open {}: {e}", dir.display()))
+        .map_err(|e| t!("Could not create {path}: {e}", path = dir.display(), e = e))?;
+    shell_open(&dir.to_string_lossy())
+        .map_err(|e| t!("Could not open {path}: {e}", path = dir.display(), e = e))
 }
 
 /// Finds a documentation file that ships with Pubsplash.
@@ -2874,7 +2879,7 @@ fn shell_open(target: &str) -> Result<(), String> {
     if code > 32 {
         Ok(())
     } else {
-        Err(format!("ShellExecute failed with code {code}"))
+        Err(t!("ShellExecute failed with code {code}", code = code))
     }
 }
 
@@ -3043,8 +3048,8 @@ fn pump_events(app: &Rc<App>) {
                     (ui.sync)();
                     show_info(
                         &ui.dialog,
-                        "Connected",
-                        &format!("Connected to {display_name}."),
+                        &t!("Connected"),
+                        &t!("Connected to {display_name}.", display_name = display_name),
                     );
                     ui.connect_button.set_focus();
                 }
@@ -3052,10 +3057,10 @@ fn pump_events(app: &Rc<App>) {
             NetEvent::ConnectFailed { message } => {
                 app.run.borrow_mut().connecting = false;
                 let connect_ui = app.connect_ui.borrow().clone();
-                let text = format!("Could not connect: {message}");
+                let text = t!("Could not connect: {message}", message = message);
                 match connect_ui {
                     Some(ui) => {
-                        show_error(&ui.dialog, "Connection failed", &text);
+                        show_error(&ui.dialog, &t!("Connection failed"), &text);
                         ui.connect_button.set_focus();
                     }
                     None => {
@@ -3063,7 +3068,7 @@ fn pump_events(app: &Rc<App>) {
                         // `widgets` stays borrowed for the whole closure, and
                         // a modal runs a nested event loop underneath it.
                         if let Some(frame) = app.widgets(|w| w.frame) {
-                            show_error(&frame, "Connection failed", &text);
+                            show_error(&frame, &t!("Connection failed"), &text);
                         }
                     }
                 }
@@ -3090,10 +3095,10 @@ fn pump_events(app: &Rc<App>) {
                     // screen reader reads out.
                     show_info(
                         &ui.dialog,
-                        "Disconnected",
+                        &t!("Disconnected"),
                         &match display_name {
-                            Some(name) => format!("Disconnected from {name}."),
-                            None => "Disconnected.".to_string(),
+                            Some(name) => t!("Disconnected from {name}.", name = name),
+                            None => t!("Disconnected."),
                         },
                     );
                     ui.connect_button.set_focus();
@@ -3153,7 +3158,7 @@ fn pump_events(app: &Rc<App>) {
                 // that has given up for good -- every recoverable one is a chat
                 // line -- which is why it may be a modal at all.
                 if let Some(frame) = app.widgets(|w| w.frame) {
-                    show_error(&frame, "Streaming problem", &message);
+                    show_error(&frame, &t!("Streaming problem"), &message);
                 }
             }
             NetEvent::Chat(message) => {
@@ -3253,7 +3258,7 @@ fn pump_events(app: &Rc<App>) {
             }
             NetEvent::ChatSendFailed { message } => {
                 app.widgets(|w| {
-                    show_error(&w.frame, "Chat", &format!("Message not sent: {message}"))
+                    show_error(&w.frame, &t!("Chat"), &t!("Message not sent: {message}", message = message))
                 });
             }
         }
@@ -3409,7 +3414,7 @@ fn pump_events(app: &Rc<App>) {
     // Last, with the Home tab already repainted behind it and every event
     // drained, so the nested event loop this opens has nothing left to trip on.
     if let Some(message) = recording_failed {
-        app.widgets(|w| show_error(&w.frame, "Recording", &message));
+        app.widgets(|w| show_error(&w.frame, &t!("Recording"), &message));
     }
 }
 
@@ -3479,9 +3484,7 @@ fn pump_scan_events(app: &Rc<App>) {
                 crate::vst::save_cache(&cache);
                 let total_known = cache.plugins.len();
                 *app.plugins.borrow_mut() = cache;
-                let mut message = format!(
-                    "Scan complete. {found} new plugins found ({total_known} known in total)."
-                );
+                let mut message = t!("Scan complete. {found} new plugins found ({total_known} known in total).", found = found, total_known = total_known);
                 if rejected > 0 {
                     message.push_str(&format!("\n{rejected} files could not be used as plugins."));
                 }
@@ -3495,7 +3498,7 @@ fn pump_scan_events(app: &Rc<App>) {
                         "\n{skipped_by_user} plugins were skipped at your request. Use \"Rescan all plugins\" to try them again."
                     ));
                 }
-                show_info(&ui.parent, "Scan complete", &message);
+                show_info(&ui.parent, &t!("Scan complete"), &message);
             }
             ScanEvent::Cancelled => {
                 let Some(ui) = app.scan.borrow_mut().take() else {
@@ -3505,8 +3508,8 @@ fn pump_scan_events(app: &Rc<App>) {
                 drop(ui.progress);
                 show_info(
                     &ui.parent,
-                    "Scan cancelled",
-                    "The scan was cancelled. Nothing was saved.",
+                    &t!("Scan cancelled"),
+                    &t!("The scan was cancelled. Nothing was saved."),
                 );
             }
         }
@@ -3912,11 +3915,11 @@ mod stream_phase_tests {
         assert_eq!(accepted, StreamPhase::Live);
         assert_eq!(
             waiting.announcement(StreamPhase::Starting),
-            Some("Connected, waiting for the server")
+            Some("Connected, waiting for the server".to_string())
         );
         assert_eq!(
             accepted.announcement(waiting),
-            Some("Streaming started"),
+            Some("Streaming started".to_string()),
             "the server accepting is what 'started' has to mean"
         );
     }
@@ -3930,7 +3933,7 @@ mod stream_phase_tests {
         assert_eq!(phase, StreamPhase::Live);
         assert_eq!(
             phase.announcement(StreamPhase::Starting),
-            Some("Streaming started")
+            Some("Streaming started".to_string())
         );
     }
 
@@ -3941,7 +3944,7 @@ mod stream_phase_tests {
         let idle = StreamPhase::of(&StreamState::Idle, ServerStream::Pending);
         assert_eq!(
             idle.announcement(StreamPhase::LivePending),
-            Some("Streaming stopped")
+            Some("Streaming stopped".to_string())
         );
     }
 
@@ -3960,7 +3963,7 @@ mod stream_phase_tests {
         assert_eq!(phase, StreamPhase::Live);
         assert_eq!(
             phase.announcement(StreamPhase::Starting),
-            Some("Streaming started")
+            Some("Streaming started".to_string())
         );
     }
 
@@ -4034,7 +4037,7 @@ mod token_tests {
             no_stream_page_reason(&live("icecast:/live")),
             no_stream_page_reason(&live("abc123")),
         ];
-        let mut unique: Vec<&str> = reasons.to_vec();
+        let mut unique: Vec<String> = reasons.to_vec();
         unique.sort_unstable();
         unique.dedup();
         assert_eq!(unique.len(), reasons.len());
