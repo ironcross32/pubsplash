@@ -35,16 +35,16 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
-use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
-};
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    MB_ICONERROR, MB_OK, MB_SYSTEMMODAL, MessageBoxW,
+    MB_ICONERROR, MB_OK, MB_SYSTEMMODAL, MessageBoxW, SW_SHOWNORMAL,
 };
-use windows::core::PCWSTR;
+use windows::core::{PCWSTR, w};
 
 /// How long to wait for Pubsplash to exit before giving up.
 ///
@@ -200,10 +200,11 @@ fn wait_for_exit(pid: u32) -> bool {
 /// Starts the downloaded installer and returns.
 ///
 /// Nothing is passed to it: the user picked per-user or per-machine when they
-/// first installed, NSIS remembers, and a per-machine install raises its own
-/// UAC prompt. A silent install would be worse here, not better — a screen
-/// reader user who has just watched their app vanish should see the installer
-/// they recognise, and be able to cancel it.
+/// first installed and NSIS remembers. `runas` is explicit because the
+/// installer is otherwise started with this helper's unelevated token, which
+/// leaves a per-machine copy unable to write its own files. A silent install
+/// would be worse here — a screen reader user who has just watched their app
+/// vanish should see the installer they recognise, and be able to cancel it.
 fn run_installer(setup: &Path) -> Result<(), String> {
     if !setup.is_file() {
         return Err(format!(
@@ -211,10 +212,29 @@ fn run_installer(setup: &Path) -> Result<(), String> {
             setup.display()
         ));
     }
-    std::process::Command::new(setup)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("Could not start the installer ({}): {e}", setup.display()))
+    let setup_wide: Vec<u16> = setup.as_os_str().encode_wide().chain([0]).collect();
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("runas"),
+            PCWSTR(setup_wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // ShellExecute reports success as any value above 32 and an error code at
+    // or below it. Cancellation of the UAC prompt arrives through this path too
+    // and is shown by the helper's existing failure message box.
+    let code = result.0 as usize;
+    if code > 32 {
+        Ok(())
+    } else {
+        Err(format!(
+            "Could not start the installer ({}) with administrator permission (error {code}).",
+            setup.display()
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------

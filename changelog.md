@@ -8,7 +8,11 @@
 
 ### Fixes
 
+- Automatic updates now request administrator permission before running the installer.
+
 ### Changes
+
+- Updated the README's source-routing instructions.
 
 ## 0.1.8
 

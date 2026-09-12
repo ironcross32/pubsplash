@@ -75,7 +75,7 @@ Streaming and standalone recording cannot run at the same time. Recordings are n
 - **Effects** are VST2 or VST3 plugins on a bus or the master output. Effects run from top to bottom and can be bypassed while live.
 - **FX chains** can be saved in the library or exported as .pubfx files.
 
-To route a source, select it on **Scenes and Sources**, choose **Sends...**, and select a bus. Leave **Send directly to master** enabled for a dry signal plus bus effects; disable it when the source should be heard only through its buses.
+To route a source, select it on **Scenes and Sources**, choose **Sends...**, and use the checkable destination list. Leave **Master output** checked for a dry signal plus bus effects; uncheck it when the source should be heard only through its buses.
 
 ## Chat and text-to-speech
 
