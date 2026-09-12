@@ -30,6 +30,7 @@
 //! which respawns every capture thread in the app, and doing that on a slider
 //! drag would restart the microphone mid-stream.
 
+use crate::t;
 use super::App;
 use crate::config::SendConfig;
 use std::cell::RefCell;
@@ -39,7 +40,9 @@ use wxdragon::prelude::*;
 
 /// The pinned first row, standing for the master output. Matches the Buses
 /// tab's own pinned row (see `buses.rs`).
-const MASTER_ROW: &str = "Master output";
+fn master_row() -> String {
+    t!("Master output")
+}
 
 /// How far Page Up and Page Down move a level slider, over its 0-100 range.
 const PAGE_STEP: i32 = 10;
@@ -62,8 +65,8 @@ const MIN_HEIGHT: i32 = 320;
 /// The state is in the text because on MSW there is nowhere else to put it that
 /// a screen reader can reach — see the module docs.
 fn row_labels(buses: &[String], to_master: bool, sends: &[SendConfig]) -> Vec<String> {
-    let state = |on: bool| if on { "on" } else { "off" };
-    std::iter::once(format!("{MASTER_ROW}, {}", state(to_master)))
+    let state = |on: bool| if on { t!("on") } else { t!("off") };
+    std::iter::once(format!("{}, {}", master_row(), state(to_master)))
         .chain(
             buses
                 .iter()
@@ -306,7 +309,7 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     // No "there are no buses yet" refusal: with master as row 0 the dialog is
     // still the place the user routes a source to it.
 
-    let dialog = Dialog::builder(&frame, &format!("Sends for {source_name}"))
+    let dialog = Dialog::builder(&frame, &t!("Sends for {source_name}", source_name = source_name))
         .with_style(DialogStyle::DefaultDialogStyle)
         .with_size(MIN_WIDTH, MIN_HEIGHT)
         .build();
@@ -316,7 +319,7 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     // The static text is not decoration: `native_acc` hands the list back to
     // Windows, and the native list box takes its accessible name from the
     // control immediately before it.
-    let list_label = StaticText::builder(&panel).with_label("Buses").build();
+    let list_label = StaticText::builder(&panel).with_label(&t!("Buses")).build();
     let bus_list = CheckListBox::builder(&panel)
         .with_size(Size::new(-1, LIST_HEIGHT))
         .with_choices(row_labels(&bus_names, to_master, &sends))
@@ -336,7 +339,7 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     bus_list.set_selection(0, true);
 
     let levels_label = StaticText::builder(&panel)
-        .with_label("Send levels")
+        .with_label(&t!("Send levels"))
         .build();
 
     sizer.add(&list_label, 0, SizerFlag::All, 4);
@@ -350,7 +353,7 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     // order, and a hidden slider is skipped by both.
     let mut rows = Vec::new();
     for bus in &bus_names {
-        let name = format!("{bus} send level");
+        let name = t!("{bus} send level", bus = bus);
         let label = StaticText::builder(&panel).with_label(&name).build();
         let level = sends.iter().find(|s| &s.bus == bus).map(|s| s.level);
         let slider = Slider::builder(&panel)
@@ -432,7 +435,7 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     let rows = Rc::new(rows);
     levels_label.show(rows.iter().any(|r| r.slider.is_shown()));
 
-    let close = super::dismiss_button(&panel, "Close");
+    let close = super::dismiss_button(&panel, &t!("Close"));
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
     buttons.add(&close, 0, SizerFlag::All, 4);
     sizer.add_sizer(&buttons, 0, SizerFlag::AlignRight, 0);
@@ -542,20 +545,16 @@ pub fn edit_sends(app: &Rc<App>, scene_index: usize, source_index: usize) {
     match notice {
         Some(Notice::HeardNowhere) => super::show_info(
             &frame,
-            "Sends",
-            &format!(
-                "{source_name} is not sending to master or to any bus, so it will not be heard \
-                 anywhere. Check a destination in the Sends dialog to route it."
-            ),
+            &t!("Sends"),
+            &t!("{source_name} is not sending to master or to any bus, so it will not be heard \
+                 anywhere. Check a destination in the Sends dialog to route it.", source_name = source_name),
         ),
         Some(Notice::SpeechOffStream) => super::show_info(
             &frame,
-            "Sends",
-            &format!(
-                "{source_name} is not sending to master or to any bus, so your listeners will \
+            &t!("Sends"),
+            &t!("{source_name} is not sending to master or to any bus, so your listeners will \
                  not hear it. You will still hear it yourself. Check a destination in the Sends \
-                 dialog to put it on the stream."
-            ),
+                 dialog to put it on the stream.", source_name = source_name),
         ),
         None => {}
     }

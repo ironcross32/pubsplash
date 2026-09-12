@@ -11,6 +11,7 @@
 //! Saves as the user changes the control, like every other tab: the dialog has
 //! no OK button, only Close.
 
+use crate::t;
 use std::rc::Rc;
 
 use wxdragon::prelude::*;
@@ -20,19 +21,23 @@ use crate::audio::device::DeviceInfo;
 use crate::config::SourceKindConfig;
 
 /// The row that means "whatever Windows currently calls the default".
-const FOLLOW_SYSTEM: &str = "Default output device (follow system)";
+fn follow_system() -> String {
+    t!("Default output device (follow system)")
+}
 
 pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
-    let (device_group, device_box) = super::group_box(panel, "Playback device");
+    let (device_group, device_box) = super::group_box(panel, &t!("Playback device"));
 
-    const OUTPUT_DEVICE: &str = "Output device";
+    fn output_device() -> String {
+        t!("Output device")
+    }
     let label = StaticText::builder(&device_box)
-        .with_label(OUTPUT_DEVICE)
+        .with_label(&output_device())
         .build();
     let choice = Choice::builder(&device_box).build();
-    super::set_accessible_name(&choice, OUTPUT_DEVICE);
+    super::set_accessible_name(&choice, &output_device());
     super::help::tag(
         &choice,
         "dialog.preferences.audio.outputDevice",
@@ -40,7 +45,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     );
 
     let devices = crate::audio::device::render_devices();
-    choice.append(FOLLOW_SYSTEM);
+    choice.append(&follow_system());
     for device in &devices {
         choice.append(&device.name);
     }
@@ -60,8 +65,8 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     let explanation = StaticText::builder(&device_box)
         .with_label(
-            "Everything Pubsplash plays for you goes to this device: monitored sources, \
-             text-to-speech, and sound cues. It is not what listeners hear.",
+            &t!("Everything Pubsplash plays for you goes to this device: monitored sources, \
+             text-to-speech, and sound cues. It is not what listeners hear."),
         )
         .build();
 
@@ -89,9 +94,9 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     }
 
     let test = Button::builder(&device_box)
-        .with_label("Play a test sound")
+        .with_label(&t!("Play a test sound"))
         .build();
-    super::set_accessible_name(&test, "Play a test sound");
+    super::set_accessible_name(&test, &t!("Play a test sound"));
     super::help::tag(
         &test,
         "dialog.preferences.audio.testSound",
@@ -151,11 +156,11 @@ fn warn_about_colliding_sources(app: &Rc<App>, dialog: &Dialog, devices: &[Devic
     let name = devices
         .iter()
         .find(|d| d.id == device_id)
-        .map(|d| d.name.as_str())
-        .unwrap_or("The system default output device");
+        .map(|d| d.name.clone())
+        .unwrap_or_else(|| t!("The system default output device"));
     show_info(
         dialog,
-        "Output device",
+        &t!("Output device"),
         &format!(
             "{name} is now Pubsplash's output device, and these Desktop Audio sources capture \
              it:\n\n{}\n\nCapturing it would feed Pubsplash's own audio back into the stream, \
@@ -191,7 +196,11 @@ fn colliding_sources(
                 &source.kind,
                 SourceKindConfig::DesktopAudio { device_id: Some(id) } if id == device_id
             ) {
-                names.push(format!("{} ({})", label, scene.name));
+                names.push(t!(
+                "{source} ({scene})",
+                source = label,
+                scene = scene.name
+            ));
             }
         }
     }

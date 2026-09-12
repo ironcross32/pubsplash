@@ -7,6 +7,8 @@
 //! mute, rename, remove, and reorder apply to real buses only (in the Home
 //! mixer for volume/mute); row 0 only offers an FX chain.
 
+use crate::t;
+use crate::tn;
 use super::fx::{self, ChainTarget};
 use super::{App, WXK_DELETE, WXK_DOWN, WXK_UP, show_error, show_info};
 use crate::state::{ListEdit, move_down, move_up};
@@ -18,27 +20,31 @@ const MASTER_ROWS: u32 = 1;
 
 /// Shown when a list has nothing in it. See [`super::list`]. The bus list
 /// needs no such row: "Master output" is always there.
-const NO_PLUGINS: &str = "No plugins";
-const NO_SAVED_CHAINS: &str = "No saved chains";
+fn no_plugins() -> String {
+    t!("No plugins")
+}
+fn no_saved_chains() -> String {
+    t!("No saved chains")
+}
 
 pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     // --- Buses ---
-    let label = StaticText::builder(panel).with_label("Buses").build();
+    let label = StaticText::builder(panel).with_label(&t!("Buses")).build();
     let bus_list = ListBox::builder(panel).build();
-    super::native_acc::install(&bus_list, "Buses");
+    super::native_acc::install(&bus_list, &t!("Buses"));
     super::help::tag(
         &bus_list,
         "tab.buses.busList",
         "Buses list (row 0 is the master output)",
     );
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let add = Button::builder(panel).with_label("&Add bus").build();
-    let rename = Button::builder(panel).with_label("&Rename bus").build();
-    let remove = Button::builder(panel).with_label("Remove bus").build();
-    let up = Button::builder(panel).with_label("Move up").build();
-    let down = Button::builder(panel).with_label("Move down").build();
+    let add = Button::builder(panel).with_label(&t!("&Add bus")).build();
+    let rename = Button::builder(panel).with_label(&t!("&Rename bus")).build();
+    let remove = Button::builder(panel).with_label(&t!("Remove bus")).build();
+    let up = Button::builder(panel).with_label(&t!("Move up")).build();
+    let down = Button::builder(panel).with_label(&t!("Move down")).build();
     super::help::tag(&add, "tab.buses.busAdd", "Add bus button");
     super::help::tag(&rename, "tab.buses.busRename", "Rename bus button");
     super::help::tag(&remove, "tab.buses.busRemove", "Remove bus button");
@@ -54,28 +60,28 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
 
     // --- FX chain for the selected bus ---
     let fx_label = StaticText::builder(panel)
-        .with_label("Effects on selected bus")
+        .with_label(&t!("Effects on selected bus"))
         .build();
     let fx_list = ListBox::builder(panel).build();
-    super::native_acc::install(&fx_list, "Effects on selected bus");
+    super::native_acc::install(&fx_list, &t!("Effects on selected bus"));
     super::help::tag(
         &fx_list,
         "tab.buses.fxList",
         "Effects chain on the selected bus",
     );
     let fx_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let fx_add = Button::builder(panel).with_label("Add &plugin").build();
-    let fx_remove = Button::builder(panel).with_label("Remove plugin").build();
-    let fx_up = Button::builder(panel).with_label("Move plugin up").build();
+    let fx_add = Button::builder(panel).with_label(&t!("Add &plugin")).build();
+    let fx_remove = Button::builder(panel).with_label(&t!("Remove plugin")).build();
+    let fx_up = Button::builder(panel).with_label(&t!("Move plugin up")).build();
     let fx_down = Button::builder(panel)
-        .with_label("Move plugin down")
+        .with_label(&t!("Move plugin down"))
         .build();
-    let fx_bypass = CheckBox::builder(panel).with_label("&Bypass").build();
-    super::set_accessible_name(&fx_bypass, "Bypass selected plugin");
+    let fx_bypass = CheckBox::builder(panel).with_label(&t!("&Bypass")).build();
+    super::set_accessible_name(&fx_bypass, &t!("Bypass selected plugin"));
     let fx_edit = Button::builder(panel)
-        .with_label("&Edit parameters")
+        .with_label(&t!("&Edit parameters"))
         .build();
-    let fx_open = Button::builder(panel).with_label("Open &interface").build();
+    let fx_open = Button::builder(panel).with_label(&t!("Open &interface")).build();
     super::help::tag(&fx_add, "tab.buses.fxAdd", "Add plugin to chain button");
     super::help::tag(
         &fx_remove,
@@ -118,13 +124,13 @@ pub fn build(app: &Rc<App>, panel: &Panel) -> (ListBox, ListBox, CheckBox) {
 
     // Chain library row.
     let lib_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let save_chain = Button::builder(panel).with_label("Save chain...").build();
-    let load_chain = Button::builder(panel).with_label("Load chain...").build();
+    let save_chain = Button::builder(panel).with_label(&t!("Save chain...")).build();
+    let load_chain = Button::builder(panel).with_label(&t!("Load chain...")).build();
     let import_chain = Button::builder(panel)
-        .with_label("Import chain...")
+        .with_label(&t!("Import chain..."))
         .build();
     let export_chain = Button::builder(panel)
-        .with_label("Export chain...")
+        .with_label(&t!("Export chain..."))
         .build();
     super::help::tag(
         &save_chain,
@@ -310,7 +316,7 @@ pub fn refresh_bus_list(app: &Rc<App>) {
     app.widgets(|w| {
         let config = app.config.borrow();
         let selected = w.bus_list.get_selection();
-        let labels: Vec<String> = std::iter::once("Master output".to_string())
+        let labels: Vec<String> = std::iter::once(t!("Master output"))
             .chain(config.buses.buses.iter().map(|bus| bus.name.clone()))
             .collect();
         // The placeholder is unreachable: the pinned Master row means `labels`
@@ -358,7 +364,7 @@ pub fn refresh_fx_list(app: &Rc<App>) {
     .unwrap_or_default();
     app.widgets(|w| {
         let previous = w.fx_list.get_selection();
-        if super::list::sync(&w.fx_list, &labels, NO_PLUGINS) == super::list::Synced::Kept {
+        if super::list::sync(&w.fx_list, &labels, &no_plugins()) == super::list::Synced::Kept {
             return;
         }
         if let Some(index) = previous.filter(|&i| i < w.fx_list.get_count()) {
@@ -372,7 +378,7 @@ fn add_bus(app: &Rc<App>) {
     let Some(frame) = app.widgets(|w| w.frame) else {
         return;
     };
-    let dialog = TextEntryDialog::builder(&frame, "Bus name:", "Add bus").build();
+    let dialog = TextEntryDialog::builder(&frame, &t!("Bus name:"), &t!("Add bus")).build();
     if dialog.show_modal() == ID_OK
         && let Some(name) = dialog.get_value()
     {
@@ -390,7 +396,7 @@ fn add_bus(app: &Rc<App>) {
                 refresh_fx_list(app);
             }
             ListEdit::Unchanged if !name.trim().is_empty() => {
-                show_error(&frame, "Add bus", "A bus with that name already exists.");
+                show_error(&frame, &t!("Add bus"), &t!("A bus with that name already exists."));
             }
             ListEdit::Unchanged => {}
         }
@@ -412,7 +418,7 @@ fn rename_bus(app: &Rc<App>, list: &ListBox) {
         };
         bus.name.clone()
     };
-    let dialog = TextEntryDialog::builder(&frame, "New bus name:", "Rename bus")
+    let dialog = TextEntryDialog::builder(&frame, &t!("New bus name:"), &t!("Rename bus"))
         .with_default_value(&current)
         .build();
     if dialog.show_modal() == ID_OK
@@ -422,7 +428,7 @@ fn rename_bus(app: &Rc<App>, list: &ListBox) {
         match result {
             ListEdit::Changed => after_bus_edit(app),
             ListEdit::Unchanged if !name.trim().is_empty() && name.trim() != current => {
-                show_error(&frame, "Rename bus", "A bus with that name already exists.");
+                show_error(&frame, &t!("Rename bus"), &t!("A bus with that name already exists."));
             }
             ListEdit::Unchanged => {}
         }
@@ -491,15 +497,15 @@ fn add_plugin(app: &Rc<App>) {
     if choices.is_empty() {
         show_info(
             &frame,
-            "Add plugin",
-            "No compatible VST plugins are available. Scan for plugins in Preferences first.",
+            &t!("Add plugin"),
+            &t!("No compatible VST plugins are available. Scan for plugins in Preferences first."),
         );
         return;
     }
     let labels: Vec<&str> = choices.iter().map(|(name, _)| name.as_str()).collect();
     let dialog =
-        SingleChoiceDialog::builder(&frame, "Add which plugin?", "Add plugin", &labels).build();
-    super::native_acc::install_in_dialog(&dialog, "Add which plugin?");
+        SingleChoiceDialog::builder(&frame, &t!("Add which plugin?"), &t!("Add plugin"), &labels).build();
+    super::native_acc::install_in_dialog(&dialog, &t!("Add which plugin?"));
     if dialog.show_modal() == ID_OK {
         let index = dialog.get_selection() as usize;
         if let Some((name, plugin)) = choices.get(index) {
@@ -510,17 +516,15 @@ fn add_plugin(app: &Rc<App>) {
             if let Err(error) = outcome {
                 let reason = match error {
                     fx::SlotError::NotInstalled => {
-                        "it is no longer in the plugin cache. Rescan for plugins in Preferences."
+                        t!("it is no longer in the plugin cache. Rescan for plugins in Preferences.")
                             .to_string()
                     }
                     fx::SlotError::LoadFailed(reason) => reason,
                 };
                 show_error(
                     &frame,
-                    "Add plugin",
-                    &format!(
-                        "{name} was added but could not be loaded, so it will not process audio: {reason}"
-                    ),
+                    &t!("Add plugin"),
+                    &t!("{name} was added but could not be loaded, so it will not process audio: {reason}", name = name, reason = reason),
                 );
             }
         }
@@ -603,8 +607,8 @@ fn edit_parameters(app: &Rc<App>, list: &ListBox) {
         if let Some(frame) = app.widgets(|w| w.frame) {
             show_info(
                 &frame,
-                "Edit parameters",
-                "This plugin is not loaded, so it has no parameters to edit.",
+                &t!("Edit parameters"),
+                &t!("This plugin is not loaded, so it has no parameters to edit."),
             );
         }
         return;
@@ -621,8 +625,8 @@ fn open_interface(app: &Rc<App>, list: &ListBox) {
         if let Some(frame) = app.widgets(|w| w.frame) {
             show_info(
                 &frame,
-                "Open interface",
-                "This plugin is not loaded, so it has no interface to open.",
+                &t!("Open interface"),
+                &t!("This plugin is not loaded, so it has no interface to open."),
             );
         }
         return;
@@ -635,7 +639,7 @@ fn open_interface(app: &Rc<App>, list: &ListBox) {
 /// A human label for the selected chain target, used in dialog messages.
 fn target_name(app: &Rc<App>, target: ChainTarget) -> String {
     match target {
-        ChainTarget::Master => "Master output".to_string(),
+        ChainTarget::Master => t!("Master output"),
         ChainTarget::Bus(i) => app
             .config
             .borrow()
@@ -658,13 +662,13 @@ fn save_chain_to_library(app: &Rc<App>) {
     if slots.is_empty() {
         show_info(
             &frame,
-            "Save chain",
-            "This chain is empty; there is nothing to save.",
+            &t!("Save chain"),
+            &t!("This chain is empty; there is nothing to save."),
         );
         return;
     }
     let default_name = target_name(app, target);
-    let dialog = TextEntryDialog::builder(&frame, "Name for this chain:", "Save chain")
+    let dialog = TextEntryDialog::builder(&frame, &t!("Name for this chain:"), &t!("Save chain"))
         .with_default_value(&default_name)
         .build();
     if dialog.show_modal() == ID_OK
@@ -680,7 +684,7 @@ fn save_chain_to_library(app: &Rc<App>) {
             });
             crate::fx::save_library(&library);
             drop(library);
-            show_info(&frame, "Save chain", &format!("Saved chain \"{unique}\"."));
+            show_info(&frame, &t!("Save chain"), &t!("Saved chain \"{unique}\".", unique = unique));
         }
     }
     dialog.destroy();
@@ -699,7 +703,7 @@ fn load_chain_from_library(app: &Rc<App>) {
         .map(|c| c.name.clone())
         .collect();
     if names.is_empty() {
-        show_info(&frame, "Load chain", "There are no saved chains yet.");
+        show_info(&frame, &t!("Load chain"), &t!("There are no saved chains yet."));
         return;
     }
     let Some(chain_index) = pick_chain(app, &frame, &names) else {
@@ -713,29 +717,29 @@ fn load_chain_from_library(app: &Rc<App>) {
 /// the chosen chain index to load, or `None` if the user cancelled or only
 /// deleted.
 fn pick_chain(app: &Rc<App>, frame: &Frame, names: &[String]) -> Option<usize> {
-    let dialog = Dialog::builder(frame, "Load chain")
+    let dialog = Dialog::builder(frame, &t!("Load chain"))
         .with_style(DialogStyle::DefaultDialogStyle)
         .with_size(360, 300)
         .build();
     let panel = Panel::builder(&dialog).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
     let label = StaticText::builder(&panel)
-        .with_label("Saved chains")
+        .with_label(&t!("Saved chains"))
         .build();
     let list = ListBox::builder(&panel).build();
-    super::native_acc::install(&list, "Saved chains");
+    super::native_acc::install(&list, &t!("Saved chains"));
     super::help::tag(&list, "dialog.loadChain.list", "Saved FX chains list");
-    super::list::fill(&list, names, NO_SAVED_CHAINS);
+    super::list::fill(&list, names, &no_saved_chains());
     if !names.is_empty() {
         list.set_selection(0, true);
     }
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let load = super::ok_button(&panel, "Load");
-    let delete = Button::builder(&panel).with_label("Delete").build();
+    let load = super::ok_button(&panel, &t!("Load"));
+    let delete = Button::builder(&panel).with_label(&t!("Delete")).build();
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
     let cancel = Button::builder(&panel)
         .with_id(ID_CANCEL)
-        .with_label("Cancel")
+        .with_label(&t!("Cancel"))
         .build();
     super::help::tag(&load, "dialog.loadChain.load", "Load selected chain button");
     super::help::tag(
@@ -778,7 +782,7 @@ fn pick_chain(app: &Rc<App>, frame: &Frame, names: &[String]) -> Option<usize> {
                     .iter()
                     .map(|chain| chain.name.clone())
                     .collect();
-                super::list::fill(&list, &names, NO_SAVED_CHAINS);
+                super::list::fill(&list, &names, &no_saved_chains());
                 if !names.is_empty() {
                     list.set_selection(0, true);
                 }
@@ -804,8 +808,8 @@ fn import_chain_file(app: &Rc<App>) {
         return;
     };
     let dialog = FileDialog::builder(&frame)
-        .with_message("Import FX chain")
-        .with_wildcard("Pubsplash FX chain (*.pubfx)|*.pubfx|All files (*.*)|*.*")
+        .with_message(&t!("Import FX chain"))
+        .with_wildcard(&t!("Pubsplash FX chain (*.pubfx)|*.pubfx|All files (*.*)|*.*"))
         .with_style(FileDialogStyle::Open | FileDialogStyle::FileMustExist)
         .build();
     let path = if dialog.show_modal() == ID_OK {
@@ -828,8 +832,8 @@ fn import_chain_file(app: &Rc<App>) {
                 }
                 let apply = MessageDialog::builder(
                     &frame,
-                    "Chain imported and added to your library. Apply it to the selected bus now?",
-                    "Import chain",
+                    &t!("Chain imported and added to your library. Apply it to the selected bus now?"),
+                    &t!("Import chain"),
                 )
                 .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
                 .build();
@@ -837,7 +841,7 @@ fn import_chain_file(app: &Rc<App>) {
                     apply_chain(app, target, slots);
                 }
             }
-            Err(e) => show_error(&frame, "Import chain", &e),
+            Err(e) => show_error(&frame, &t!("Import chain"), &e),
         }
     }
 }
@@ -852,16 +856,16 @@ fn export_chain_file(app: &Rc<App>) {
     if slots.is_empty() {
         show_info(
             &frame,
-            "Export chain",
-            "This chain is empty; there is nothing to export.",
+            &t!("Export chain"),
+            &t!("This chain is empty; there is nothing to export."),
         );
         return;
     }
     let name = target_name(app, target);
     let dialog = FileDialog::builder(&frame)
-        .with_message("Export FX chain")
+        .with_message(&t!("Export FX chain"))
         .with_default_file(&format!("{name}.pubfx"))
-        .with_wildcard("Pubsplash FX chain (*.pubfx)|*.pubfx")
+        .with_wildcard(&t!("Pubsplash FX chain (*.pubfx)|*.pubfx"))
         .with_style(FileDialogStyle::Save | FileDialogStyle::OverwritePrompt)
         .build();
     if dialog.show_modal() == ID_OK
@@ -872,8 +876,8 @@ fn export_chain_file(app: &Rc<App>) {
         }
         let chain = crate::fx::NamedChain { name, slots };
         match crate::fx::export_chain(&chain, std::path::Path::new(&path)) {
-            Ok(()) => show_info(&frame, "Export chain", "Chain exported."),
-            Err(e) => show_error(&frame, "Export chain", &e),
+            Ok(()) => show_info(&frame, &t!("Export chain"), &t!("Chain exported.")),
+            Err(e) => show_error(&frame, &t!("Export chain"), &e),
         }
     }
 }
@@ -903,7 +907,7 @@ fn apply_chain(app: &Rc<App>, target: ChainTarget, slots: Vec<crate::config::FxS
 /// to apply the chain with the available subset (only offered when at least
 /// one plugin resolves).
 fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution) -> bool {
-    let dialog = Dialog::builder(frame, "Missing plugins")
+    let dialog = Dialog::builder(frame, &t!("Missing plugins"))
         .with_style(DialogStyle::DefaultDialogStyle)
         .with_size(420, 320)
         .build();
@@ -916,7 +920,7 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
         ))
         .build();
     let list = ListBox::builder(&panel).build();
-    super::native_acc::install(&list, "Missing plugins");
+    super::native_acc::install(&list, &t!("Missing plugins"));
     super::help::tag(&list, "dialog.missingPlugins.list", "Missing plugins list");
     for plugin in &resolution.missing {
         list.append(&plugin.display());
@@ -929,16 +933,16 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
     if has_valid {
         let apply = super::ok_button(
             &panel,
-            &format!(
-                "Apply with {} available plugin{}",
-                resolution.valid.len(),
-                if resolution.valid.len() == 1 { "" } else { "s" }
+            &tn!(
+                "Apply with {n} available plugin",
+                "Apply with {n} available plugins",
+                resolution.valid.len()
             ),
         );
         // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
         let cancel = Button::builder(&panel)
             .with_id(ID_CANCEL)
-            .with_label("Cancel")
+            .with_label(&t!("Cancel"))
             .build();
         super::help::tag(
             &apply,
@@ -955,13 +959,13 @@ fn missing_plugin_dialog(frame: &Frame, resolution: &crate::fx::ChainResolution)
         }
     } else {
         let note = StaticText::builder(&panel)
-            .with_label("None of the chain's plugins are available, so it cannot be applied.")
+            .with_label(&t!("None of the chain's plugins are available, so it cannot be applied."))
             .build();
         sizer.add(&note, 0, SizerFlag::All, 8);
         // Dismiss-only, so it carries `ID_CANCEL` despite the label: that id is
         // what wx maps Escape to, and it matches the `end_modal` below. Being the
         // default item as well, it answers Enter too.
-        let ok = super::dismiss_button(&panel, "OK");
+        let ok = super::dismiss_button(&panel, &t!("OK"));
         buttons.add(&ok, 0, SizerFlag::All, 4);
         ok.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }

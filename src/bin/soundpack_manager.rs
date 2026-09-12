@@ -8,6 +8,13 @@
 //! `user_data\soundpacks` in a portable copy.
 #[path = "../data_dir.rs"]
 mod data_dir;
+// The interface catalogue, included the same way and for the same reason: this
+// binary cannot name the main crate. It has no settings file of its own, so it
+// always follows Windows rather than Pubsplash's language override — see the
+// call to `i18n::init` in `main`.
+#[allow(dead_code)]
+#[path = "../i18n.rs"]
+mod i18n;
 #[path = "../soundpack.rs"]
 mod soundpack;
 // Previewing a file the author just picked. `soundpack.rs` pulls in its own
@@ -43,9 +50,13 @@ struct TabControls {
 }
 
 fn main() {
+    // Before any window exists. `None` means "follow Windows": this app has no
+    // settings file, so it cannot see the language chosen in Pubsplash's own
+    // Preferences, and the system language is the closest honest answer.
+    i18n::init(None);
     let _ = wxdragon::main(|_| {
         let frame = Frame::builder()
-            .with_title("Pubsplash Sound Pack Manager")
+            .with_title(&t!("Pubsplash Sound Pack Manager"))
             .with_size(Size::new(820, 500))
             .build();
         let state = Rc::new(RefCell::new(ManagerState::default()));
@@ -54,17 +65,17 @@ fn main() {
         let outer = BoxSizer::builder(Orientation::Vertical).build();
 
         let toolbar = BoxSizer::builder(Orientation::Horizontal).build();
-        let new_project = Button::builder(&root).with_label("New...").build();
-        let open_project = Button::builder(&root).with_label("Open...").build();
-        let save = Button::builder(&root).with_label("Save").build();
-        let compile = Button::builder(&root).with_label("Compile...").build();
+        let new_project = Button::builder(&root).with_label(&t!("New...")).build();
+        let open_project = Button::builder(&root).with_label(&t!("Open...")).build();
+        let save = Button::builder(&root).with_label(&t!("Save")).build();
+        let compile = Button::builder(&root).with_label(&t!("Compile...")).build();
         // A checkbox rather than a bitrate field: 96 kbps is transparent for
         // the short sounds a pack is made of, and a number here would be one
         // more thing to get wrong.
         let encode_opus = CheckBox::builder(&root)
-            .with_label(&format!(
-                "Encode sounds as Opus ({} kbps)",
-                soundpack::DEFAULT_OPUS_KBPS
+            .with_label(&t!(
+                "Encode sounds as Opus ({kbps} kbps)",
+                kbps = soundpack::DEFAULT_OPUS_KBPS
             ))
             .build();
         toolbar.add(&new_project, 0, SizerFlag::All, 4);
@@ -87,20 +98,20 @@ fn main() {
         }
 
         let project_label = StaticText::builder(&root)
-            .with_label("No sound pack project is open")
+            .with_label(&t!("No sound pack project is open"))
             .build();
         outer.add(&project_label, 0, SizerFlag::Expand | SizerFlag::All, 6);
 
         let notebook = Notebook::builder(&root).build();
         let interface_tab = build_tab(
             &notebook,
-            "Interface sounds",
+            &t!("Interface sounds"),
             &soundpack::SoundKind::INTERFACE,
             &state,
         );
         let stream_tab = build_tab(
             &notebook,
-            "Stream events",
+            &t!("Stream events"),
             &soundpack::SoundKind::STREAM_EVENTS,
             &state,
         );
@@ -154,7 +165,7 @@ fn build_tab(
 
     let sounds = ListBox::builder(&panel).build();
     for kind in kinds {
-        sounds.append(kind.label());
+        sounds.append(&kind.label());
     }
     if !kinds.is_empty() {
         sounds.set_selection(0, true);
@@ -162,16 +173,16 @@ fn build_tab(
 
     let right = BoxSizer::builder(Orientation::Vertical).build();
     let source_label = StaticText::builder(&panel)
-        .with_label("Source file (WAV or Opus)")
+        .with_label(&t!("Source file (WAV or Opus)"))
         .build();
     let source_row = BoxSizer::builder(Orientation::Horizontal).build();
     let source_path = TextCtrl::builder(&panel).build();
-    let browse = Button::builder(&panel).with_label("Browse...").build();
+    let browse = Button::builder(&panel).with_label(&t!("Browse...")).build();
     source_row.add(&source_path, 1, SizerFlag::Expand | SizerFlag::All, 4);
     source_row.add(&browse, 0, SizerFlag::All, 4);
 
     let action_row = BoxSizer::builder(Orientation::Horizontal).build();
-    let test = Button::builder(&panel).with_label("Test").build();
+    let test = Button::builder(&panel).with_label(&t!("Test")).build();
     action_row.add(&test, 0, SizerFlag::All, 4);
 
     right.add(&source_label, 0, SizerFlag::All, 4);
@@ -189,10 +200,10 @@ fn build_tab(
         let source_path = controls.source_path;
         controls.browse.clone().on_click(move |_| {
             let dialog = FileDialog::builder(&panel)
-                .with_message("Select a sound file")
-                .with_wildcard(
-                    "Sound files (*.wav;*.opus)|*.wav;*.opus|WAV files (*.wav)|*.wav|Opus files (*.opus)|*.opus",
-                )
+                .with_message(&t!("Select a sound file"))
+                .with_wildcard(&t!(
+                    "Sound files (*.wav;*.opus)|*.wav;*.opus|WAV files (*.wav)|*.wav|Opus files (*.opus)|*.opus"
+                ))
                 .with_style(FileDialogStyle::Open)
                 .build();
             if dialog.show_modal() == ID_OK
@@ -271,7 +282,8 @@ fn wire_project_buttons(
         let save = *save;
         let compile = *compile;
         open_project.on_click(move |_| {
-            let dialog = DirDialog::builder(&frame, "Open a sound pack project folder", "").build();
+            let dialog =
+            DirDialog::builder(&frame, &t!("Open a sound pack project folder"), "").build();
             if dialog.show_modal() != ID_OK {
                 return;
             }
@@ -309,7 +321,7 @@ fn wire_project_buttons(
             remember_source_path(&state, &interface_tab, &soundpack::SoundKind::INTERFACE);
             remember_source_path(&state, &stream_tab, &soundpack::SoundKind::STREAM_EVENTS);
             let Some(project) = state.borrow().project.clone() else {
-                show_error(&frame, "Open or create a sound pack project first.");
+                show_error(&frame, &t!("Open or create a sound pack project first."));
                 return;
             };
             let assignments = collect_assignments(&state, &project);
@@ -329,7 +341,14 @@ fn wire_project_buttons(
                         &save_button,
                         &compile,
                     );
-                    show_info(&frame, &format!("Saved {count} sound(s) to the project."));
+                    show_info(
+            &frame,
+            &tn!(
+                "Saved {n} sound to the project.",
+                "Saved {n} sounds to the project.",
+                count
+            ),
+        );
                 }
                 Err(err) => show_error(&frame, &err),
             }
@@ -345,12 +364,12 @@ fn wire_project_buttons(
         let compile_for_refresh = *compile;
         compile.on_click(move |_| {
             let Some(project) = state.borrow().project.clone() else {
-                show_error(&frame, "Open or create a sound pack project first.");
+                show_error(&frame, &t!("Open or create a sound pack project first."));
                 return;
             };
             let dialog = FileDialog::builder(&frame)
-                .with_message("Compile sound pack")
-                .with_wildcard("Pubsplash sound packs (*.pspack)|*.pspack")
+                .with_message(&t!("Compile sound pack"))
+                .with_wildcard(&t!("Pubsplash sound packs (*.pspack)|*.pspack"))
                 .with_style(FileDialogStyle::Save | FileDialogStyle::OverwritePrompt)
                 .build();
             if dialog.show_modal() != ID_OK {
@@ -374,7 +393,11 @@ fn wire_project_buttons(
                     );
                     show_info(
                         &frame,
-                        &format!("Compiled revision {revision} to {}", output.display()),
+                        &t!(
+                "Compiled revision {revision} to {path}",
+                revision = revision,
+                path = output.display()
+            ),
                     );
                 }
                 Err(err) => show_error(&frame, &err),
@@ -413,7 +436,7 @@ fn wire_tab_slice(
             let typed = controls.source_path.get_value();
             let trimmed = typed.trim();
             if trimmed.is_empty() {
-                show_error(&frame, "Choose or type the path of a sound file to test.");
+                show_error(&frame, &t!("Choose or type the path of a sound file to test."));
                 return;
             }
             if let Err(err) = test_play(Path::new(trimmed)) {
@@ -424,22 +447,22 @@ fn wire_tab_slice(
 }
 
 fn show_new_project_dialog(frame: &Frame) -> Option<(String, PathBuf)> {
-    let dialog = Dialog::builder(frame, "New sound pack project")
+    let dialog = Dialog::builder(frame, &t!("New sound pack project"))
         .with_style(DialogStyle::DefaultDialogStyle)
         .with_size(560, 220)
         .build();
     let panel = Panel::builder(&dialog).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
-    let name_label = StaticText::builder(&panel).with_label("Pack name").build();
+    let name_label = StaticText::builder(&panel).with_label(&t!("Pack name")).build();
     let name = TextCtrl::builder(&panel).build();
 
     let folder_label = StaticText::builder(&panel)
-        .with_label("Parent folder")
+        .with_label(&t!("Parent folder"))
         .build();
     let folder_row = BoxSizer::builder(Orientation::Horizontal).build();
     let folder = TextCtrl::builder(&panel).build();
-    let browse = Button::builder(&panel).with_label("Browse...").build();
+    let browse = Button::builder(&panel).with_label(&t!("Browse...")).build();
     folder_row.add(&folder, 1, SizerFlag::Expand | SizerFlag::All, 4);
     folder_row.add(&browse, 0, SizerFlag::All, 4);
 
@@ -453,11 +476,11 @@ fn show_new_project_dialog(frame: &Frame) -> Option<(String, PathBuf)> {
     const ID_CONFIRM: i32 = 2301;
     let ok = Button::builder(&panel)
         .with_id(ID_CONFIRM)
-        .with_label("OK")
+        .with_label(&t!("OK"))
         .build();
     let cancel = Button::builder(&panel)
         .with_id(ID_CANCEL)
-        .with_label("Cancel")
+        .with_label(&t!("Cancel"))
         .build();
     ok.set_default();
     buttons.add(&ok, 0, SizerFlag::All, 4);
@@ -475,7 +498,7 @@ fn show_new_project_dialog(frame: &Frame) -> Option<(String, PathBuf)> {
 
     {
         browse.on_click(move |_| {
-            let picker = DirDialog::builder(&panel, "Choose a parent folder", "")
+            let picker = DirDialog::builder(&panel, &t!("Choose a parent folder"), "")
                 .with_style(DirDialogStyle::MustExist.bits())
                 .build();
             if picker.show_modal() == ID_OK
@@ -493,11 +516,11 @@ fn show_new_project_dialog(frame: &Frame) -> Option<(String, PathBuf)> {
             }
             let parent = folder.get_value();
             if parent.trim().is_empty() {
-                show_error(&panel, "Choose a parent folder.");
+                show_error(&panel, &t!("Choose a parent folder."));
                 return;
             }
             if !Path::new(parent.trim()).is_dir() {
-                show_error(&panel, "The parent folder does not exist.");
+                show_error(&panel, &t!("The parent folder does not exist."));
                 return;
             }
             dialog.end_modal(ID_OK);
@@ -532,12 +555,14 @@ fn refresh_all(
         let (name, revision) = manifest
             .map(|m| (m.name, m.revision.to_string()))
             .unwrap_or_else(|_| ("?".into(), "?".into()));
-        project_label.set_label(&format!(
-            "Project: {name} at {} (revision {revision})",
-            project.display()
+        project_label.set_label(&t!(
+            "Project: {name} at {path} (revision {revision})",
+            name = name,
+            path = project.display(),
+            revision = revision
         ));
     } else {
-        project_label.set_label("No sound pack project is open");
+        project_label.set_label(&t!("No sound pack project is open"));
     }
     refresh_tab(state, interface_tab, &soundpack::SoundKind::INTERFACE);
     refresh_tab(state, stream_tab, &soundpack::SoundKind::STREAM_EVENTS);
@@ -660,14 +685,14 @@ fn test_play(path: &Path) -> Result<(), String> {
 }
 
 fn show_error(parent: &dyn WxWidget, message: &str) {
-    MessageDialog::builder(parent, message, "Sound Pack Manager")
+    MessageDialog::builder(parent, message, &t!("Sound Pack Manager"))
         .with_style(MessageDialogStyle::OK)
         .build()
         .show_modal();
 }
 
 fn show_info(parent: &dyn WxWidget, message: &str) {
-    MessageDialog::builder(parent, message, "Sound Pack Manager")
+    MessageDialog::builder(parent, message, &t!("Sound Pack Manager"))
         .with_style(MessageDialogStyle::OK)
         .build()
         .show_modal();

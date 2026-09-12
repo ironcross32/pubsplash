@@ -9,28 +9,31 @@
 //! No `&` mnemonics anywhere in here, as everywhere else in the app. The
 //! buttons are all Tab-reachable, which is what matters.
 
+use crate::t;
 use super::{App, WXK_DELETE, show_error};
 use crate::mastodon::{self, Template};
 use std::rc::Rc;
 use wxdragon::prelude::*;
 
 /// Shown when the user has no templates of their own. See [`super::list`].
-const NO_TEMPLATES: &str = "No templates";
+fn no_templates() -> String {
+    t!("No templates")
+}
 
 pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     // --- Account --------------------------------------------------------
 
-    let (account_group, account_box) = super::group_box(panel, "Account");
+    let (account_group, account_box) = super::group_box(panel, &t!("Account"));
 
     let server_label = StaticText::builder(&account_box)
-        .with_label("Server")
+        .with_label(&t!("Server"))
         .build();
     let server_input = TextCtrl::builder(&account_box)
         .with_value(&display_server(&app.config.borrow().mastodon.instance))
         .build();
-    super::set_accessible_name(&server_input, "Server");
+    super::set_accessible_name(&server_input, &t!("Server"));
     super::help::tag(
         &server_input,
         "dialog.preferences.mastodon.server",
@@ -40,7 +43,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     account_group.add(&server_input, 0, SizerFlag::Expand | SizerFlag::All, 4);
 
     let status_label = StaticText::builder(&account_box)
-        .with_label("Linked account")
+        .with_label(&t!("Linked account"))
         .build();
     // `MultiLine` as well as `ReadOnly`: wx drops a single-line read-only
     // `TextCtrl` out of the Tab order, and a status the user cannot reach is a
@@ -49,7 +52,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly)
         .with_size(Size::new(-1, 48))
         .build();
-    super::set_accessible_name(&status, "Linked account");
+    super::set_accessible_name(&status, &t!("Linked account"));
     super::help::tag(
         &status,
         "dialog.preferences.mastodon.status",
@@ -60,14 +63,14 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     let account_buttons = BoxSizer::builder(Orientation::Horizontal).build();
     let authorize = Button::builder(&account_box)
-        .with_label("Authorize")
+        .with_label(&t!("Authorize"))
         .build();
     super::help::tag(
         &authorize,
         "dialog.preferences.mastodon.authorize",
         "Authorize with Mastodon button",
     );
-    let unlink = Button::builder(&account_box).with_label("Unlink").build();
+    let unlink = Button::builder(&account_box).with_label(&t!("Unlink")).build();
     super::help::tag(
         &unlink,
         "dialog.preferences.mastodon.unlink",
@@ -79,12 +82,12 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     // --- Announcements ---------------------------------------------------
 
-    let (announce_group, announce_box) = super::group_box(panel, "Announcements");
+    let (announce_group, announce_box) = super::group_box(panel, &t!("Announcements"));
 
     let start_check = CheckBox::builder(&announce_box)
-        .with_label("Post to Mastodon when I start a new stream")
+        .with_label(&t!("Post to Mastodon when I start a new stream"))
         .build();
-    super::set_accessible_name(&start_check, "Post to Mastodon when I start a new stream");
+    super::set_accessible_name(&start_check, &t!("Post to Mastodon when I start a new stream"));
     super::help::tag(
         &start_check,
         "dialog.preferences.mastodon.postOnStart",
@@ -94,11 +97,11 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     announce_group.add(&start_check, 0, SizerFlag::All, 4);
 
     let periodic_check = CheckBox::builder(&announce_box)
-        .with_label("Make periodic still-streaming Mastodon posts")
+        .with_label(&t!("Make periodic still-streaming Mastodon posts"))
         .build();
     super::set_accessible_name(
         &periodic_check,
-        "Make periodic still-streaming Mastodon posts",
+        &t!("Make periodic still-streaming Mastodon posts"),
     );
     super::help::tag(
         &periodic_check,
@@ -111,7 +114,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     // Immediately after the checkbox in the sizer, which is what puts it next in
     // the Tab order — creation order is Tab order.
     let interval_choice = Choice::builder(&announce_box).build();
-    super::set_accessible_name(&interval_choice, "How often to post");
+    super::set_accessible_name(&interval_choice, &t!("How often to post"));
     super::help::tag(
         &interval_choice,
         "dialog.preferences.mastodon.interval",
@@ -132,17 +135,17 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 
     // --- Templates -------------------------------------------------------
 
-    let (templates_group, templates_box) = super::group_box(panel, "Templates");
+    let (templates_group, templates_box) = super::group_box(panel, &t!("Templates"));
 
     // The list takes its accessible name from this static text, so the label
     // must carry exactly the string `native_acc::install` is given below.
     let templates_label = StaticText::builder(&templates_box)
-        .with_label("Templates")
+        .with_label(&t!("Templates"))
         .build();
     let templates_list = ListBox::builder(&templates_box).build();
     // Never `set_accessible_name` on a list — see `ui/native_acc.rs`, which
     // documents at length why that makes every row announce twice.
-    super::native_acc::install(&templates_list, "Templates");
+    super::native_acc::install(&templates_list, &t!("Templates"));
     super::help::tag(
         &templates_list,
         "dialog.preferences.mastodon.templateList",
@@ -152,19 +155,19 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     templates_group.add(&templates_list, 1, SizerFlag::Expand | SizerFlag::All, 4);
 
     let template_buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let add = Button::builder(&templates_box).with_label("Add").build();
+    let add = Button::builder(&templates_box).with_label(&t!("Add")).build();
     super::help::tag(
         &add,
         "dialog.preferences.mastodon.addTemplate",
         "Add template button",
     );
-    let edit = Button::builder(&templates_box).with_label("Edit").build();
+    let edit = Button::builder(&templates_box).with_label(&t!("Edit")).build();
     super::help::tag(
         &edit,
         "dialog.preferences.mastodon.editTemplate",
         "Edit template button",
     );
-    let remove = Button::builder(&templates_box).with_label("Remove").build();
+    let remove = Button::builder(&templates_box).with_label(&t!("Remove")).build();
     super::help::tag(
         &remove,
         "dialog.preferences.mastodon.removeTemplate",
@@ -196,14 +199,14 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
                     display_server(&config.mastodon.instance)
                 )
             } else {
-                "Not linked. Enter your server and choose Authorize.".to_string()
+                t!("Not linked. Enter your server and choose Authorize.")
             };
             let server = display_server(&config.mastodon.instance);
             drop(config);
             status.set_value(&text);
             // The accessible name has to be re-set, not just the value: it is
             // what a screen reader reads, and it has changed meaning.
-            super::set_accessible_name(&status, &format!("Linked account, {text}"));
+            super::set_accessible_name(&status, &t!("Linked account, {text}", text = text));
             if linked && server_input.get_value().trim() != server {
                 server_input.set_value(&server);
             }
@@ -220,7 +223,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         Rc::new(move |select: Option<&Template>| {
             let templates = app.config.borrow().mastodon.templates.clone();
             let labels: Vec<String> = templates.iter().map(|t| t.list_label()).collect();
-            super::list::fill(&templates_list, &labels, NO_TEMPLATES);
+            super::list::fill(&templates_list, &labels, &no_templates());
             if templates.is_empty() {
                 return;
             }
@@ -275,7 +278,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
             let instance = match crate::mastodon::api::normalize_instance(&typed) {
                 Ok(instance) => instance,
                 Err(error) => {
-                    show_error(&dialog, "Authorize", &error.to_string());
+                    show_error(&dialog, &t!("Authorize"), &error.to_string());
                     server_input.set_focus();
                     return;
                 }
@@ -297,8 +300,8 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
                 refresh_account();
                 super::show_info(
                     &dialog,
-                    "Authorize",
-                    &format!("Pubsplash is linked to {}.", link.account),
+                    &t!("Authorize"),
+                    &t!("Pubsplash is linked to {account}.", account = link.account),
                 );
             } else {
                 // Whatever went wrong, the address is the thing the user would
@@ -329,11 +332,9 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
             }
             let ask = MessageDialog::builder(
                 &dialog,
-                &format!(
-                    "Remove the authorization for {account}? \
-                     Pubsplash will stop posting, and you will have to authorize again to resume."
-                ),
-                "Unlink",
+                &t!("Remove the authorization for {account}? \
+                     Pubsplash will stop posting, and you will have to authorize again to resume.", account = account),
+                &t!("Unlink"),
             )
             .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
             .build();

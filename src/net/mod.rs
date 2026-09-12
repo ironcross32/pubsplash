@@ -6,6 +6,7 @@ pub mod audiopub;
 pub mod icecast;
 pub mod sse;
 
+use crate::t;
 use crate::secret::Secret;
 use audiopub::{AudioPubClient, EventsStream, StreamIdentity};
 use icecast::{IcecastConnection, IcecastError, IcecastTarget};
@@ -507,7 +508,7 @@ async fn net_loop(mut commands: tokio_mpsc::UnboundedReceiver<NetCommand>, event
             } => {
                 if connection.is_none() {
                     let _ = events.send(NetEvent::StreamError {
-                        message: "not connected to a streaming service".into(),
+                        message: t!("not connected to a streaming service"),
                     });
                     continue;
                 }
@@ -1034,9 +1035,10 @@ fn spawn_icecast_sender(
                     Step::GiveUp { reason } => {
                         log::error!("Icecast source: giving up ({reason})");
                         let _ = events.send(NetEvent::StreamError {
-                            message: format!(
+                            message: t!(
                                 "The audio connection could not be restored: {reason}. \
-                                 The broadcast has ended."
+                                 The broadcast has ended.",
+                                reason = reason
                             ),
                         });
                         return;

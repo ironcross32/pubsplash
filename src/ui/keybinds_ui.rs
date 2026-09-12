@@ -6,6 +6,7 @@
 //! knowing it exists. `crate::keybind::catalogue` builds it; the runtime half
 //! that actually catches the keys is [`super::keybinds`].
 
+use crate::t;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -19,26 +20,28 @@ use crate::keybind::{
 /// Shown when the catalogue is empty, which cannot happen (the fixed actions are
 /// always there) — but every list that could ever empty keeps one, because NVDA
 /// announces a zero-item list as "Unknown". See [`super::list`].
-const NO_KEYBINDS: &str = "No actions";
+fn no_keybinds() -> String {
+    t!("No actions")
+}
 
 pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
     // The list takes its announced name from this label, not from an accessible
     // name — see `native_acc`. It must stay, and must stay immediately in front.
-    let list_label = StaticText::builder(panel).with_label("Keybinds").build();
+    let list_label = StaticText::builder(panel).with_label(&t!("Keybinds")).build();
     let list = ListBox::builder(panel).build();
-    super::native_acc::install(&list, "Keybinds");
+    super::native_acc::install(&list, &t!("Keybinds"));
     super::help::tag(&list, "dialog.preferences.keybinds.list", "Keybinds list");
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let add = Button::builder(panel).with_label("Add binding...").build();
+    let add = Button::builder(panel).with_label(&t!("Add binding...")).build();
     let edit = Button::builder(panel)
-        .with_label("Edit binding...")
+        .with_label(&t!("Edit binding..."))
         .build();
-    let remove = Button::builder(panel).with_label("Remove binding").build();
+    let remove = Button::builder(panel).with_label(&t!("Remove binding")).build();
     let reset = Button::builder(panel)
-        .with_label("Reset to defaults")
+        .with_label(&t!("Reset to defaults"))
         .build();
     super::help::tag(
         &add,
@@ -95,7 +98,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
                 .or_else(|| previous.map(|i| (i as usize).min(actions.len().saturating_sub(1))))
                 .unwrap_or(0);
             *rows.borrow_mut() = actions;
-            super::list::fill(&list, &labels, NO_KEYBINDS);
+            super::list::fill(&list, &labels, &no_keybinds());
             if !labels.is_empty() {
                 list.set_selection(index as u32, true);
             }
@@ -147,7 +150,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
             };
             // Already unassigned: nothing to remove, and saying so beats silence.
             if app.config.borrow().keybinds.find(&action).is_none() {
-                super::help::announce("That action has no binding");
+                super::help::announce(&t!("That action has no binding"));
                 return;
             }
             app.config.borrow_mut().keybinds.remove(&action);
@@ -174,8 +177,8 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
         reset.on_click(move |_| {
             let confirm = MessageDialog::builder(
                 &dialog,
-                "Discard every keybinding and restore the defaults, F9 for streaming and F10 for recording?",
-                "Reset to defaults",
+                &t!("Discard every keybinding and restore the defaults, F9 for streaming and F10 for recording?"),
+                &t!("Reset to defaults"),
             )
             .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
             .build();
@@ -186,7 +189,7 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
             app.save_config();
             super::keybinds::reload(&app.config.borrow());
             refresh(None);
-            super::help::announce("Keybinds reset to defaults");
+            super::help::announce(&t!("Keybinds reset to defaults"));
         });
     }
 }
@@ -198,11 +201,11 @@ pub fn build_tab(app: &Rc<App>, dialog: &Dialog, panel: &Panel) {
 fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> Option<BindAction> {
     let editing = initial.is_some();
     let title = if editing {
-        "Edit binding"
+        t!("Edit binding")
     } else {
-        "Add binding"
+        t!("Add binding")
     };
-    let dialog = Dialog::builder(parent, title)
+    let dialog = Dialog::builder(parent, &title)
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(460, 380)
         .build();
@@ -211,21 +214,21 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
 
     let targets = Targets::from_config(&app.config.borrow());
 
-    let category_label = StaticText::builder(&panel).with_label("Category").build();
+    let category_label = StaticText::builder(&panel).with_label(&t!("Category")).build();
     let category_choice = Choice::builder(&panel).build();
-    super::set_accessible_name(&category_choice, "Category");
+    super::set_accessible_name(&category_choice, &t!("Category"));
     super::help::tag(
         &category_choice,
         "dialog.keybind.category",
         "Binding category choice",
     );
     for category in Category::ALL {
-        category_choice.append(category.label());
+        category_choice.append(&category.label());
     }
 
-    let action_label = StaticText::builder(&panel).with_label("Action").build();
+    let action_label = StaticText::builder(&panel).with_label(&t!("Action")).build();
     let action_choice = Choice::builder(&panel).build();
-    super::set_accessible_name(&action_choice, "Action");
+    super::set_accessible_name(&action_choice, &t!("Action"));
     super::help::tag(
         &action_choice,
         "dialog.keybind.action",
@@ -235,16 +238,16 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
     // Only some actions need a target. This pair is shown and hidden as the
     // action changes, and its label and accessible name are rewritten to say
     // which kind of target it is asking for.
-    let specifier_label = StaticText::builder(&panel).with_label("Scene").build();
+    let specifier_label = StaticText::builder(&panel).with_label(&t!("Scene")).build();
     let specifier_choice = Choice::builder(&panel).build();
-    super::set_accessible_name(&specifier_choice, "Scene");
+    super::set_accessible_name(&specifier_choice, &t!("Scene"));
     super::help::tag(
         &specifier_choice,
         "dialog.keybind.specifier",
         "Binding scene, source or bus choice",
     );
 
-    let shortcut_label = StaticText::builder(&panel).with_label("Shortcut").build();
+    let shortcut_label = StaticText::builder(&panel).with_label(&t!("Shortcut")).build();
     // Deliberately **not** `TextCtrlStyle::ReadOnly`, however read-only this
     // field is in spirit: `wxTextCtrl::AcceptsFocusFromKeyboard` returns false
     // for a single-line read-only control, so wx drops it out of the Tab order
@@ -256,16 +259,18 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
     // `ui::keybinds` swallows every key except TAB. `on_kill_focus` below puts
     // the chord's label back anyway, so even a mouse-driven paste cannot leave
     // stray text behind.
-    let shortcut_input = TextCtrl::builder(&panel).with_value("None").build();
-    super::set_accessible_name(&shortcut_input, "Shortcut, None");
+    let shortcut_input = TextCtrl::builder(&panel)
+        .with_value(&crate::keybind::Chord::default().label())
+        .build();
+    super::set_accessible_name(&shortcut_input, &t!("Shortcut, None"));
     super::help::tag(
         &shortcut_input,
         "dialog.keybind.shortcut",
         "Shortcut capture field",
     );
 
-    let global_check = CheckBox::builder(&panel).with_label("Global").build();
-    super::set_accessible_name(&global_check, "Global");
+    let global_check = CheckBox::builder(&panel).with_label(&t!("Global")).build();
+    super::set_accessible_name(&global_check, &t!("Global"));
     super::help::tag(
         &global_check,
         "dialog.keybind.global",
@@ -276,11 +281,11 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
     // Enter reaching this button costs nothing in the shortcut field: while that
     // field has focus `keybinds::capture_key` swallows Enter as a chord, so it
     // never gets as far as the dialog's default item.
-    let ok_button = super::ok_button(&panel, "OK");
+    let ok_button = super::ok_button(&panel, &t!("OK"));
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
     let cancel_button = Button::builder(&panel)
         .with_id(ID_CANCEL)
-        .with_label("Cancel")
+        .with_label(&t!("Cancel"))
         .build();
     buttons.add(&ok_button, 0, SizerFlag::All, 4);
     buttons.add(&cancel_button, 0, SizerFlag::All, 4);
@@ -333,8 +338,8 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
                 if !names.is_empty() {
                     specifier_choice.set_selection(index as u32);
                 }
-                specifier_label.set_label(kind.label());
-                super::set_accessible_name(&specifier_choice, kind.label());
+                specifier_label.set_label(&kind.label());
+                super::set_accessible_name(&specifier_choice, &kind.label());
             }
             specifier_label.show(kind != Specifier::None);
             specifier_choice.show(kind != Specifier::None);
@@ -357,7 +362,7 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
             let actions = category.actions();
             action_choice.clear();
             for action in &actions {
-                action_choice.append(action.template_label());
+                action_choice.append(&action.template_label());
             }
             // Compare by template: the wanted action carries a name, the list
             // holds blanks.
@@ -393,7 +398,10 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
     {
         chord.set(bind.key);
         shortcut_input.set_value(&bind.key.label());
-        super::set_accessible_name(&shortcut_input, &format!("Shortcut, {}", bind.key.label()));
+        super::set_accessible_name(
+        &shortcut_input,
+        &t!("Shortcut, {chord}", chord = bind.key.label()),
+    );
         global_check.set_value(bind.global);
     }
 
@@ -452,7 +460,7 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
             chord.set(captured);
             let label = captured.label();
             shortcut_input.set_value(&label);
-            super::set_accessible_name(&shortcut_input, &format!("Shortcut, {label}"));
+            super::set_accessible_name(&shortcut_input, &t!("Shortcut, {label}", label = label));
             // A `TextCtrl` value change is not reliably spoken, and this is the
             // one moment the user needs to hear what they just pressed.
             super::help::announce(&label);
@@ -475,7 +483,7 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
                 .get_selection()
                 .and_then(|i| templates.borrow().get(i as usize).cloned())
             else {
-                show_error(&dialog_for_ok, "Add binding", "Choose an action first.");
+                show_error(&dialog_for_ok, &t!("Add binding"), &t!("Choose an action first."));
                 return;
             };
             let action = match template.specifier_kind() {
@@ -484,10 +492,10 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
                     let Some(name) = specifier_choice.get_string_selection() else {
                         show_error(
                             &dialog_for_ok,
-                            "Add binding",
-                            &format!(
-                                "Choose which {} this binding applies to. If the list is empty, there are none to choose from yet.",
-                                kind.label().to_lowercase()
+                            &t!("Add binding"),
+                            &t!(
+                                "Choose which {what} this binding applies to. If the list is empty, there are none to choose from yet.",
+                                what = kind.label().to_lowercase()
                             ),
                         );
                         return;
@@ -502,16 +510,16 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
                 if chord.vk == VK_F1 || chord.vk == VK_F6 {
                     show_error(
                         &dialog_for_ok,
-                        "Add binding",
-                        "F1 and F6 are reserved: F1 speaks the help for whatever has focus, and F6 moves between the lists on a tab. Choose another key.",
+                        &t!("Add binding"),
+                        &t!("F1 and F6 are reserved: F1 speaks the help for whatever has focus, and F6 moves between the lists on a tab. Choose another key."),
                     );
                     return;
                 }
                 if global && chord.is_plain_character() {
                     show_error(
                         &dialog_for_ok,
-                        "Add binding",
-                        "A global shortcut needs CTRL, ALT or SHIFT, or a function key. On its own that key would be swallowed in every application you type in.",
+                        &t!("Add binding"),
+                        &t!("A global shortcut needs CTRL, ALT or SHIFT, or a function key. On its own that key would be swallowed in every application you type in."),
                     );
                     return;
                 }
@@ -531,7 +539,7 @@ fn edit_dialog(app: &Rc<App>, parent: &Dialog, initial: Option<BindAction>) -> O
                             other.label(),
                             action.label()
                         ),
-                        "Shortcut already in use",
+                        &t!("Shortcut already in use"),
                     )
                     .with_style(MessageDialogStyle::YesNo | MessageDialogStyle::IconQuestion)
                     .build();

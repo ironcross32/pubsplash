@@ -9,6 +9,7 @@
 //! `wxDialogBase`'s own handler would close the dialog behind us. See the doc
 //! comment on `ui::ok_button`.
 
+use crate::t;
 use super::App;
 use crate::mastodon::{self, Template, TemplateKind};
 use std::cell::RefCell;
@@ -16,17 +17,25 @@ use std::rc::Rc;
 use wxdragon::prelude::*;
 
 /// Pre-filled into the one-shot dialog when a stream resumes.
-pub const RESUME_DEFAULT: &str = "I've resumed my #Audiopub stream! Tune in at {url}";
+/// The post a resumed stream announces itself with, until the user edits it.
+///
+/// `{url}` is the app's own placeholder, filled in when the post is made, and a
+/// translation has to keep it — `i18n::interpolate` leaves an unknown name
+/// standing rather than dropping it, so a dropped `{url}` shows up as a post
+/// with no link rather than silently losing one.
+pub fn resume_default() -> String {
+    t!("I've resumed my #Audiopub stream! Tune in at {url}")
+}
 
 /// Shows the add/edit dialog. `existing` is `None` for Add.
 pub fn edit(parent: &dyn WxWidget, existing: Option<&Template>) -> Option<Template> {
     let adding = existing.is_none();
     let caption = if adding {
-        "Add template"
+        t!("Add template")
     } else {
-        "Edit template"
+        t!("Edit template")
     };
-    let dialog = Dialog::builder(parent, caption)
+    let dialog = Dialog::builder(parent, &caption)
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(520, 340)
         .build();
@@ -37,7 +46,7 @@ pub fn edit(parent: &dyn WxWidget, existing: Option<&Template>) -> Option<Templa
     // mapping below cannot drift apart.
     let kind_labels: Vec<&str> = TemplateKind::ALL.iter().map(|k| k.label()).collect();
     let kind_choice = RadioBox::builder(&panel, &kind_labels)
-        .with_label("Announcement type")
+        .with_label(&t!("Announcement type"))
         .with_style(RadioBoxStyle::SpecifyRows)
         .with_major_dimension(1)
         .build();
@@ -51,19 +60,19 @@ pub fn edit(parent: &dyn WxWidget, existing: Option<&Template>) -> Option<Templa
     // A radio box's items are real child windows, so `set_accessible_name` can
     // only reach the group. `install_radio_box` hands the whole group back to
     // OLEACC, which names each button from its own text.
-    super::native_acc::install_radio_box(&kind_choice, "Announcement type");
+    super::native_acc::install_radio_box(&kind_choice, &t!("Announcement type"));
     super::help::tag(
         &kind_choice,
         "dialog.mastodonTemplate.kind",
         "Announcement type selector",
     );
 
-    let text_label = StaticText::builder(&panel).with_label("Template").build();
+    let text_label = StaticText::builder(&panel).with_label(&t!("Template")).build();
     let text_input = TextCtrl::builder(&panel)
         .with_style(TextCtrlStyle::MultiLine)
         .with_value(existing.map(|t| t.text.as_str()).unwrap_or(""))
         .build();
-    super::set_accessible_name(&text_input, "Template");
+    super::set_accessible_name(&text_input, &t!("Template"));
     super::help::tag(
         &text_input,
         "dialog.mastodonTemplate.text",
@@ -71,17 +80,17 @@ pub fn edit(parent: &dyn WxWidget, existing: Option<&Template>) -> Option<Templa
     );
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let help_button = Button::builder(&panel).with_label("Help").build();
+    let help_button = Button::builder(&panel).with_label(&t!("Help")).build();
     super::help::tag(
         &help_button,
         "dialog.mastodonTemplate.help",
         "Token help button",
     );
-    let ok = super::ok_button(&panel, "OK");
+    let ok = super::ok_button(&panel, &t!("OK"));
     // `ID_CANCEL` is what wx maps Escape to; without it Escape does nothing.
     let cancel = Button::builder(&panel)
         .with_id(ID_CANCEL)
-        .with_label("Cancel")
+        .with_label(&t!("Cancel"))
         .build();
     buttons.add(&help_button, 0, SizerFlag::All, 4);
     buttons.add(&ok, 0, SizerFlag::All, 4);
@@ -109,7 +118,7 @@ pub fn edit(parent: &dyn WxWidget, existing: Option<&Template>) -> Option<Templa
                 // No `end_modal`: the dialog stays open behind the warning with
                 // the user's text intact, so a typo is one correction away
                 // rather than a retype.
-                super::show_warning(&dialog, caption, &error.to_string());
+                super::show_warning(&dialog, &caption, &error.to_string());
                 text_input.set_focus();
                 return;
             }
@@ -134,7 +143,7 @@ pub fn edit(parent: &dyn WxWidget, existing: Option<&Template>) -> Option<Templa
 /// The token reference. Read-only but selectable, so the user can copy a token
 /// straight out of it.
 pub fn show_help(parent: &dyn WxWidget) {
-    let dialog = Dialog::builder(parent, "Template tokens")
+    let dialog = Dialog::builder(parent, &t!("Template tokens"))
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(560, 420)
         .build();
@@ -150,14 +159,14 @@ pub fn show_help(parent: &dyn WxWidget) {
         .with_style(TextCtrlStyle::MultiLine | TextCtrlStyle::ReadOnly)
         .with_value(&mastodon::help_text())
         .build();
-    super::set_accessible_name(&text, "Template tokens");
+    super::set_accessible_name(&text, &t!("Template tokens"));
     super::help::tag(
         &text,
         "dialog.mastodonTokens.text",
         "Template token reference",
     );
 
-    let close = super::dismiss_button(&panel, "Close");
+    let close = super::dismiss_button(&panel, &t!("Close"));
     {
         close.on_click(move |_| dialog.end_modal(ID_CANCEL));
     }
@@ -178,19 +187,19 @@ pub fn show_help(parent: &dyn WxWidget) {
 /// Pre-filled and pre-selected so the suggested wording can be replaced by just
 /// typing, the way the Set stream info fields work.
 pub fn prompt_one_shot(parent: &dyn WxWidget) -> Option<String> {
-    let dialog = Dialog::builder(parent, "Post about the resumed stream")
+    let dialog = Dialog::builder(parent, &t!("Post about the resumed stream"))
         .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
         .with_size(520, 300)
         .build();
     let panel = Panel::builder(&dialog).build();
     let sizer = BoxSizer::builder(Orientation::Vertical).build();
 
-    let label = StaticText::builder(&panel).with_label("Post").build();
+    let label = StaticText::builder(&panel).with_label(&t!("Post")).build();
     let input = TextCtrl::builder(&panel)
         .with_style(TextCtrlStyle::MultiLine)
-        .with_value(RESUME_DEFAULT)
+        .with_value(&resume_default())
         .build();
-    super::set_accessible_name(&input, "Post");
+    super::set_accessible_name(&input, &t!("Post"));
     super::help::tag(&input, "dialog.mastodonResume.text", "Resumed stream post");
     input.select_all();
     {
@@ -201,16 +210,16 @@ pub fn prompt_one_shot(parent: &dyn WxWidget) -> Option<String> {
     }
 
     let buttons = BoxSizer::builder(Orientation::Horizontal).build();
-    let help_button = Button::builder(&panel).with_label("Help").build();
+    let help_button = Button::builder(&panel).with_label(&t!("Help")).build();
     super::help::tag(
         &help_button,
         "dialog.mastodonResume.help",
         "Token help button on the resumed stream post",
     );
-    let ok = super::ok_button(&panel, "OK");
+    let ok = super::ok_button(&panel, &t!("OK"));
     let cancel = Button::builder(&panel)
         .with_id(ID_CANCEL)
-        .with_label("Cancel")
+        .with_label(&t!("Cancel"))
         .build();
     buttons.add(&help_button, 0, SizerFlag::All, 4);
     buttons.add(&ok, 0, SizerFlag::All, 4);
@@ -236,7 +245,11 @@ pub fn prompt_one_shot(parent: &dyn WxWidget) -> Option<String> {
             // Same rule as a saved template: a bad token is corrected here, not
             // posted as literal braces.
             if let Err(error) = mastodon::validate(&text) {
-                super::show_warning(&dialog, "Post about the resumed stream", &error.to_string());
+                super::show_warning(
+            &dialog,
+            &t!("Post about the resumed stream"),
+            &error.to_string(),
+        );
                 input.set_focus();
                 return;
             }
@@ -270,7 +283,11 @@ mod tests {
 
     #[test]
     fn the_resume_suggestion_is_a_valid_template() {
-        assert_eq!(mastodon::validate(super::RESUME_DEFAULT), Ok(()));
-        assert!(super::RESUME_DEFAULT.contains("{url}"));
+        // Asserted on the translated value, so a Spanish default that dropped
+        // `{url}` would fail here rather than post a stream announcement with
+        // no link in it.
+        let suggestion = super::resume_default();
+        assert_eq!(mastodon::validate(&suggestion), Ok(()));
+        assert!(suggestion.contains("{url}"), "got {suggestion:?}");
     }
 }

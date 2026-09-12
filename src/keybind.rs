@@ -11,6 +11,7 @@
 //! Everything here is pure and unit-tested. The UI half is `ui/keybinds_ui.rs`
 //! and the runtime half is `ui/keybinds.rs`.
 
+use crate::t;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -66,7 +67,7 @@ impl Chord {
     /// render the same string.
     pub fn label(&self) -> String {
         if self.is_empty() {
-            return "None".to_string();
+            return t!("None");
         }
         let mut out = String::new();
         for (held, name) in [
@@ -110,59 +111,59 @@ pub fn vk_name(vk: u32) -> String {
         return format!("F{}", vk - 0x6F);
     }
     if (0x60..=0x69).contains(&vk) {
-        return format!("Numpad {}", vk - 0x60);
+        return t!("Numpad {digit}", digit = vk - 0x60);
     }
-    let name = match vk {
-        0x08 => "Backspace",
-        0x09 => "Tab",
-        0x0C => "Clear",
-        0x0D => "Enter",
-        0x13 => "Pause",
-        0x14 => "Caps Lock",
-        0x1B => "Escape",
-        0x20 => "Space",
-        0x21 => "Page Up",
-        0x22 => "Page Down",
-        0x23 => "End",
-        0x24 => "Home",
-        0x25 => "Left Arrow",
-        0x26 => "Up Arrow",
-        0x27 => "Right Arrow",
-        0x28 => "Down Arrow",
-        0x2C => "Print Screen",
-        0x2D => "Insert",
-        0x2E => "Delete",
-        0x5D => "Applications",
-        0x6A => "Numpad Multiply",
-        0x6B => "Numpad Plus",
-        0x6D => "Numpad Minus",
-        0x6E => "Numpad Period",
-        0x6F => "Numpad Divide",
-        0x90 => "Num Lock",
-        0x91 => "Scroll Lock",
-        0xA6 => "Browser Back",
-        0xA7 => "Browser Forward",
-        0xAD => "Volume Mute",
-        0xAE => "Volume Down",
-        0xAF => "Volume Up",
-        0xB0 => "Next Track",
-        0xB1 => "Previous Track",
-        0xB2 => "Stop Media",
-        0xB3 => "Play/Pause",
-        0xBA => "Semicolon",
-        0xBB => "Equals",
-        0xBC => "Comma",
-        0xBD => "Minus",
-        0xBE => "Period",
-        0xBF => "Slash",
-        0xC0 => "Backtick",
-        0xDB => "Left Bracket",
-        0xDC => "Backslash",
-        0xDD => "Right Bracket",
-        0xDE => "Quote",
-        _ => return format!("Key {vk}"),
+    let name: String = match vk {
+        0x08 => t!("Backspace"),
+        0x09 => t!("Tab"),
+        0x0C => t!("Clear"),
+        0x0D => t!("Enter"),
+        0x13 => t!("Pause"),
+        0x14 => t!("Caps Lock"),
+        0x1B => t!("Escape"),
+        0x20 => t!("Space"),
+        0x21 => t!("Page Up"),
+        0x22 => t!("Page Down"),
+        0x23 => t!("End"),
+        0x24 => t!("Home"),
+        0x25 => t!("Left Arrow"),
+        0x26 => t!("Up Arrow"),
+        0x27 => t!("Right Arrow"),
+        0x28 => t!("Down Arrow"),
+        0x2C => t!("Print Screen"),
+        0x2D => t!("Insert"),
+        0x2E => t!("Delete"),
+        0x5D => t!("Applications"),
+        0x6A => t!("Numpad Multiply"),
+        0x6B => t!("Numpad Plus"),
+        0x6D => t!("Numpad Minus"),
+        0x6E => t!("Numpad Period"),
+        0x6F => t!("Numpad Divide"),
+        0x90 => t!("Num Lock"),
+        0x91 => t!("Scroll Lock"),
+        0xA6 => t!("Browser Back"),
+        0xA7 => t!("Browser Forward"),
+        0xAD => t!("Volume Mute"),
+        0xAE => t!("Volume Down"),
+        0xAF => t!("Volume Up"),
+        0xB0 => t!("Next Track"),
+        0xB1 => t!("Previous Track"),
+        0xB2 => t!("Stop Media"),
+        0xB3 => t!("Play/Pause"),
+        0xBA => t!("Semicolon"),
+        0xBB => t!("Equals"),
+        0xBC => t!("Comma"),
+        0xBD => t!("Minus"),
+        0xBE => t!("Period"),
+        0xBF => t!("Slash"),
+        0xC0 => t!("Backtick"),
+        0xDB => t!("Left Bracket"),
+        0xDC => t!("Backslash"),
+        0xDD => t!("Right Bracket"),
+        0xDE => t!("Quote"),
+        _ => return t!("Key {vk}", vk = vk),
     };
-    name.to_string()
+    name
 }
 
 // --- actions ---------------------------------------------------------------
@@ -196,12 +197,12 @@ pub enum Specifier {
 
 impl Specifier {
     /// The label on the specifier dropdown, and its accessible name.
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            Specifier::None => "",
-            Specifier::Scene => "Scene",
-            Specifier::Source => "Source",
-            Specifier::Bus => "Bus",
+            Specifier::None => String::new(),
+            Specifier::Scene => t!("Scene"),
+            Specifier::Source => t!("Source"),
+            Specifier::Bus => t!("Bus"),
         }
     }
 }
@@ -223,12 +224,12 @@ impl Category {
         Category::Muting,
     ];
 
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            Category::Streaming => "Streaming",
-            Category::Scenes => "Scenes",
-            Category::Monitoring => "Monitoring",
-            Category::Muting => "Muting",
+            Category::Streaming => t!("Streaming"),
+            Category::Scenes => t!("Scenes"),
+            Category::Monitoring => t!("Monitoring"),
+            Category::Muting => t!("Muting"),
         }
     }
 
@@ -321,31 +322,37 @@ impl BindAction {
 
     /// The name shown in the second dropdown: no specifier filled in, since the
     /// specifier has a dropdown of its own right below it.
-    pub fn template_label(&self) -> &'static str {
+    pub fn template_label(&self) -> String {
         match self {
-            BindAction::ToggleStream => "Start or stop streaming",
-            BindAction::ToggleRecording => "Start or stop recording",
-            BindAction::NextScene => "Switch to the next scene",
-            BindAction::PreviousScene => "Switch to the previous scene",
-            BindAction::SwitchScene { .. } => "Switch to a specific scene",
-            BindAction::ToggleMonitorMaster => "Monitor master",
-            BindAction::ToggleMonitorSource { .. } => "Monitor a source",
-            BindAction::ToggleMonitorBus { .. } => "Monitor a bus",
-            BindAction::ToggleMuteMaster => "Mute or unmute master",
-            BindAction::ToggleMuteSource { .. } => "Mute or unmute a source",
-            BindAction::ToggleMuteBus { .. } => "Mute or unmute a bus",
+            BindAction::ToggleStream => t!("Start or stop streaming"),
+            BindAction::ToggleRecording => t!("Start or stop recording"),
+            BindAction::NextScene => t!("Switch to the next scene"),
+            BindAction::PreviousScene => t!("Switch to the previous scene"),
+            BindAction::SwitchScene { .. } => t!("Switch to a specific scene"),
+            BindAction::ToggleMonitorMaster => t!("Monitor master"),
+            BindAction::ToggleMonitorSource { .. } => t!("Monitor a source"),
+            BindAction::ToggleMonitorBus { .. } => t!("Monitor a bus"),
+            BindAction::ToggleMuteMaster => t!("Mute or unmute master"),
+            BindAction::ToggleMuteSource { .. } => t!("Mute or unmute a source"),
+            BindAction::ToggleMuteBus { .. } => t!("Mute or unmute a bus"),
         }
     }
 
     /// The name shown in the Keybinds list, with the specifier spelled out.
     pub fn label(&self) -> String {
         match self {
-            BindAction::SwitchScene { scene } => format!("Switch to the scene {scene}"),
-            BindAction::ToggleMonitorSource { source } => format!("Monitor {source}"),
-            BindAction::ToggleMonitorBus { bus } => format!("Monitor the bus {bus}"),
-            BindAction::ToggleMuteSource { source } => format!("Mute or unmute {source}"),
-            BindAction::ToggleMuteBus { bus } => format!("Mute or unmute the bus {bus}"),
-            other => other.template_label().to_string(),
+            BindAction::SwitchScene { scene } => {
+                t!("Switch to the scene {scene}", scene = scene)
+            }
+            BindAction::ToggleMonitorSource { source } => {
+                t!("Monitor {source}", source = source)
+            }
+            BindAction::ToggleMonitorBus { bus } => t!("Monitor the bus {bus}", bus = bus),
+            BindAction::ToggleMuteSource { source } => {
+                t!("Mute or unmute {source}", source = source)
+            }
+            BindAction::ToggleMuteBus { bus } => t!("Mute or unmute the bus {bus}", bus = bus),
+            other => other.template_label(),
         }
     }
 }
@@ -528,9 +535,17 @@ impl KeybindsConfig {
 /// The Keybinds list row for one catalogue entry.
 pub fn row_label(action: &BindAction, bind: Option<&KeyBind>) -> String {
     match bind {
-        None => format!("{}: Unassigned", action.label()),
-        Some(bind) if bind.global => format!("{}: {}, global", action.label(), bind.key.label()),
-        Some(bind) => format!("{}: {}", action.label(), bind.key.label()),
+        None => t!("{action}: Unassigned", action = action.label()),
+        Some(bind) if bind.global => t!(
+            "{action}: {chord}, global",
+            action = action.label(),
+            chord = bind.key.label()
+        ),
+        Some(bind) => t!(
+            "{action}: {chord}",
+            action = action.label(),
+            chord = bind.key.label()
+        ),
     }
 }
 

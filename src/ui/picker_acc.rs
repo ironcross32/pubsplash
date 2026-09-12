@@ -74,6 +74,7 @@
 //! Threading: everything here runs on the UI thread — `install` from dialog
 //! construction, the subclass proc from message dispatch on the same thread.
 
+use crate::t;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -126,16 +127,16 @@ pub enum Field {
 impl Field {
     /// What to call it. Lower case because it is spoken mid-sentence, and these
     /// are the words the user asked to hear.
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Field::Month => "month",
-            Field::Day => "day",
-            Field::Year => "year",
-            Field::Weekday => "day of week",
-            Field::Hour12 | Field::Hour24 => "hour",
-            Field::Minute => "minute",
-            Field::Second => "second",
-            Field::Meridiem => "AM or PM",
+            Field::Month => t!("month"),
+            Field::Day => t!("day"),
+            Field::Year => t!("year"),
+            Field::Weekday => t!("day of week"),
+            Field::Hour12 | Field::Hour24 => t!("hour"),
+            Field::Minute => t!("minute"),
+            Field::Second => t!("second"),
+            Field::Meridiem => t!("AM or PM"),
         }
     }
 
@@ -146,37 +147,37 @@ impl Field {
     /// other field is a plain number and deliberately not zero-padded: "minute,
     /// 5" reads better than "minute, 05".
     fn value(self, t: &SystemTime) -> String {
-        const MONTHS: [&str; 12] = [
-            "January",
-            "February",
-            "March",
-            "April",
-            "May",
-            "June",
-            "July",
-            "August",
-            "September",
-            "October",
-            "November",
-            "December",
+        let months: [String; 12] = [
+            t!("January"),
+            t!("February"),
+            t!("March"),
+            t!("April"),
+            t!("May"),
+            t!("June"),
+            t!("July"),
+            t!("August"),
+            t!("September"),
+            t!("October"),
+            t!("November"),
+            t!("December"),
         ];
-        const DAYS: [&str; 7] = [
-            "Sunday",
-            "Monday",
-            "Tuesday",
-            "Wednesday",
-            "Thursday",
-            "Friday",
-            "Saturday",
+        let days: [String; 7] = [
+            t!("Sunday"),
+            t!("Monday"),
+            t!("Tuesday"),
+            t!("Wednesday"),
+            t!("Thursday"),
+            t!("Friday"),
+            t!("Saturday"),
         ];
         match self {
-            Field::Month => MONTHS
+            Field::Month => months
                 .get(usize::from(t.month).wrapping_sub(1))
                 .map(|m| (*m).to_string())
                 .unwrap_or_else(|| t.month.to_string()),
             Field::Day => t.day.to_string(),
             Field::Year => t.year.to_string(),
-            Field::Weekday => DAYS
+            Field::Weekday => days
                 .get(usize::from(t.weekday))
                 .map(|d| (*d).to_string())
                 .unwrap_or_else(|| t.weekday.to_string()),
