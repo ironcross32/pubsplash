@@ -4,11 +4,19 @@
 
 ### Additions
 
+### Fixes
+
+### Changes
+
+## 0.1.9
+
+### Additions
+
 - Added a Discord community link to the README.
 
 ### Fixes
 
-- Automatic updates now request administrator permission before running the installer.
+- **Automatic updates now request administrator permission before running the installer. Users updating a per-machine installation from an earlier version must download this release's installer and run it as administrator manually.**
 
 ### Changes
 
